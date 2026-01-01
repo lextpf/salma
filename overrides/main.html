@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400;700&display=swap');
+
+    /* Default 200% zoom */
+    body { zoom: 2; }
+    .mermaid, .mermaid *
+    {
+      font-family: 'Caveat', cursive !important;
+    }
+    /* Fix spurious scrollbar on both sidebars */
+    .md-sidebar--primary .md-sidebar__scrollwrap,
+    .md-sidebar--secondary .md-sidebar__scrollwrap
+    {
+      overflow: hidden !important;
+    }
+
+    /* !!! function blue */
+    .md-typeset .admonition.function,
+    .md-typeset details.function
+    {
+      border-color: #3b82f6;
+    }
+    .md-typeset .function > .admonition-title,
+    .md-typeset .function > summary
+    {
+      background-color: rgba(59, 130, 246, 0.1);
+      border-color: #3b82f6;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.82em;
+    }
+    .md-typeset .function > .admonition-title::before,
+    .md-typeset .function > summary::before
+    {
+      background-color: #3b82f6;
+      -webkit-mask-image: var(--md-admonition-icon--example);
+              mask-image: var(--md-admonition-icon--example);
+    }
+
+    /* !!! variable purple */
+    .md-typeset .admonition.variable,
+    .md-typeset details.variable
+    {
+      border-color: #8b5cf6;
+    }
+    .md-typeset .variable > .admonition-title,
+    .md-typeset .variable > summary
+    {
+      background-color: rgba(139, 92, 246, 0.1);
+      border-color: #8b5cf6;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.82em;
+    }
+    .md-typeset .variable > .admonition-title::before,
+    .md-typeset .variable > summary::before
+    {
+      background-color: #8b5cf6;
+      -webkit-mask-image: var(--md-admonition-icon--info);
+              mask-image: var(--md-admonition-icon--info);
+    }
+
+    /* !!! macro amber */
+    .md-typeset .admonition.macro,
+    .md-typeset details.macro
+    {
+      border-color: #f59e0b;
+    }
+    .md-typeset .macro > .admonition-title,
+    .md-typeset .macro > summary
+    {
+      background-color: rgba(245, 158, 11, 0.1);
+      border-color: #f59e0b;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.82em;
+    }
+    .md-typeset .macro > .admonition-title::before,
+    .md-typeset .macro > summary::before
+    {
+      background-color: #f59e0b;
+      -webkit-mask-image: var(--md-admonition-icon--quote);
+              mask-image: var(--md-admonition-icon--quote);
+    }
+
+    /* !!! typedef teal */
+    .md-typeset .admonition.typedef,
+    .md-typeset details.typedef
+    {
+      border-color: #14b8a6;
+    }
+    .md-typeset .typedef > .admonition-title,
+    .md-typeset .typedef > summary
+    {
+      background-color: rgba(20, 184, 166, 0.1);
+      border-color: #14b8a6;
+      font-family: 'Cascadia Code', 'Fira Code', monospace;
+      font-size: 0.82em;
+    }
+    .md-typeset .typedef > .admonition-title::before,
+    .md-typeset .typedef > summary::before
+    {
+      background-color: #14b8a6;
+      -webkit-mask-image: var(--md-admonition-icon--abstract);
+              mask-image: var(--md-admonition-icon--abstract);
+    }
+  </style>
+  <script>
+    window.MathJax =
+    {
+      tex:
+      {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        processEscapes: true,
+        processEnvironments: true
+      },
+      options:
+      {
+        ignoreHtmlClass: 'tex2jax_ignore',
+        processHtmlClass: 'tex2jax_process'
+      },
+      output:
+      {
+        font: 'mathjax-fira'
+      },
+      chtml:
+      {
+        displayAlign: 'left',
+        displayIndent: '2em'
+      },
+      svg:
+      {
+        displayAlign: 'left',
+        displayIndent: '2em'
+      }
+    };
+  </script>
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    import elkLayouts from
+      "https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0.2.0/dist/mermaid-layout-elk.esm.min.mjs";
+    mermaid.registerLayoutLoaders(elkLayouts);
+
+    mermaid.initialize(
+    {
+      startOnLoad: false,
+      theme: 'dark',
+      look: 'handDrawn',
+      fontFamily: 'Caveat, cursive',
+      flowchart:
+      {
+        useMaxWidth: true,
+        curve: 'curve',
+        nodeSpacing: 70,
+        rankSpacing: 90,
+      },
+      sequence: { useMaxWidth: true },
+      themeVariables:
+      {
+        mainBkg: '#0b0f14',
+        lineColor: '#94a3b8',
+        clusterBkg: '#0f172a',
+        clusterBorder: '#334155',
+        fontSize: '36px',
+        // Node colors
+        primaryColor: '#3b82f6',
+        primaryTextColor: '#f8fafc',
+        primaryBorderColor: '#60a5fa',
+        secondaryColor: '#8b5cf6',
+        secondaryTextColor: '#f8fafc',
+        secondaryBorderColor: '#a78bfa',
+        tertiaryColor: '#10b981',
+        tertiaryTextColor: '#f8fafc',
+        tertiaryBorderColor: '#34d399',
+        // State diagram
+        labelBackgroundColor: '#1e293b',
+        noteBkgColor: '#1e3a5f',
+        noteTextColor: '#e2e8f0',
+        noteBorderColor: '#3b82f6'
+      }
+    });
+
+    function fixMermaidBlocks()
+    {
+      const pres = document.querySelectorAll('pre.mermaid');
+      const nodes = [];
+      pres.forEach(pre =>
+      {
+        let src = pre.textContent.trim();
+        if (!src) return;
+        const div = document.createElement('div');
+        div.className = 'mermaid';
+        div.textContent = src;
+        pre.replaceWith(div);
+        nodes.push(div);
+      });
+      return nodes;
+    }
+
+    const nodes = fixMermaidBlocks();
+    if (nodes.length)
+    {
+      // Temporarily reset zoom so mermaid measures text correctly
+      document.body.style.zoom = '1';
+      await mermaid.run({ nodes });
+
+      // Widen foreignObject elements so Caveat font text isn't clipped
+      document.querySelectorAll('.mermaid foreignObject').forEach(fo =>
+      {
+        const w = parseFloat(fo.getAttribute('width') || 0);
+        if (w > 0) fo.setAttribute('width', w + 8);
+      });
+
+      document.body.style.zoom = '2';
+    }
+
+    // Inject Material Design Icons into sidebar nav labels
+    // Uses base64-encoded SVGs with CSS mask-image for currentColor inheritance
+    const navIcons =
+    {
+      'Core':          'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTIxIDE2LjVjMCAuMzgtLjIxLjcxLS41My44OGwtNy45IDQuNDRjLS4xNi4xMi0uMzYuMTgtLjU3LjE4cy0uNDEtLjA2LS41Ny0uMThsLTcuOS00LjQ0QS45OS45OSAwIDAgMSAzIDE2LjV2LTljMC0uMzguMjEtLjcxLjUzLS44OGw3LjktNC40NGMuMTYtLjEyLjM2LS4xOC41Ny0uMThzLjQxLjA2LjU3LjE4bDcuOSA0LjQ0Yy4zMi4xNy41My41LjUzLjg4ek0xMiA0LjE1IDYuMDQgNy41IDEyIDEwLjg1bDUuOTYtMy4zNXoiPjwvcGF0aD48L3N2Zz4=',
+      'FOMOD':         'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTIgMTAuOTZhLjk4NS45ODUgMCAwIDEtLjM3LTEuMzdMMy4xMyA3Yy4xMS0uMi4yOC0uMzQuNDctLjQybDcuODMtNC40Yy4xNi0uMTIuMzYtLjE4LjU3LS4xOHMuNDEuMDYuNTcuMThsNy45IDQuNDRjLjE5LjEuMzUuMjYuNDQuNDZsMS40NSAyLjUyYy4yOC40OC4xMSAxLjA5LS4zNiAxLjM2bC0xIC41OHY0Ljk2YzAgLjM4LS4yMS43MS0uNTMuODhsLTcuOSA0LjQ0Yy0uMTYuMTItLjM2LjE4LS41Ny4xOHMtLjQxLS4wNi0uNTctLjE4bC03LjktNC40NEEuOTkuOTkgMCAwIDEgMyAxNi41di01LjU0Yy0uMy4xNy0uNjguMTgtMSAwbTEwLTYuODF2Ni43bDUuOTYtMy4zNXpNNSAxNS45MWw2IDMuMzh2LTYuNzFMNSA5LjIxem0xNCAwdi0zLjIybC01IDIuOWMtLjMzLjE4LS43LjE3LTEgLjAxdjMuNjl6bS01LjE1LTIuNTUgNi4yOC0zLjYzLS41OC0xLjAxLTYuMjggMy42M3oiPjwvcGF0aD48L3N2Zz4=',
+      'Installation':  'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTUsMjBIMTlWMThINU0xOSw5SDEzVjMuNUwxMiwyLjVMMTEsMy41VjlINUwxMiwxNkwxOSw5WiIgZmlsbD0iY3VycmVudENvbG9yIi8+PC9zdmc+',
+      'Server':        'PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTQgMWgxNmExIDEgMCAwIDEgMSAxdjRhMSAxIDAgMCAxLTEgMUg0YTEgMSAwIDAgMS0xLTFWMmExIDEgMCAwIDEgMS0xbTAgOGgxNmExIDEgMCAwIDEgMSAxdjRhMSAxIDAgMCAxLTEgMUg0YTEgMSAwIDAgMS0xLTF2LTRhMSAxIDAgMCAxIDEtMW0wIDhoMTZhMSAxIDAgMCAxIDEgMXY0YTEgMSAwIDAgMS0xIDFINGExIDEgMCAwIDEtMS0xdi00YTEgMSAwIDAgMSAxLTFNOSA1aDFWM0g5em0wIDhoMXYtMkg5em0wIDhoMXYtMkg5ek01IDN2MmgyVjN6bTAgOHYyaDJ2LTJ6bTAgOHYyaDJ2LTJ6IiBmaWxsPSJjdXJyZW50Q29sb3IiLz48L3N2Zz4='
+    };
+
+    function injectNavIcons()
+    {
+      document.querySelectorAll('.md-nav__link').forEach(link =>
+      {
+        const span = link.querySelector('.md-ellipsis') || link;
+        const text = span.textContent.trim();
+        const b64 = navIcons[text];
+        if (!b64) return;
+        if (span.querySelector('.nav-icon')) return;
+
+        const icon = document.createElement('span');
+        icon.className = 'nav-icon';
+        const uri = 'url(data:image/svg+xml;base64,' + b64 + ')';
+        icon.style.cssText = 'display:inline-block;width:1.1em;height:1.1em;vertical-align:-0.15em;margin-right:0.3em;flex-shrink:0;background-color:currentColor;-webkit-mask-image:' + uri + ';mask-image:' + uri + ';-webkit-mask-size:contain;mask-size:contain;';
+        span.prepend(icon);
+      });
+    }
+    injectNavIcons();
+  </script>
+{% endblock %}

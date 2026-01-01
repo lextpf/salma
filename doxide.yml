@@ -1,0 +1,77 @@
+# Doxide Configuration for salma
+# https://doxide.org
+
+title: salma
+description: C++ mod installer with FOMOD support
+
+output: docs
+
+defines:
+  MO2_API: ""
+
+files:
+  - "src/*.h"
+  - "src/*.cpp"
+
+groups:
+  - name: Core
+    title: ":material-cube: Core"
+    description: Foundation types, logging, archive extraction, and file operations.
+    groups:
+      - name: Logger
+        title: Logger
+        description: Thread-safe logging with external callback support.
+      - name: ArchiveService
+        title: ArchiveService
+        description: Archive extraction via libarchive and bit7z.
+      - name: FileOperations
+        title: FileOperations
+        description: Queued file copy/move operations with priority sorting.
+      - name: ModStructureDetector
+        title: ModStructureDetector
+        description: Detects mod folder structure inside archives.
+
+  - name: FOMOD
+    title: ":material-package-variant: FOMOD"
+    description: FOMOD installer, dependency evaluation, and selection inference.
+    groups:
+      - name: FomodService
+        title: FomodService
+        description: Core FOMOD installation logic and plugin flag evaluation.
+      - name: FomodDependencyEvaluator
+        title: FomodDependencyEvaluator
+        description: Evaluates FOMOD dependency conditions.
+      - name: FomodInferenceService
+        title: FomodInferenceService
+        description: Infers FOMOD selections from previously installed files.
+
+  - name: Installation
+    title: ":material-download: Installation"
+    description: Top-level installation orchestration and C API.
+    groups:
+      - name: InstallationService
+        title: InstallationService
+        description: Main installation orchestrator for FOMOD and non-FOMOD mods.
+      - name: CApi
+        title: CApi
+        description: C-linkage API for external consumers (DLL exports).
+
+  - name: Server
+    title: ":material-server: Server"
+    description: Crow HTTP server, REST controllers, and static file serving.
+    groups:
+      - name: InstallationController
+        title: InstallationController
+        description: REST endpoints for upload, install, and status.
+      - name: MultipartHandler
+        title: MultipartHandler
+        description: Multipart form-data parsing and file saving.
+      - name: StaticFileHandler
+        title: StaticFileHandler
+        description: Static file serving for the React SPA.
+      - name: ConfigService
+        title: ConfigService
+        description: Singleton configuration manager for salma.json.
+      - name: Mo2Controller
+        title: Mo2Controller
+        description: REST endpoints for MO2 integration dashboard.

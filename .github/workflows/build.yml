@@ -1,0 +1,53 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check formatting (clang-format)
+        run: |
+          foreach ($ext in @("*.cpp", "*.h", "*.hpp", "*.c")) {
+            Get-ChildItem -Path src -Filter $ext -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host "Formatting $($_.FullName)"
+              clang-format -i $_.FullName
+            }
+          }
+          $diff = git diff --name-only
+          if ($diff) {
+            Write-Host "::error::The following files need formatting:"
+            Write-Host $diff
+            exit 1
+          }
+          Write-Host "All files are properly formatted."
+        shell: pwsh
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: "05442024c3fda64320bd25d2251cc9807b84fb6f"
+
+      - name: Configure
+        run: cmake --preset default
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: salma-release
+          path: |
+            build/bin/Release/mo2-salma.dll
+            build/bin/Release/mo2-server.exe
