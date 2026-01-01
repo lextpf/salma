@@ -166,32 +166,32 @@ public:
 
 private:
     // -- Test runner state --
-    std::mutex test_mutex_;                        // guards test_process_
-    std::atomic<bool> test_running_{false};         // true while test.py is executing
+    std::mutex test_mutex_;                  // guards test_process_
+    std::atomic<bool> test_running_{false};  // true while test.py is executing
 #ifdef _WIN32
-    HANDLE test_process_{nullptr};                  // Win32 process handle for test.py
+    HANDLE test_process_{nullptr};  // Win32 process handle for test.py
 #endif
 
     // -- FOMOD scan state (written by background thread, read by status endpoint) --
-    std::atomic<bool> scan_running_{false};          // true while scan thread is active
-    std::mutex scan_mutex_;                          // guards all scan_ fields below
-    bool scan_has_result_{false};                    // true after first scan completes
-    bool scan_last_success_{false};                  // overall success of last scan
-    int scan_total_mod_folders_{0};                  // total mod folders examined
-    int scan_archives_processed_{0};                 // archives successfully processed
-    int scan_choices_inferred_{0};                   // mods where selections were inferred
-    int scan_no_fomod_{0};                           // mods with no ModuleConfig.xml
-    int scan_already_had_choices_{0};                // mods that already had a choices JSON
-    int scan_no_archive_found_{0};                   // mods with no matching archive on disk
-    int scan_archive_missing_{0};                    // archives referenced but not found
-    int scan_errors_{0};                             // mods that failed with an exception
-    long long scan_duration_ms_{0};                  // wall-clock duration of last scan
-    std::string scan_output_dir_;                    // directory where JSON results were written
-    std::string scan_last_error_;                    // error message if scan failed
+    std::atomic<bool> scan_running_{false};  // true while scan thread is active
+    std::mutex scan_mutex_;                  // guards all scan_ fields below
+    bool scan_has_result_{false};            // true after first scan completes
+    bool scan_last_success_{false};          // overall success of last scan
+    int scan_total_mod_folders_{0};          // total mod folders examined
+    int scan_archives_processed_{0};         // archives successfully processed
+    int scan_choices_inferred_{0};           // mods where selections were inferred
+    int scan_no_fomod_{0};                   // mods with no ModuleConfig.xml
+    int scan_already_had_choices_{0};        // mods that already had a choices JSON
+    int scan_no_archive_found_{0};           // mods with no matching archive on disk
+    int scan_archive_missing_{0};            // archives referenced but not found
+    int scan_errors_{0};                     // mods that failed with an exception
+    long long scan_duration_ms_{0};          // wall-clock duration of last scan
+    std::string scan_output_dir_;            // directory where JSON results were written
+    std::string scan_last_error_;            // error message if scan failed
 
     // -- Plugin deploy/purge state --
-    std::mutex plugin_action_mutex_;                 // guards all plugin_action_ fields below
-    std::atomic<bool> plugin_action_running_{false}; // true while deploy/purge script runs
+    std::mutex plugin_action_mutex_;                  // guards all plugin_action_ fields below
+    std::atomic<bool> plugin_action_running_{false};  // true while deploy/purge script runs
     bool plugin_action_has_result_{false};            // true after first action completes
     bool plugin_action_last_success_{false};          // whether last action succeeded
     int plugin_action_exit_code_{0};                  // exit code of the PowerShell script
