@@ -1,0 +1,44 @@
+name: sonar
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  sonar:
+    runs-on: windows-latest
+
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: "05442024c3fda64320bd25d2251cc9807b84fb6f"
+
+      - name: Configure CMake
+        run: cmake --preset default
+
+      - name: Install Build Wrapper
+        shell: powershell
+        run: |
+          Invoke-WebRequest -Uri "https://sonarcloud.io/static/cpp/build-wrapper-win-x86.zip" -OutFile build-wrapper.zip
+          Expand-Archive -Path build-wrapper.zip -DestinationPath .
+
+      - name: Build with Build Wrapper
+        run: build-wrapper-win-x86/build-wrapper-win-x86-64.exe --out-dir bw-output cmake --build build --config Release -- /m
+
+      - name: Run tests
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: SonarCloud Analysis
+        uses: SonarSource/sonarcloud-github-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
