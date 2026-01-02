@@ -123,10 +123,19 @@ fs::path InstallationService::find_fomod_folder(const fs::path& archive_root)
 {
     for (const auto& entry : fs::recursive_directory_iterator(archive_root))
     {
-        if (entry.is_directory() && to_lower(entry.path().filename().string()) == "fomod" &&
-            fs::exists(entry.path() / "ModuleConfig.xml"))
+        if (!entry.is_directory() || to_lower(entry.path().filename().string()) != "fomod")
         {
-            return entry.path();
+            continue;
+        }
+        // Case-insensitive search for ModuleConfig.xml - real-world
+        // FOMOD archives use varying casing (moduleconfig.xml, etc.)
+        for (const auto& child : fs::directory_iterator(entry.path()))
+        {
+            if (child.is_regular_file() &&
+                to_lower(child.path().filename().string()) == "moduleconfig.xml")
+            {
+                return entry.path();
+            }
         }
     }
     return {};

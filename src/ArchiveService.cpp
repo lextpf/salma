@@ -57,10 +57,33 @@ static std::string normalize_entry_path(const std::string& p)
 // 1 MiB read buffer - reduces syscall overhead on large mods
 static constexpr size_t kArchiveReadBlockSize = 1024 * 1024;
 
-// Generates a random hex string for unique temp directory names.
-static std::string random_hex_tag(size_t length = 12)
+// Maximum decompressed entry size we will allocate in memory (256 MiB).
+// Prevents decompression-bomb style OOM from crafted archives.
+static constexpr int64_t kMaxEntrySize = 256LL * 1024 * 1024;
+
+// Validate that all files extracted by bit7z stay within the destination.
+// Logs and removes any path-traversal entries.
+static void validate_bit7z_extraction(const fs::path& destination, mo2core::Logger& logger)
 {
-    return random_hex_string(length);
+    auto canonical_dest = fs::weakly_canonical(destination);
+    std::vector<fs::path> to_remove;
+    for (const auto& entry : fs::recursive_directory_iterator(destination))
+    {
+        auto canonical_entry = fs::weakly_canonical(entry.path());
+        auto rel = canonical_entry.lexically_relative(canonical_dest);
+        if (rel.empty() || rel.string().starts_with(".."))
+        {
+            logger.log_warning(
+                std::format("[archive] Removing path-traversal entry from bit7z extraction: {}",
+                            entry.path().string()));
+            to_remove.push_back(entry.path());
+        }
+    }
+    for (const auto& p : to_remove)
+    {
+        std::error_code ec;
+        fs::remove_all(p, ec);
+    }
 }
 
 // Reads an entire file into memory. Returns empty vector on any failure.
@@ -264,6 +287,7 @@ void ArchiveService::extract(const std::string& archive_path, const std::string&
             fs::create_directories(destination_path);
             bit7z::BitArchiveReader reader{get_bit7z_lib(), archive_path, bit7z::BitFormat::Auto};
             reader.extractTo(destination_path);
+            validate_bit7z_extraction(fs::path(destination_path), logger);
             logger.log("[archive] bit7z extraction completed");
             return;
         }
@@ -482,6 +506,7 @@ void ArchiveService::extract_prefix(const std::string& archive_path,
             if (!indices.empty())
             {
                 reader.extractTo(destination_path, indices);
+                validate_bit7z_extraction(fs::path(destination_path), logger);
             }
 
             logger.log(std::format("[archive] bit7z extract_prefix: {} entries", indices.size()));
@@ -569,9 +594,9 @@ std::vector<char> ArchiveService::read_entry(const std::string& archive_path,
             // Read the entire entry into memory in one call - safe because
             // mod files are typically small (configs, XMLs, textures)
             auto size = archive_entry_size(entry);
-            if (size < 0)
+            if (size < 0 || size > kMaxEntrySize)
             {
-                // Unknown size (streaming archive) - skip
+                // Unknown or excessively large size - skip
                 archive_read_close(a);
                 archive_read_free(a);
                 return {};
@@ -654,7 +679,7 @@ std::unordered_map<std::string, std::vector<char>> ArchiveService::read_entries_
             if (matches.size() >= 4 && reader.isSolid())
             {
                 fs::path temp_dir = fs::temp_directory_path() /
-                                    std::format("salma-bit7z-batch-{}", random_hex_tag());
+                                    std::format("salma-bit7z-batch-{}", random_hex_string());
                 fs::create_directories(temp_dir);
 
                 try
@@ -667,6 +692,7 @@ std::unordered_map<std::string, std::vector<char>> ArchiveService::read_entries_
                     }
 
                     reader.extractTo(temp_dir.string(), indices);
+                    validate_bit7z_extraction(temp_dir, logger);
 
                     // Read extracted files back into memory
                     for (const auto& p : fs::recursive_directory_iterator(temp_dir))
@@ -755,7 +781,7 @@ std::unordered_map<std::string, std::vector<char>> ArchiveService::read_entries_
         if (entry_names.count(path))
         {
             auto size = archive_entry_size(entry);
-            if (size < 0)
+            if (size < 0 || size > kMaxEntrySize)
             {
                 archive_read_data_skip(a);
                 continue;
@@ -814,7 +840,18 @@ void ArchiveService::create_zip(const std::string& folder_path, const std::strin
         // Store paths relative to the source folder so the zip unpacks cleanly
         auto rel_path = fs::relative(p.path(), folder_path).string();
         archive_entry_set_pathname(entry, rel_path.c_str());
-        archive_entry_set_size(entry, static_cast<la_int64_t>(fs::file_size(p)));
+
+        std::error_code size_ec;
+        auto file_sz = fs::file_size(p, size_ec);
+        if (size_ec)
+        {
+            Logger::instance().log_warning(
+                std::format("[archive] Skipping file in zip (cannot read size): {}", rel_path));
+            archive_entry_free(entry);
+            continue;
+        }
+
+        archive_entry_set_size(entry, static_cast<la_int64_t>(file_sz));
         archive_entry_set_filetype(entry, AE_IFREG);  // regular file (not symlink/directory)
         archive_entry_set_perm(entry, 0644);          // rw-r--r- standard permissions
 
@@ -829,7 +866,13 @@ void ArchiveService::create_zip(const std::string& folder_path, const std::strin
         char buffer[8192];
         while (ifs.read(buffer, sizeof(buffer)) || ifs.gcount())
         {
-            archive_write_data(a, buffer, static_cast<size_t>(ifs.gcount()));
+            auto written = archive_write_data(a, buffer, static_cast<size_t>(ifs.gcount()));
+            if (written < 0)
+            {
+                Logger::instance().log_warning(
+                    std::format("[archive] Partial write in zip for: {}", rel_path));
+                break;
+            }
         }
         archive_entry_free(entry);
     }

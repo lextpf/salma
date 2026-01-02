@@ -182,4 +182,31 @@ struct FomodInstaller
     std::vector<FomodConditionalPattern> conditional_patterns;
 };
 
+/// Total number of plugins across all steps and groups.
+inline int total_flat_plugins(const FomodInstaller& installer)
+{
+    int total = 0;
+    for (const auto& step : installer.steps)
+        for (const auto& group : step.groups)
+            total += static_cast<int>(group.plugins.size());
+    return total;
+}
+
+/// Build a [step][group] -> flat plugin start index map.
+inline std::vector<std::vector<int>> compute_flat_starts(const FomodInstaller& installer)
+{
+    std::vector<std::vector<int>> flat_starts(installer.steps.size());
+    int flat = 0;
+    for (size_t si = 0; si < installer.steps.size(); ++si)
+    {
+        flat_starts[si].resize(installer.steps[si].groups.size());
+        for (size_t gi = 0; gi < installer.steps[si].groups.size(); ++gi)
+        {
+            flat_starts[si][gi] = flat;
+            flat += static_cast<int>(installer.steps[si].groups[gi].plugins.size());
+        }
+    }
+    return flat_starts;
+}
+
 }  // namespace mo2core

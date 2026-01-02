@@ -4,6 +4,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -145,6 +146,8 @@ class Mo2Controller
 public:
     Mo2Controller();
     ~Mo2Controller();
+    Mo2Controller(const Mo2Controller&) = delete;
+    Mo2Controller& operator=(const Mo2Controller&) = delete;
 
     crow::response get_config();
     crow::response put_config(const crow::request& req);
@@ -188,6 +191,7 @@ private:
     long long scan_duration_ms_{0};          // wall-clock duration of last scan
     std::string scan_output_dir_;            // directory where JSON results were written
     std::string scan_last_error_;            // error message if scan failed
+    std::thread scan_thread_;                // background scan thread (joined in destructor)
 
     // -- Plugin deploy/purge state --
     std::mutex plugin_action_mutex_;                  // guards all plugin_action_ fields below
@@ -199,6 +203,7 @@ private:
     std::string plugin_action_deploy_path_;           // filesystem path the plugin was deployed to
     std::string plugin_action_last_error_;            // error message if action failed
     std::string plugin_action_type_;                  // "deploy" or "purge"
+    std::thread plugin_action_thread_;                // background deploy/purge thread
 };
 
 }  // namespace mo2server

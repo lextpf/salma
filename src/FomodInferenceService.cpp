@@ -27,11 +27,6 @@ namespace mo2core
 // Helpers
 // ---------------------------------------------------------------------------
 
-static std::string normalize_path_local(const std::string& p)
-{
-    return normalize_path(p);
-}
-
 // ---------------------------------------------------------------------------
 // scan_installed_files
 // ---------------------------------------------------------------------------
@@ -213,11 +208,7 @@ static ExpandedAtoms expand_all_atoms(const FomodInstaller& installer,
     }
 
     // Count total plugins
-    int total_plugins = 0;
-    for (const auto& step : installer.steps)
-        for (const auto& group : step.groups)
-            total_plugins += static_cast<int>(group.plugins.size());
-    result.per_plugin.resize(total_plugins);
+    result.per_plugin.resize(total_flat_plugins(installer));
 
     // Pass 1: Normal (non-always) plugin file entries
     int flat_idx = 0;
@@ -300,14 +291,7 @@ static ExpandedAtoms expand_all_atoms(const FomodInstaller& installer,
 static AtomIndex build_atom_index(const ExpandedAtoms& atoms)
 {
     AtomIndex index;
-    for (const auto& a : atoms.required)
-        index[a.dest_path].push_back(a);
-    for (const auto& plugin_atoms : atoms.per_plugin)
-        for (const auto& a : plugin_atoms)
-            index[a.dest_path].push_back(a);
-    for (const auto& cond_atoms : atoms.per_conditional)
-        for (const auto& a : cond_atoms)
-            index[a.dest_path].push_back(a);
+    atoms.for_each([&](const FomodAtom& a) { index[a.dest_path].push_back(a); });
     return index;
 }
 
@@ -374,22 +358,27 @@ static TargetTree build_target_tree(const std::unordered_set<std::string>& insta
 // Hash contested files (both target and atoms) for disambiguation
 // ---------------------------------------------------------------------------
 
-static void hash_contested_files(TargetTree& target,
-                                 ExpandedAtoms& atoms,
-                                 AtomIndex& atom_index,
-                                 const fs::path& mod_path,
-                                 const std::string& archive_path,
-                                 const std::unordered_set<std::string>& excluded)
+static void hash_contested_files(
+    TargetTree& target,
+    ExpandedAtoms& atoms,
+    AtomIndex& atom_index,
+    const fs::path& mod_path,
+    const std::string& archive_path,
+    const std::unordered_set<std::string>& excluded,
+    std::mutex& cache_mutex,
+    std::unordered_map<std::string, FomodInferenceService::CachedHash>& archive_entry_hash_cache)
 {
     auto& logger = Logger::instance();
-    struct CachedHash
-    {
-        uint64_t hash = 0;
-        uint64_t size = 0;
-    };
 
-    static std::mutex cache_mutex;
-    static std::unordered_map<std::string, CachedHash> archive_entry_hash_cache;
+    // Prevent unbounded memory growth in long-running server processes
+    {
+        std::lock_guard<std::mutex> guard(cache_mutex);
+        if (archive_entry_hash_cache.size() > FomodInferenceService::kMaxCacheEntries)
+        {
+            logger.log("[infer] Hash cache exceeded limit, clearing");
+            archive_entry_hash_cache.clear();
+        }
+    }
 
     auto build_archive_signature = [](const std::string& ap) -> std::string
     {
@@ -485,7 +474,7 @@ static void hash_contested_files(TargetTree& target,
 
             auto key = std::format("{}|{}", archive_sig, entry_path);
             std::scoped_lock lock(cache_mutex);
-            archive_entry_hash_cache[key] = CachedHash{h, sz};
+            archive_entry_hash_cache[key] = FomodInferenceService::CachedHash{h, sz};
         }
     }
     logger.log(std::format(
@@ -510,30 +499,13 @@ static void hash_contested_files(TargetTree& target,
     }
 
     // Also update atoms in the ExpandedAtoms struct
-    for (auto& a : atoms.required)
-    {
-        auto sh = source_hashes.find(a.source_path);
-        if (sh != source_hashes.end())
-            a.content_hash = sh->second;
-    }
-    for (auto& plugin_atoms : atoms.per_plugin)
-    {
-        for (auto& a : plugin_atoms)
+    atoms.for_each(
+        [&](FomodAtom& a)
         {
             auto sh = source_hashes.find(a.source_path);
             if (sh != source_hashes.end())
                 a.content_hash = sh->second;
-        }
-    }
-    for (auto& cond_atoms : atoms.per_conditional)
-    {
-        for (auto& a : cond_atoms)
-        {
-            auto sh = source_hashes.find(a.source_path);
-            if (sh != source_hashes.end())
-                a.content_hash = sh->second;
-        }
-    }
+        });
 
     // Hash installed files at contested dests
     for (const auto& dest : contested_dests)
@@ -770,11 +742,8 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
         t_step = clock::now();
         auto atoms = expand_all_atoms(installer, sorted_norm_entries, norm_entry_sizes);
 
-        int total_atoms = static_cast<int>(atoms.required.size());
-        for (const auto& pa : atoms.per_plugin)
-            total_atoms += static_cast<int>(pa.size());
-        for (const auto& ca : atoms.per_conditional)
-            total_atoms += static_cast<int>(ca.size());
+        int total_atoms = 0;
+        atoms.for_each([&](const FomodAtom&) { ++total_atoms; });
 
         auto atom_index = build_atom_index(atoms);
         auto excluded = compute_excluded_dests(atom_index);
@@ -797,7 +766,14 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
         // Step 7: Hash contested files for disambiguation
         logger.log("[infer] 7/9 Hashing contested files");
         t_step = clock::now();
-        hash_contested_files(target, atoms, atom_index, fs::path(mod_path), archive_path, excluded);
+        hash_contested_files(target,
+                             atoms,
+                             atom_index,
+                             fs::path(mod_path),
+                             archive_path,
+                             excluded,
+                             cache_mutex_,
+                             archive_entry_hash_cache_);
         logger.log(std::format("[infer] Step 7 hash contested ({}ms)", ms_since(t_step)));
 
         // Step 7b: Pre-compute which conditional patterns have target-only files

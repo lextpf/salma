@@ -13,25 +13,7 @@ using json = nlohmann::json;
 namespace mo2core
 {
 
-// parse_plugin_type_string and get_ordered_nodes are now in Utils.h
-
-static const char* plugin_type_to_string(PluginType type)
-{
-    switch (type)
-    {
-        case PluginType::Required:
-            return "Required";
-        case PluginType::Recommended:
-            return "Recommended";
-        case PluginType::Optional:
-            return "Optional";
-        case PluginType::NotUsable:
-            return "NotUsable";
-        case PluginType::CouldBeUsable:
-            return "CouldBeUsable";
-    }
-    return "Unknown";
-}
+// parse_plugin_type_string, plugin_type_to_string, and get_ordered_nodes are now in Utils.h
 
 static std::string normalize_destination_for_join(std::string destination)
 {
@@ -46,6 +28,29 @@ static std::string normalize_destination_for_join(std::string destination)
         destination = destination.substr(2);
     }
     return destination;
+}
+
+// Resolve a <file>/<folder> node's destination, handling empty destinations
+// and trailing-slash directory semantics, then normalize for filesystem join.
+// Shared by process_required_files and process_files_node.
+static std::string resolve_file_destination(const std::string& source,
+                                            const std::string& raw_destination,
+                                            bool is_file)
+{
+    std::string destination = raw_destination;
+    if (is_file && destination.empty())
+    {
+        auto slash = source.find_last_of("/\\");
+        destination = (slash != std::string::npos) ? source.substr(slash + 1) : source;
+    }
+    else if (is_file && !destination.empty() &&
+             (destination.back() == '/' || destination.back() == '\\'))
+    {
+        auto slash = source.find_last_of("/\\");
+        auto filename = (slash != std::string::npos) ? source.substr(slash + 1) : source;
+        destination += filename;
+    }
+    return normalize_destination_for_join(destination);
 }
 
 bool FomodService::check_module_dependencies(const pugi::xml_document& doc,
@@ -120,23 +125,8 @@ void FomodService::process_required_files(const pugi::xml_document& doc,
             continue;
         }
 
-        // For <file> with empty destination, use the source filename.
-        // Destination ending with / or \ means "into this directory".
         std::string name = node.name();
-        if (name == "file" && destination.empty())
-        {
-            auto slash = source.find_last_of("/\\");
-            destination = (slash != std::string::npos) ? source.substr(slash + 1) : source;
-        }
-        else if (name == "file" && !destination.empty() &&
-                 (destination.back() == '/' || destination.back() == '\\'))
-        {
-            auto slash = source.find_last_of("/\\");
-            auto filename = (slash != std::string::npos) ? source.substr(slash + 1) : source;
-            destination += filename;
-        }
-
-        destination = normalize_destination_for_join(destination);
+        destination = resolve_file_destination(source, destination, name == "file");
         auto src_path = (fs::path(src_base) / source).string();
         auto dst_path = (fs::path(dst_base) / destination).string();
         logger.log(std::format("[fomod] Mapped: {} -> {}", src_path, dst_path));
@@ -193,6 +183,8 @@ bool FomodService::validate_json_selections(const pugi::xml_document& doc, const
                 {
                     for (const auto& plugin : group["plugins"])
                     {
+                        if (!plugin.is_string())
+                            continue;
                         std::string plugin_name = plugin.get<std::string>();
                         if (!plugin_name.empty())
                         {
@@ -371,6 +363,8 @@ void FomodService::process_optional_files(const pugi::xml_document& doc,
                 {
                     for (const auto& d : group["deselected"])
                     {
+                        if (!d.is_string())
+                            continue;
                         std::string dname = d.get<std::string>();
                         if (!dname.empty())
                         {
@@ -415,6 +409,11 @@ void FomodService::process_optional_files(const pugi::xml_document& doc,
 
                 for (const auto& plugin : group["plugins"])
                 {
+                    if (!plugin.is_string())
+                    {
+                        logger.log_warning("[fomod] Skipping non-string plugin entry in JSON");
+                        continue;
+                    }
                     std::string plugin_name = plugin.get<std::string>();
                     if (plugin_name.empty())
                     {
@@ -582,23 +581,8 @@ void FomodService::process_files_node(const pugi::xml_node& files_node,
             continue;
         }
 
-        // For <file> with empty destination, use the source filename.
-        // Destination ending with / or \ means "into this directory".
         std::string name = file_node.name();
-        if (name == "file" && destination.empty())
-        {
-            auto slash = source.find_last_of("/\\");
-            destination = (slash != std::string::npos) ? source.substr(slash + 1) : source;
-        }
-        else if (name == "file" && !destination.empty() &&
-                 (destination.back() == '/' || destination.back() == '\\'))
-        {
-            auto slash = source.find_last_of("/\\");
-            auto filename = (slash != std::string::npos) ? source.substr(slash + 1) : source;
-            destination += filename;
-        }
-
-        destination = normalize_destination_for_join(destination);
+        destination = resolve_file_destination(source, destination, name == "file");
         auto src_path = (fs::path(src_base) / source).string();
         auto dst_path = (fs::path(dst_base) / destination).string();
         int priority = get_priority(file_node);
@@ -740,77 +724,6 @@ void FomodService::execute_file_operations()
     file_operations_.clear();
 }
 
-std::string FomodService::escape_xpath_string(const std::string& value)
-{
-    if (value.empty())
-        return "''";
-
-    bool has_single = value.find('\'') != std::string::npos;
-    bool has_double = value.find('"') != std::string::npos;
-
-    if (has_single && has_double)
-    {
-        // Use concat() to handle both quote types
-        std::string result = "concat(";
-        std::string remaining = value;
-        bool first = true;
-
-        while (!remaining.empty())
-        {
-            auto sq = remaining.find('\'');
-            auto dq = remaining.find('"');
-
-            if (sq == std::string::npos && dq == std::string::npos)
-            {
-                if (!first)
-                    result += ",";
-                result += "'" + remaining + "'";
-                break;
-            }
-            else if (sq != std::string::npos && (dq == std::string::npos || sq < dq))
-            {
-                if (sq > 0)
-                {
-                    if (!first)
-                        result += ",";
-                    result += "'" + remaining.substr(0, sq) + "'";
-                    first = false;
-                }
-                if (!first)
-                    result += ",";
-                result += "\"'\"";
-                first = false;
-                remaining = remaining.substr(sq + 1);
-            }
-            else
-            {
-                if (dq > 0)
-                {
-                    if (!first)
-                        result += ",";
-                    result += "'" + remaining.substr(0, dq) + "'";
-                    first = false;
-                }
-                if (!first)
-                    result += ",";
-                result += "'\"'";
-                first = false;
-                remaining = remaining.substr(dq + 1);
-            }
-        }
-        result += ")";
-        return result;
-    }
-    else if (has_single)
-    {
-        return "\"" + value + "\"";
-    }
-    else
-    {
-        return "'" + value + "'";
-    }
-}
-
 std::string FomodService::normalize_string(const std::string& value)
 {
     if (value.empty())
@@ -843,83 +756,6 @@ std::string FomodService::normalize_string(const std::string& value)
     replace_all("&apos;", "'");
 
     return result;
-}
-
-std::vector<pugi::xml_node> FomodService::find_plugin_nodes_by_value(const pugi::xml_document& doc,
-                                                                     const std::string& step_name,
-                                                                     const std::string& group_name,
-                                                                     const std::string& plugin_name)
-{
-    auto& logger = Logger::instance();
-    std::vector<pugi::xml_node> results;
-    auto normalized_plugin = normalize_string(plugin_name);
-
-    auto steps_parent = doc.child("config").child("installSteps");
-    auto ordered_steps = get_ordered_nodes(steps_parent, "installStep");
-    for (const auto& step_node : ordered_steps)
-    {
-        auto step_attr = normalize_string(step_node.attribute("name").as_string());
-
-        if (!step_name.empty())
-        {
-            auto normalized_step = normalize_string(step_name);
-            auto lower = [](std::string s)
-            {
-                std::transform(
-                    s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
-                return s;
-            };
-            if (lower(step_attr) != lower(normalized_step))
-                continue;
-        }
-
-        auto fg_parent = step_node.child("optionalFileGroups");
-        auto ordered_groups = get_ordered_nodes(fg_parent, "group");
-        for (const auto& group_node : ordered_groups)
-        {
-            auto group_attr = normalize_string(group_node.attribute("name").as_string());
-
-            if (!group_name.empty())
-            {
-                auto lower = [](std::string s)
-                {
-                    std::transform(s.begin(),
-                                   s.end(),
-                                   s.begin(),
-                                   [](unsigned char c) { return std::tolower(c); });
-                    return s;
-                };
-                if (lower(group_attr) != lower(normalize_string(group_name)))
-                    continue;
-            }
-
-            auto plugins_parent = group_node.child("plugins");
-            auto ordered_plugins = get_ordered_nodes(plugins_parent, "plugin");
-            for (const auto& pnode : ordered_plugins)
-            {
-                auto pattr = normalize_string(pnode.attribute("name").as_string());
-
-                auto lower = [](std::string s)
-                {
-                    std::transform(s.begin(),
-                                   s.end(),
-                                   s.begin(),
-                                   [](unsigned char c) { return std::tolower(c); });
-                    return s;
-                };
-                if (lower(pattr) == lower(normalized_plugin))
-                {
-                    logger.log(std::format(
-                        "[fomod] Found plugin by value comparison: \"{}\" matches \"{}\"",
-                        pattr,
-                        plugin_name));
-                    results.push_back(pnode);
-                }
-            }
-        }
-    }
-
-    return results;
 }
 
 std::string FomodService::make_plugin_key(const std::string& step,

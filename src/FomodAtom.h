@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -92,6 +93,22 @@ struct ExpandedAtoms
     std::vector<FomodAtom> required;
     std::vector<std::vector<FomodAtom>> per_plugin;       // [flat_plugin_index]
     std::vector<std::vector<FomodAtom>> per_conditional;  // [conditional_index]
+
+    /// Apply a callable to every atom across all origin containers.
+    /// Deducing `this` provides const and non-const overloads from one definition.
+    template <typename Self, typename Func>
+        requires std::invocable<Func, decltype(*std::declval<Self>().required.begin())>
+    void for_each(this Self&& self, Func&& fn)
+    {
+        for (auto&& a : self.required)
+            fn(a);
+        for (auto&& v : self.per_plugin)
+            for (auto&& a : v)
+                fn(a);
+        for (auto&& v : self.per_conditional)
+            for (auto&& a : v)
+                fn(a);
+    }
 };
 
 }  // namespace mo2core

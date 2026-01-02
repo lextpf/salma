@@ -6,6 +6,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <thread>
 
 namespace mo2server
 {
@@ -65,6 +66,15 @@ class InstallationController
 {
 public:
     InstallationController() = default;
+    ~InstallationController()
+    {
+        if (install_thread_.joinable())
+        {
+            install_thread_.join();
+        }
+    }
+    InstallationController(const InstallationController&) = delete;
+    InstallationController& operator=(const InstallationController&) = delete;
     /**
      * @brief Handle a multipart archive upload and install.
      *
@@ -109,6 +119,7 @@ private:
     std::string install_result_mod_path_;
     std::string install_result_mod_name_;
     std::string install_last_error_;
+    std::thread install_thread_;
 };
 
 }  // namespace mo2server
