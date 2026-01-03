@@ -164,6 +164,10 @@ public:
         std::vector<std::string> paths;  ///< Entry paths in archive order (original casing)
         std::unordered_map<std::string, uint64_t>
             sizes;  ///< Normalized path to uncompressed size in bytes
+
+        EntryListing() = default;
+        EntryListing(EntryListing&&) noexcept = default;
+        EntryListing& operator=(EntryListing&&) noexcept = default;
     };
 
     /**

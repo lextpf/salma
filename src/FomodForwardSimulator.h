@@ -26,6 +26,10 @@ struct InferenceOverrides;
 struct SimulatedTree
 {
     std::unordered_map<std::string, FomodAtom> files;  // dest -> winning atom
+
+    SimulatedTree() = default;
+    SimulatedTree(SimulatedTree&&) noexcept = default;
+    SimulatedTree& operator=(SimulatedTree&&) noexcept = default;
 };
 
 /**

@@ -25,16 +25,22 @@ Logger::Logger()
 
 Logger::~Logger()
 {
-    if (log_file_.is_open())
+    try
     {
-        log_file_.flush();
-        log_file_.close();
+        if (log_file_.is_open())
+        {
+            log_file_.flush();
+            log_file_.close();
+        }
+    }
+    catch (...)
+    {
     }
 }
 
 void Logger::set_callback(LogCallback callback)
 {
-    callback_.store(callback, std::memory_order_release);
+    callback_.store(callback);
 }
 
 // Output routing for all three log methods:
@@ -45,7 +51,7 @@ void Logger::set_callback(LogCallback callback)
 
 void Logger::log(const std::string& message)
 {
-    auto cb = callback_.load(std::memory_order_acquire);
+    auto cb = callback_.load();
     if (cb)
     {
         cb(message.c_str());
@@ -59,7 +65,7 @@ void Logger::log(const std::string& message)
 
 void Logger::log_error(const std::string& message)
 {
-    auto cb = callback_.load(std::memory_order_acquire);
+    auto cb = callback_.load();
     if (cb)
     {
         cb(message.c_str());
@@ -73,7 +79,7 @@ void Logger::log_error(const std::string& message)
 
 void Logger::log_warning(const std::string& message)
 {
-    auto cb = callback_.load(std::memory_order_acquire);
+    auto cb = callback_.load();
     if (cb)
     {
         cb(message.c_str());
