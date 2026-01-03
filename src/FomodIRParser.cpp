@@ -22,7 +22,8 @@ namespace mo2core
 {
 
 // Iterate <file>/<folder> child elements with non-empty source attributes.
-template <std::invocable<const pugi::xml_node&> Func>
+template <typename Func>
+    requires std::invocable<Func, const pugi::xml_node&>
 static void for_each_file_node(const pugi::xml_node& parent, Func&& fn)
 {
     for (auto node : parent.children())

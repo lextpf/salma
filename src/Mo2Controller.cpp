@@ -840,10 +840,10 @@ crow::response Mo2Controller::delete_fomod(const std::string& name)
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/plugin/deploy
+// Shared helper for deploy / purge plugin actions
 // ---------------------------------------------------------------------------
 
-crow::response Mo2Controller::deploy_plugin()
+crow::response Mo2Controller::run_plugin_action(const std::string& action)
 {
 #ifdef _WIN32
     if (plugin_action_running_.exchange(true))
@@ -851,13 +851,15 @@ crow::response Mo2Controller::deploy_plugin()
         return json_response(409, {{"error", "Plugin action is already running"}});
     }
 
-    auto script_path = fs::current_path() / "deploy.bat";
+    auto script_name = action + ".bat";
+    auto script_path = fs::current_path() / script_name;
     if (!fs::exists(script_path))
     {
         plugin_action_running_.store(false);
         return json_response(
             404,
-            {{"error", std::format("deploy.bat not found in {}", fs::current_path().string())}});
+            {{"error",
+              std::format("{} not found in {}", script_name, fs::current_path().string())}});
     }
 
     auto& cfg = ConfigService::instance();
@@ -881,7 +883,7 @@ crow::response Mo2Controller::deploy_plugin()
     {
         std::lock_guard<std::mutex> lock(plugin_action_mutex_);
         plugin_action_has_result_ = false;
-        plugin_action_type_ = "deploy";
+        plugin_action_type_ = action;
         plugin_action_last_error_.clear();
     }
 
@@ -890,15 +892,16 @@ crow::response Mo2Controller::deploy_plugin()
         plugin_action_thread_.join();
     }
     plugin_action_thread_ = std::thread(
-        [this, script_path, deploy_path, mods_path]()
+        [this, action, script_name, script_path, deploy_path, mods_path]()
         {
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
             auto& logger = mo2core::Logger::instance();
             try
             {
-                logger.log(std::format("[server] Running deploy script: {}", script_path.string()));
+                logger.log(
+                    std::format("[server] Running {} script: {}", action, script_path.string()));
                 int exit_code = run_batch_script(script_path, deploy_path, mods_path);
-                logger.log(std::format("[server] Deploy script exit code: {}", exit_code));
+                logger.log(std::format("[server] {} script exit code: {}", action, exit_code));
 
                 std::lock_guard<std::mutex> lock(plugin_action_mutex_);
                 plugin_action_has_result_ = true;
@@ -909,12 +912,12 @@ crow::response Mo2Controller::deploy_plugin()
                 if (exit_code != 0)
                 {
                     plugin_action_last_error_ =
-                        std::format("deploy.bat failed with exit code {}", exit_code);
+                        std::format("{} failed with exit code {}", script_name, exit_code);
                 }
             }
             catch (const std::exception& ex)
             {
-                logger.log_error(std::format("[server] Deploy failed: {}", ex.what()));
+                logger.log_error(std::format("[server] {} failed: {}", action, ex.what()));
                 std::lock_guard<std::mutex> lock(plugin_action_mutex_);
                 plugin_action_has_result_ = true;
                 plugin_action_last_success_ = false;
@@ -923,10 +926,19 @@ crow::response Mo2Controller::deploy_plugin()
             plugin_action_running_.store(false);
         });
 
-    return json_response(200, {{"started", true}, {"action", "deploy"}});
+    return json_response(200, {{"started", true}, {"action", action}});
 #else
-    return json_response(501, {{"error", "Deploy is only supported on Windows"}});
+    return json_response(501, {{"error", std::format("{} is only supported on Windows", action)}});
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/plugin/deploy
+// ---------------------------------------------------------------------------
+
+crow::response Mo2Controller::deploy_plugin()
+{
+    return run_plugin_action("deploy");
 }
 
 // ---------------------------------------------------------------------------
@@ -935,88 +947,7 @@ crow::response Mo2Controller::deploy_plugin()
 
 crow::response Mo2Controller::purge_plugin()
 {
-#ifdef _WIN32
-    if (plugin_action_running_.exchange(true))
-    {
-        return json_response(409, {{"error", "Plugin action is already running"}});
-    }
-
-    auto script_path = fs::current_path() / "purge.bat";
-    if (!fs::exists(script_path))
-    {
-        plugin_action_running_.store(false);
-        return json_response(
-            404,
-            {{"error", std::format("purge.bat not found in {}", fs::current_path().string())}});
-    }
-
-    auto& cfg = ConfigService::instance();
-    fs::path mods_path = cfg.mo2_mods_path();
-    if (mods_path.empty())
-    {
-        if (const char* mods_env = std::getenv("SALMA_MODS_PATH"); mods_env && *mods_env)
-        {
-            mods_path = fs::path(mods_env);
-        }
-    }
-    if (mods_path.empty())
-    {
-        plugin_action_running_.store(false);
-        return json_response(
-            400,
-            {{"error", "MO2 mods path not configured. Set SALMA_MODS_PATH or configure via API"}});
-    }
-    fs::path deploy_path = resolve_deploy_path(mods_path.string());
-
-    {
-        std::lock_guard<std::mutex> lock(plugin_action_mutex_);
-        plugin_action_has_result_ = false;
-        plugin_action_type_ = "purge";
-        plugin_action_last_error_.clear();
-    }
-
-    if (plugin_action_thread_.joinable())
-    {
-        plugin_action_thread_.join();
-    }
-    plugin_action_thread_ = std::thread(
-        [this, script_path, deploy_path, mods_path]()
-        {
-            SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-            auto& logger = mo2core::Logger::instance();
-            try
-            {
-                logger.log(std::format("[server] Running purge script: {}", script_path.string()));
-                int exit_code = run_batch_script(script_path, deploy_path, mods_path);
-                logger.log(std::format("[server] Purge script exit code: {}", exit_code));
-
-                std::lock_guard<std::mutex> lock(plugin_action_mutex_);
-                plugin_action_has_result_ = true;
-                plugin_action_last_success_ = (exit_code == 0);
-                plugin_action_exit_code_ = exit_code;
-                plugin_action_plugin_installed_ = plugin_installed_at(deploy_path);
-                plugin_action_deploy_path_ = deploy_path.string();
-                if (exit_code != 0)
-                {
-                    plugin_action_last_error_ =
-                        std::format("purge.bat failed with exit code {}", exit_code);
-                }
-            }
-            catch (const std::exception& ex)
-            {
-                logger.log_error(std::format("[server] Purge failed: {}", ex.what()));
-                std::lock_guard<std::mutex> lock(plugin_action_mutex_);
-                plugin_action_has_result_ = true;
-                plugin_action_last_success_ = false;
-                plugin_action_last_error_ = ex.what();
-            }
-            plugin_action_running_.store(false);
-        });
-
-    return json_response(200, {{"started", true}, {"action", "purge"}});
-#else
-    return json_response(501, {{"error", "Purge is only supported on Windows"}});
-#endif
+    return run_plugin_action("purge");
 }
 
 // ---------------------------------------------------------------------------
