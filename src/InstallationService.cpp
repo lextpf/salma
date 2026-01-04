@@ -36,7 +36,14 @@ std::string InstallationService::install_mod(const std::string& archive_path,
         throw std::runtime_error("Archive file not found: " + archive_path);
     }
 
-    auto archive_size = fs::file_size(archive_path);
+    std::error_code size_ec;
+    auto archive_size = fs::file_size(archive_path, size_ec);
+    if (size_ec)
+    {
+        logger.log_warning(
+            std::format("[install] Could not read archive size: {}", size_ec.message()));
+        archive_size = 0;
+    }
     logger.log(std::format("[install] Archive size: {} bytes ({:.2f} MB)",
                            archive_size,
                            archive_size / 1024.0 / 1024.0));
@@ -154,20 +161,23 @@ std::string InstallationService::handle_non_fomod_install(const fs::path& archiv
     std::string module_name_lower;
 
     // Determine JSON path
-    std::string effective_json = json_path;
-    if (effective_json.empty())
-    {
-        auto p = fs::path(archive_path);
-        effective_json = (p.parent_path() / (p.stem().string() + ".json")).string();
-    }
+    std::string effective_json = resolve_json_path(json_path, archive_path);
 
-    if (fs::exists(effective_json))
+    if (!effective_json.empty() && fs::exists(effective_json))
     {
         std::ifstream f(effective_json);
         if (f)
         {
             json config;
-            f >> config;
+            try
+            {
+                f >> config;
+            }
+            catch (const json::parse_error& ex)
+            {
+                logger.log_warning(std::format(
+                    "[install] Failed to parse JSON config {}: {}", effective_json, ex.what()));
+            }
             if (config.contains("moduleName") && config["moduleName"].is_string())
             {
                 module_name_lower = to_lower(config["moduleName"].get<std::string>());
@@ -177,6 +187,37 @@ std::string InstallationService::handle_non_fomod_install(const fs::path& archiv
         }
     }
 
+    if (module_name_lower.find('/') != std::string::npos ||
+        module_name_lower.find('\\') != std::string::npos ||
+        module_name_lower.find("..") != std::string::npos)
+    {
+        logger.log_warning(std::format(
+            "[install] Rejecting moduleName with path separators: \"{}\"", module_name_lower));
+        module_name_lower.clear();
+    }
+
+    // Reject Windows reserved device names (CON, AUX, PRN, NUL, COM1-9, LPT1-9).
+    // These cannot be used as directory names on Windows and cause silent failures.
+    if (!module_name_lower.empty())
+    {
+        static const std::unordered_set<std::string> kReservedNames = {
+            "con",  "prn",  "aux",  "nul",  "com1", "com2", "com3", "com4", "com5", "com6", "com7",
+            "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+        };
+        auto stem = module_name_lower;
+        if (auto dot = stem.rfind('.'); dot != std::string::npos)
+            stem = stem.substr(0, dot);
+        if (kReservedNames.contains(stem))
+        {
+            logger.log_warning(std::format(
+                "[install] Rejecting Windows reserved device name: \"{}\"", module_name_lower));
+            module_name_lower.clear();
+        }
+    }
+
+    // Fallback folder paths come from ModStructureDetector which enumerates
+    // filesystem entries under archive_root -- they are always relative names,
+    // so no additional traversal validation is needed beyond the check above.
     auto main_mod_folders = ModStructureDetector::find_main_mod_folders(archive_root);
 
     if (!main_mod_folders.empty())
@@ -247,12 +288,7 @@ std::string InstallationService::handle_fomod_install(const fs::path& fomod_fold
     auto dst_base = (fs::path(temp_dir) / "unfomod").string();
 
     // Determine JSON path
-    std::string effective_json = json_path;
-    if (effective_json.empty())
-    {
-        auto p = fs::path(archive_path);
-        effective_json = (p.parent_path() / (p.stem().string() + ".json")).string();
-    }
+    std::string effective_json = resolve_json_path(json_path, archive_path);
 
     fs::create_directories(dst_base);
 
@@ -267,12 +303,20 @@ std::string InstallationService::handle_fomod_install(const fs::path& fomod_fold
 
     // Parse JSON
     json config_json;
-    if (fs::exists(effective_json))
+    if (!effective_json.empty() && fs::exists(effective_json))
     {
         std::ifstream f(effective_json);
         if (f)
         {
-            f >> config_json;
+            try
+            {
+                f >> config_json;
+            }
+            catch (const json::parse_error& ex)
+            {
+                logger.log_warning(std::format(
+                    "[install] Failed to parse FOMOD JSON {}: {}", effective_json, ex.what()));
+            }
             logger.log(std::format("[install] Loaded JSON: {}", effective_json));
         }
     }
@@ -280,6 +324,11 @@ std::string InstallationService::handle_fomod_install(const fs::path& fomod_fold
     // Create dependency context
     FomodDependencyContext context;
     context.archive_root = archive_root.string();
+    context.installed_plugins.insert("skyrim.esm");
+    context.installed_plugins.insert("update.esm");
+    context.installed_plugins.insert("dawnguard.esm");
+    context.installed_plugins.insert("hearthfires.esm");
+    context.installed_plugins.insert("dragonborn.esm");
 
     // Read game context from JSON if present
     if (!config_json.is_null())
@@ -355,22 +404,36 @@ std::string InstallationService::handle_fomod_install(const fs::path& fomod_fold
         }
     }
 
+    // Caller-owned operations vector and document-order counter.
+    // Each process method appends to the same vector so that
+    // execute_file_operations can sort everything in one pass.
+    std::vector<mo2core::FileOperation> file_ops;
+    int next_doc_order = 0;
+
     // Process required files
     logger.log("[install] Processing required install files...");
-    fomod_service.process_required_files(doc, src_base, dst_base, &context);
+    fomod_service.process_required_files(
+        doc, src_base, dst_base, &context, file_ops, next_doc_order);
 
     // Process optional files and auto-install behavior.
     // Even when selections are missing, this still installs Required plugins and
     // alwaysInstall/installIfUsable entries from unselected plugins.
     logger.log("[install] Processing optional install files...");
-    fomod_service.process_optional_files(doc, config_json, src_base, dst_base, &context);
+    fomod_service.process_optional_files(
+        doc, config_json, src_base, dst_base, &context, file_ops, next_doc_order);
 
     // Process conditional files
     logger.log("[install] Processing conditional file installs...");
-    fomod_service.process_conditional_files(doc, src_base, dst_base, &context);
+    fomod_service.process_conditional_files(
+        doc, src_base, dst_base, &context, file_ops, next_doc_order);
 
     // Execute all file operations in a single priority-sorted pass
-    fomod_service.execute_file_operations();
+    int file_op_failures = FomodService::execute_file_operations(file_ops);
+    if (file_op_failures > 0)
+    {
+        logger.log_warning(std::format("[install] {} file operations failed during FOMOD install",
+                                       file_op_failures));
+    }
 
     // Copy result to mod directory
     logger.log(std::format("[install] Copying unfomod files to mod directory: {}", mod_path));
@@ -378,6 +441,34 @@ std::string InstallationService::handle_fomod_install(const fs::path& fomod_fold
 
     logger.log(std::format("[install] FOMOD installation steps completed in {}", temp_dir));
     return mod_path;
+}
+
+std::string InstallationService::resolve_json_path(const std::string& json_path,
+                                                   const std::string& archive_path)
+{
+    auto& logger = Logger::instance();
+
+    // Caller provided an explicit path -- trust it.
+    if (!json_path.empty())
+        return json_path;
+
+    // Derive from archive stem, but only accept if it lives next to the archive
+    // (prevents accidentally loading an unrelated JSON from another directory).
+    auto p = fs::path(archive_path);
+    auto derived = (p.parent_path() / (p.stem().string() + ".json")).string();
+
+    if (fs::exists(derived))
+    {
+        auto parent_dir = p.parent_path();
+        if (!parent_dir.empty() && !mo2core::is_inside(parent_dir, fs::path(derived)))
+        {
+            logger.log_warning(std::format(
+                "[install] Rejecting derived JSON path outside archive directory: {}", derived));
+            return "";
+        }
+        return derived;
+    }
+    return "";
 }
 
 }  // namespace mo2core
