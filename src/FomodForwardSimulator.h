@@ -47,4 +47,14 @@ MO2_API SimulatedTree simulate(const FomodInstaller& installer,
                                const FomodDependencyContext* context = nullptr,
                                const InferenceOverrides* overrides = nullptr);
 
+/// In-place version of simulate() that reuses an existing SimulatedTree's
+/// allocation. The tree's file map is cleared before simulation begins,
+/// but the underlying hash-map capacity is preserved across calls.
+MO2_API void simulate_into(SimulatedTree& tree,
+                           const FomodInstaller& installer,
+                           const ExpandedAtoms& atoms,
+                           const std::vector<std::vector<std::vector<bool>>>& selections,
+                           const FomodDependencyContext* context = nullptr,
+                           const InferenceOverrides* overrides = nullptr);
+
 }  // namespace mo2core

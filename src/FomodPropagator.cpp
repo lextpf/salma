@@ -3,6 +3,7 @@
 #include "Logger.h"
 
 #include <algorithm>
+#include <cassert>
 #include <format>
 #include <unordered_set>
 
@@ -41,7 +42,10 @@ PropagationResult propagate(const FomodInstaller& installer,
 
     std::unordered_map<std::string, std::string> flags;
 
-    static constexpr int MAX_ITERATIONS = 3;
+    // Iterate until fixpoint (no changes) or a safety limit is reached.
+    // 3 iterations suffice for the vast majority of FOMOD installers; the limit
+    // prevents runaway loops on pathological circular dependencies.
+    static constexpr int MAX_ITERATIONS = 16;
     int total_resolved = 0;
 
     for (int iteration = 0; iteration < MAX_ITERATIONS; ++iteration)
@@ -185,7 +189,12 @@ PropagationResult propagate(const FomodInstaller& installer,
                     total_resolved++;
                     changed = true;
 
-                    // Accumulate flags from selected plugins.
+                    // Accumulate flags from selected plugins in a resolved group.
+                    // When group_resolved is true, domain[pi]==true means the plugin
+                    // is definitively selected (the cardinality constraint has been
+                    // fully determined).
+                    assert(group_resolved &&
+                           "Flags should only be accumulated for resolved groups");
                     for (int pi = 0; pi < n; ++pi)
                     {
                         if (domain[pi])

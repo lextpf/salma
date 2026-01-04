@@ -1,8 +1,10 @@
 #include "FomodIRParser.h"
+#include "FomodDependencyEvaluator.h"
 #include "Logger.h"
 #include "Utils.h"
 
 #include <concepts>
+#include <format>
 #include <string_view>
 
 using namespace std::string_view_literals;
@@ -43,30 +45,39 @@ static void for_each_file_node(const pugi::xml_node& parent, Func&& fn)
 // compile_condition: recursively convert a <dependencies> XML node into IR
 // ---------------------------------------------------------------------------
 
-// Guard against malicious/malformed deeply-nested XML that would blow the stack
-static constexpr int MAX_CONDITION_DEPTH = 32;
+// Guard against malicious/malformed XML: depth prevents stack overflow,
+// breadth prevents CPU-bound DoS from millions of sibling nodes.
+static constexpr int MAX_CONDITION_CHILDREN = 10000;
 
 static FomodCondition compile_condition_impl(const pugi::xml_node& deps_node, int depth)
 {
     FomodCondition cond;
     cond.type = FomodConditionType::Composite;
 
-    if (depth > MAX_CONDITION_DEPTH)
+    if (depth > FomodDependencyEvaluator::MAX_DEPENDENCY_DEPTH)
     {
-        // Bail out with an always-true empty And to avoid stack overflow
+        // Bail out with an always-false empty Or to safely reject overly deep conditions
         mo2core::Logger::instance().log_warning(
-            "[fomod] Condition nesting exceeds maximum depth, treating as always-true");
-        cond.op = FomodConditionOp::And;
+            "[fomod] Condition nesting exceeds maximum depth, treating as always-false");
+        cond.op = FomodConditionOp::Or;
         return cond;
     }
 
     std::string op = deps_node.attribute("operator").as_string("And");
     cond.op = (op == "Or") ? FomodConditionOp::Or : FomodConditionOp::And;
 
+    int child_count = 0;
     for (auto child : deps_node.children())
     {
         if (child.type() != pugi::node_element)
             continue;
+        if (++child_count > MAX_CONDITION_CHILDREN)
+        {
+            mo2core::Logger::instance().log_warning(
+                std::format("[fomod] Condition node has more than {} children, truncating",
+                            MAX_CONDITION_CHILDREN));
+            break;
+        }
 
         std::string_view name = child.name();
         FomodCondition leaf;
@@ -115,7 +126,9 @@ static FomodCondition compile_condition_impl(const pugi::xml_node& deps_node, in
                 cond.children.push_back(compile_condition_impl(child, depth + 1));
                 break;
             default:
-                break;  // Unknown elements silently skipped
+                mo2core::Logger::instance().log_warning(
+                    std::format("[fomod] Unknown condition element \"{}\" skipped", child.name()));
+                break;
         }
     }
 
@@ -125,26 +138,6 @@ static FomodCondition compile_condition_impl(const pugi::xml_node& deps_node, in
 FomodCondition FomodIRParser::compile_condition(const pugi::xml_node& deps_node)
 {
     return compile_condition_impl(deps_node, 0);
-}
-
-// ---------------------------------------------------------------------------
-// resolve_file_destination: replicate FomodService file destination semantics
-// ---------------------------------------------------------------------------
-std::string FomodIRParser::resolve_file_destination(const std::string& source,
-                                                    const std::string& dest_raw)
-{
-    if (dest_raw.empty())
-    {
-        auto slash = source.find_last_of("/\\");
-        return (slash != std::string::npos) ? source.substr(slash + 1) : source;
-    }
-    if (dest_raw.back() == '/' || dest_raw.back() == '\\')
-    {
-        auto slash = source.find_last_of("/\\");
-        auto filename = (slash != std::string::npos) ? source.substr(slash + 1) : source;
-        return dest_raw + filename;
-    }
-    return dest_raw;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +166,7 @@ FomodFileEntry FomodIRParser::parse_file_entry(const pugi::xml_node& node,
     }
     else
     {
-        entry.destination = normalize_path(resolve_file_destination(source_attr, dest_raw));
+        entry.destination = normalize_path(resolve_file_destination(source_attr, dest_raw, true));
     }
 
     entry.priority = node.attribute("priority").as_int(0);

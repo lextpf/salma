@@ -128,7 +128,9 @@ public:
      * @param dependencies_node The XML `<dependencies>` element.
      * @return `true` if all (And) or any (Or) child conditions are met.
      */
-    bool are_dependencies_met(const pugi::xml_node& dependencies_node);
+    static constexpr int MAX_DEPENDENCY_DEPTH = 32;
+
+    bool are_dependencies_met(const pugi::xml_node& dependencies_node, int depth = 0);
 
 private:
     bool evaluate_flag_dependency(const pugi::xml_node& dep_node);
@@ -138,10 +140,6 @@ private:
     bool evaluate_fomod_dependency(const pugi::xml_node& dep_node);
     bool evaluate_fomm_dependency(const pugi::xml_node& dep_node);
     bool evaluate_fose_dependency(const pugi::xml_node& dep_node);
-    Result<bool> compare_versions(const std::string& actual,
-                                  const std::string& required,
-                                  const std::string& op);
-
     std::unordered_map<std::string, std::string>&
         plugin_flags_;                       ///< Reference to FomodService's flag map
     const FomodDependencyContext* context_;  ///< External dependency context (may be null)
@@ -155,6 +153,26 @@ enum class ExternalConditionOverride : uint8_t
     ForceTrue = 2,
 };
 
+// ---------------------------------------------------------------------------
+// IR-based condition evaluation (free functions)
+// ---------------------------------------------------------------------------
+//
+// These free functions evaluate pre-compiled FomodCondition IR trees,
+// whereas the FomodDependencyEvaluator class above evaluates raw XML DOM
+// nodes. Both implementations share the same core evaluation helpers
+// (eval_file_dep, eval_game_dep, version comparison, etc.) defined in
+// FomodDependencyEvaluator.cpp.
+//
+// Callers:
+//   - FomodDependencyEvaluator class -> FomodService (runtime installation)
+//   - evaluate_condition / evaluate_condition_inferred -> FomodForwardSimulator
+//     and FomodCSPSolver (offline simulation and constraint solving)
+//
+// The split exists because the runtime installer works directly with the
+// pugixml DOM (no IR compilation step), while the solver/simulator
+// pre-compiles conditions into IR for efficient repeated evaluation.
+// ---------------------------------------------------------------------------
+
 /// Evaluate a FomodCondition IR node against a flag map and optional context.
 /// Same semantics as FomodDependencyEvaluator::are_dependencies_met but
 /// operates on the compiled IR instead of raw XML nodes.
@@ -166,7 +184,8 @@ MO2_API bool evaluate_condition(const FomodCondition& condition,
 /// all external conditions (File, Plugin, Fomod) follow override mode.
 /// - ForceTrue: external conditions evaluate to true
 /// - ForceFalse: external conditions evaluate to false
-/// - Unknown: evaluate using standalone/default semantics (no forced value)
+/// - Unknown: external conditions (File, Plugin, Fomod) conservatively
+///   return false; infrastructure conditions (Game, Fomm, Fose) return true
 MO2_API bool evaluate_condition_inferred(const FomodCondition& condition,
                                          const std::unordered_map<std::string, std::string>& flags,
                                          ExternalConditionOverride external_override,

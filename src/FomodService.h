@@ -78,12 +78,15 @@ namespace mo2core
  *
  * ```cpp
  * FomodService fomod;
+ * std::vector<FileOperation> ops;
+ * int next_doc_order = 0;
+ *
  * fomod.check_module_dependencies(doc, &ctx);
  * fomod.validate_json_selections(doc, config);
- * fomod.process_required_files(doc, src, dst, &ctx);
- * fomod.process_optional_files(doc, config, src, dst, &ctx);
- * fomod.process_conditional_files(doc, src, dst, &ctx);
- * fomod.execute_file_operations();
+ * fomod.process_required_files(doc, src, dst, &ctx, ops, next_doc_order);
+ * fomod.process_optional_files(doc, config, src, dst, &ctx, ops, next_doc_order);
+ * fomod.process_conditional_files(doc, src, dst, &ctx, ops, next_doc_order);
+ * FomodService::execute_file_operations(ops);
  * ```
  *
  * ## :material-json: JSON Selection Resilience
@@ -127,11 +130,15 @@ public:
      * @param src_base Source base path (extracted archive root).
      * @param dst_base Destination mod directory.
      * @param context Dependency context.
+     * @param ops Accumulated file operations vector (caller-owned).
+     * @param next_doc_order Monotonic counter for XML document order tiebreaker (caller-owned).
      */
     void process_required_files(const pugi::xml_document& doc,
                                 const std::string& src_base,
                                 const std::string& dst_base,
-                                const FomodDependencyContext* context);
+                                const FomodDependencyContext* context,
+                                std::vector<FileOperation>& ops,
+                                int& next_doc_order);
 
     /**
      * @brief Validate JSON selections against the XML schema.
@@ -139,9 +146,19 @@ public:
      * Checks that group-type constraints (SelectExactlyOne,
      * SelectAtMostOne, etc.) are satisfied for each group containing
      * selected plugins. Violations are logged as warnings but do
-     * **not** throw - installation proceeds regardless.
+     * **not** throw.
      *
      * Skipped entirely if the JSON has no `steps` array.
+     *
+     * @return `true` if all groups pass validation, `false` if any
+     *         constraint is violated.
+     *
+     * @note Callers are expected to log the result but **not** abort
+     *       the installation on failure. Partial or inferred JSON
+     *       may legitimately violate cardinality constraints (e.g.
+     *       Required plugins are auto-installed and may not appear
+     *       in the JSON selection list). InstallationService logs a
+     *       warning and proceeds.
      *
      * @param doc Parsed ModuleConfig.xml.
      * @param config_json User or inferred selections.
@@ -168,12 +185,16 @@ public:
      * @param src_base Source base path (extracted archive root).
      * @param dst_base Destination mod directory.
      * @param context Dependency context.
+     * @param ops Accumulated file operations vector (caller-owned).
+     * @param next_doc_order Monotonic counter for XML document order tiebreaker (caller-owned).
      */
     void process_optional_files(const pugi::xml_document& doc,
                                 const nlohmann::json& config_json,
                                 const std::string& src_base,
                                 const std::string& dst_base,
-                                const FomodDependencyContext* context);
+                                const FomodDependencyContext* context,
+                                std::vector<FileOperation>& ops,
+                                int& next_doc_order);
 
     /**
      * @brief Evaluate `<conditionalFileInstalls>` patterns.
@@ -186,59 +207,85 @@ public:
      * @param src_base Source base path.
      * @param dst_base Destination mod directory.
      * @param context Dependency context.
+     * @param ops Accumulated file operations vector (caller-owned).
+     * @param next_doc_order Monotonic counter for XML document order tiebreaker (caller-owned).
      */
     void process_conditional_files(const pugi::xml_document& doc,
                                    const std::string& src_base,
                                    const std::string& dst_base,
-                                   const FomodDependencyContext* context);
+                                   const FomodDependencyContext* context,
+                                   std::vector<FileOperation>& ops,
+                                   int& next_doc_order);
 
     /**
      * @brief Sort queued operations by priority and execute all copies.
      *
-     * Uses stable sort on its own `file_operations_` vector (ascending
+     * Uses stable sort on the provided operations vector (ascending
      * priority, then document order), then copies each entry via
      * FileOperations::copy_file() / copy_folder().
+     *
+     * @param ops File operations to sort and execute (cleared after execution).
+     * @return Number of failed file operations (0 = all succeeded).
      */
-    void execute_file_operations();
+    static int execute_file_operations(std::vector<FileOperation>& ops);
 
 private:
     void extract_flags(const pugi::xml_node& plugin_node);
     void process_files_node(const pugi::xml_node& files_node,
                             const std::string& src_base,
-                            const std::string& dst_base);
+                            const std::string& dst_base,
+                            std::vector<FileOperation>& ops,
+                            int& next_doc_order);
     void process_plugin_node(const pugi::xml_node& plugin_node,
                              const std::string& src_base,
                              const std::string& dst_base,
-                             const FomodDependencyContext* context);
+                             const FomodDependencyContext* context,
+                             std::vector<FileOperation>& ops,
+                             int& next_doc_order);
     int get_priority(const pugi::xml_node& node);
     std::string normalize_string(const std::string& value);
     bool validate_group_selection(const pugi::xml_node& group_node,
                                   const std::unordered_set<std::string>& selected_plugins);
     PluginType evaluate_plugin_type(const pugi::xml_node& plugin_node,
                                     const FomodDependencyContext* context);
-    void auto_install_required_for_step(const pugi::xml_document& doc,
-                                        const std::string& step_name,
-                                        std::unordered_set<std::string>& processed_keys,
-                                        const std::string& src_base,
-                                        const std::string& dst_base,
-                                        const FomodDependencyContext* context);
+    void process_explicit_selections(const pugi::xml_document& doc,
+                                     const nlohmann::json& steps_json,
+                                     const std::string& src_base,
+                                     const std::string& dst_base,
+                                     const FomodDependencyContext* context,
+                                     std::vector<FileOperation>& ops,
+                                     int& next_doc_order,
+                                     std::unordered_set<std::string>& processed_plugins,
+                                     std::unordered_set<std::string>& covered_steps);
+    void auto_install_required_for_step(
+        const pugi::xml_document& doc,
+        const std::string& step_name,
+        std::unordered_set<std::string>& processed_keys,
+        const std::string& src_base,
+        const std::string& dst_base,
+        const FomodDependencyContext* context,
+        std::vector<FileOperation>& ops,
+        int& next_doc_order,
+        const std::unordered_set<std::string>* skip_steps = nullptr);
     void process_auto_install_plugins(const pugi::xml_document& doc,
                                       const std::unordered_set<std::string>& processed_keys,
                                       const std::string& src_base,
                                       const std::string& dst_base,
-                                      const FomodDependencyContext* context);
+                                      const FomodDependencyContext* context,
+                                      std::vector<FileOperation>& ops,
+                                      int& next_doc_order);
     void process_files_node_filtered(const pugi::xml_node& files_node,
                                      const std::string& src_base,
                                      const std::string& dst_base,
-                                     PluginType plugin_type);
+                                     PluginType plugin_type,
+                                     std::vector<FileOperation>& ops,
+                                     int& next_doc_order);
     std::string make_plugin_key(const std::string& step,
                                 const std::string& group,
                                 const std::string& plugin);
 
     std::unordered_map<std::string, std::string>
         plugin_flags_;  ///< Accumulated condition flags from selected plugins
-    std::vector<FileOperation> file_operations_;  ///< Queued file operations awaiting execute
-    int next_document_order_ = 0;  ///< Monotonic counter for XML document order tiebreaker
 };
 
 }  // namespace mo2core
