@@ -1,14 +1,14 @@
 #pragma once
 
 #include <crow.h>
-#include <atomic>
+
+#include "BackgroundJob.h"
+
+#include <chrono>
+#include <nlohmann/json.hpp>
+
 #include <mutex>
 #include <string>
-#include <thread>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 namespace mo2server
 {
@@ -120,19 +120,28 @@ namespace mo2server
  *
  * ## :material-sync: Async Scan Lifecycle
  *
- * `POST /api/mo2/fomods/scan` launches a background `std::thread`
- * (detached) that iterates every mod folder under the configured
- * MO2 mods path and infers FOMOD selections. The lifecycle is:
+ * `POST /api/mo2/fomods/scan` submits work to `scan_job_`
+ * (`BackgroundJob<ScanResult>`) which spawns a joinable thread that
+ * iterates every mod folder under the configured MO2 mods path and
+ * infers FOMOD selections. The lifecycle is:
  *
- * 1. **Start** -- returns 200 immediately; sets `scan_running_` to true.
- *    Returns 409 if a scan is already running.
- * 2. **Poll** -- `GET /api/mo2/fomods/scan/status` returns `running`,
- *    and once finished, a full summary (success, counts, duration).
- * 3. **Completion** -- the thread stores results under `scan_mutex_`,
- *    sets `scan_has_result_` to true, and clears `scan_running_`.
+ * 1. **Start** -- `scan_job_.try_start(work)` returns 200 immediately.
+ *    Returns 409 if `scan_job_.is_running()` (a scan is already in progress).
+ * 2. **Poll** -- `GET /api/mo2/fomods/scan/status` checks `scan_job_.is_running()`,
+ *    and once finished, calls `scan_job_.read_result()` for the full summary
+ *    (success, counts, duration).
+ * 3. **Completion** -- `BackgroundJob` stores the `ScanResult` under its
+ *    internal mutex and clears the running flag automatically.
  *
- * Test execution (`POST /api/test/run`) follows the same pattern
- * with `test_running_` / `test_mutex_`.
+ * Plugin deploy/purge (`POST /api/plugin/deploy`, `/purge`) follows
+ * the same `BackgroundJob` pattern via `plugin_action_job_`
+ * (`BackgroundJob<PluginActionResult>`).
+ *
+ * Test execution (`POST /api/test/run`) does **not** use `BackgroundJob`;
+ * it launches a Win32 process via `CreateProcessW` and tracks it with a
+ * raw `HANDLE` (`test_process_`), polled by `get_test_status()` using
+ * `WaitForSingleObject`. The `test_running_` flag and `test_mutex_` are
+ * managed manually.
  *
  * **Contract drift:** The endpoint table above and the response shapes
  * are manually maintained. When adding, removing, or changing routes
@@ -171,41 +180,69 @@ public:
 
 private:
     // -- Test runner state --
-    std::mutex test_mutex_;                  // guards test_process_
-    std::atomic<bool> test_running_{false};  // true while test.py is executing
+    std::mutex test_mutex_;     // guards test_process_
+    bool test_running_{false};  // true while test.py is executing
 #ifdef _WIN32
     HANDLE test_process_{nullptr};  // Win32 process handle for test.py
 #endif
 
-    // -- FOMOD scan state (written by background thread, read by status endpoint) --
-    std::atomic<bool> scan_running_{false};  // true while scan thread is active
-    std::mutex scan_mutex_;                  // guards all scan_ fields below
-    bool scan_has_result_{false};            // true after first scan completes
-    bool scan_last_success_{false};          // overall success of last scan
-    int scan_total_mod_folders_{0};          // total mod folders examined
-    int scan_archives_processed_{0};         // archives successfully processed
-    int scan_choices_inferred_{0};           // mods where selections were inferred
-    int scan_no_fomod_{0};                   // mods with no ModuleConfig.xml
-    int scan_already_had_choices_{0};        // mods that already had a choices JSON
-    int scan_no_archive_found_{0};           // mods with no matching archive on disk
-    int scan_archive_missing_{0};            // archives referenced but not found
-    int scan_errors_{0};                     // mods that failed with an exception
-    long long scan_duration_ms_{0};          // wall-clock duration of last scan
-    std::string scan_output_dir_;            // directory where JSON results were written
-    std::string scan_last_error_;            // error message if scan failed
-    std::thread scan_thread_;                // background scan thread (joined in destructor)
+    /// Result of a FOMOD scan job.
+    struct ScanResult
+    {
+        bool success = false;
+        int total_mod_folders = 0;
+        int archives_processed = 0;
+        int choices_inferred = 0;
+        int no_fomod = 0;
+        int already_had_choices = 0;
+        int no_archive_found = 0;
+        int archive_missing = 0;
+        int errors = 0;
+        long long duration_ms = 0;
+        std::string output_dir;
+    };
 
-    // -- Plugin deploy/purge state --
-    std::mutex plugin_action_mutex_;                  // guards all plugin_action_ fields below
-    std::atomic<bool> plugin_action_running_{false};  // true while deploy/purge script runs
-    bool plugin_action_has_result_{false};            // true after first action completes
-    bool plugin_action_last_success_{false};          // whether last action succeeded
-    int plugin_action_exit_code_{0};                  // exit code of the PowerShell script
-    bool plugin_action_plugin_installed_{false};      // whether the plugin DLL exists after action
-    std::string plugin_action_deploy_path_;           // filesystem path the plugin was deployed to
-    std::string plugin_action_last_error_;            // error message if action failed
-    std::string plugin_action_type_;                  // "deploy" or "purge"
-    std::thread plugin_action_thread_;                // background deploy/purge thread
+    /// Result of a plugin deploy/purge action.
+    struct PluginActionResult
+    {
+        bool success = false;
+        int exit_code = 0;
+        bool plugin_installed = false;
+        std::string deploy_path;
+        std::string action;
+    };
+
+    // -- Response cache with TTL for frequently polled endpoints --
+    struct CachedResponse
+    {
+        nlohmann::json data;
+        std::chrono::steady_clock::time_point timestamp{};
+
+        [[nodiscard]] bool is_fresh(std::chrono::seconds ttl) const
+        {
+            return timestamp.time_since_epoch().count() > 0 &&
+                   (std::chrono::steady_clock::now() - timestamp) < ttl;
+        }
+
+        void set(nlohmann::json value)
+        {
+            data = std::move(value);
+            timestamp = std::chrono::steady_clock::now();
+        }
+
+        void invalidate() { timestamp = {}; }
+    };
+
+    mutable std::mutex cache_mutex_;
+    CachedResponse fomods_cache_;
+    CachedResponse status_cache_;
+
+    // -- Background jobs --
+    // Declared AFTER cache_mutex_, fomods_cache_, and status_cache_ so that
+    // C++ reverse-order destruction joins the background threads BEFORE
+    // destroying the members they reference.
+    BackgroundJob<ScanResult> scan_job_;
+    BackgroundJob<PluginActionResult> plugin_action_job_;
 };
 
 }  // namespace mo2server
