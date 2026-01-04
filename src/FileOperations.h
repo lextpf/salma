@@ -35,12 +35,9 @@ namespace mo2core
  * Three static methods (copy_file, copy_folder, copy_directory_contents)
  * are used independently by InstallationService and FomodService for
  * non-queued copies (e.g. flat archive extraction, single-folder mods).
- * These create destination directories automatically. Individual file
- * copy errors are caught and logged, but `create_directories()` calls
- * may throw `std::filesystem::filesystem_error` if the destination
- * path is invalid or inaccessible (e.g. permission denied, read-only
- * filesystem). Callers that need full fault tolerance should wrap
- * calls in a try/catch.
+ * These create destination directories automatically. All errors --
+ * including `create_directories()` failures and iteration errors --
+ * are caught, logged, and cause the method to return without throwing.
  *
  * ## :material-code-tags: Usage Examples
  *
@@ -59,10 +56,13 @@ namespace mo2core
  *
  * ## :material-link: Symlinks and Special Files
  *
- * `std::filesystem::copy_file` with `overwrite_existing` follows
- * symlinks -- the target file content is copied, not the link itself.
- * Special files (devices, FIFOs) are not expected in mod archives
- * and their behavior with `copy_file` is platform-defined.
+ * `copy_folder()` explicitly **skips** symlinks during recursive
+ * traversal (`is_symlink()` entries are `continue`-d). `copy_file()`
+ * for individual files delegates to `std::filesystem::copy_file` with
+ * `overwrite_existing`, which follows symlinks -- the target file
+ * content is copied, not the link itself. Special files (devices,
+ * FIFOs) are not expected in mod archives and their behavior with
+ * `std::filesystem::copy_file` is platform-defined.
  *
  * ## :material-help: Thread Safety
  *
@@ -112,15 +112,13 @@ public:
      * @brief Copy a single file, creating parent directories as needed.
      *
      * Overwrites the destination if it already exists. Logs and
-     * returns silently if the source file is missing. Individual
-     * copy errors are caught and logged. However,
-     * `create_directories()` may throw if the destination path is
-     * invalid or inaccessible.
+     * returns silently if the source file is missing. All errors --
+     * including `create_directories()` failures and file copy errors
+     * -- are caught, logged, and cause the method to return without
+     * throwing.
      *
      * @param src Source file path (must exist, or the call is a no-op).
      * @param dst Destination file path.
-     * @throw std::filesystem::filesystem_error if parent directory
-     *        creation fails.
      */
     static void copy_file(const std::filesystem::path& src, const std::filesystem::path& dst);
 
@@ -129,14 +127,12 @@ public:
      *
      * Recreates the full directory structure of @p src under @p dst,
      * overwriting existing files. Logs and returns silently if the
-     * source folder is missing. Individual file copy errors are
-     * caught and logged. However, `create_directories()` may throw
-     * if the destination path is invalid or inaccessible.
+     * source folder is missing. All errors -- including
+     * `create_directories()` failures and iteration errors -- are
+     * caught, logged, and cause the method to return without throwing.
      *
      * @param src Source directory (must exist, or the call is a no-op).
      * @param dst Destination directory.
-     * @throw std::filesystem::filesystem_error if directory creation
-     *        fails.
      */
     static void copy_folder(const std::filesystem::path& src, const std::filesystem::path& dst);
 
@@ -150,10 +146,12 @@ public:
      * Used by InstallationService to flatten a single-subfolder mod
      * structure into the mod root.
      *
+     * All errors -- including `create_directories()` failures and
+     * iteration errors -- are caught, logged, and cause the method
+     * to return without throwing.
+     *
      * @param src Source directory whose contents are copied (must exist).
      * @param dst Destination directory.
-     * @throw std::filesystem::filesystem_error if directory creation
-     *        fails or @p src cannot be iterated.
      */
     static void copy_directory_contents(const std::filesystem::path& src,
                                         const std::filesystem::path& dst);

@@ -120,11 +120,13 @@ namespace mo2core
  *
  * ## :material-shield-check: Path Traversal
  *
- * Archive entries are extracted using the paths stored in the archive
- * metadata. **No path traversal sanitization is performed** -- callers
- * are responsible for ensuring the destination directory is safe (e.g.
- * by extracting into a temp folder and validating paths before moving
- * files to the final location).
+ * Both extraction backends guard against path traversal attacks:
+ *
+ * - **bit7z**: after extraction, `validate_bit7z_extraction()` canonicalizes
+ *   every extracted path and deletes any entry whose canonical location falls
+ *   outside the destination directory.
+ * - **libarchive**: extraction rejects entries whose resolved path would escape
+ *   the destination directory, skipping them before any data is written.
  *
  * ## :material-alert-circle-outline: Error Semantics
  *

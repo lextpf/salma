@@ -22,6 +22,45 @@ namespace fs = std::filesystem;
 namespace mo2core
 {
 
+// RAII wrappers for libarchive handles to prevent leaks on early returns.
+struct ArchiveReadGuard
+{
+    struct archive* a = nullptr;
+    explicit ArchiveReadGuard(struct archive* handle)
+        : a(handle)
+    {
+    }
+    ~ArchiveReadGuard()
+    {
+        if (a)
+        {
+            archive_read_close(a);
+            archive_read_free(a);
+        }
+    }
+    ArchiveReadGuard(const ArchiveReadGuard&) = delete;
+    ArchiveReadGuard& operator=(const ArchiveReadGuard&) = delete;
+};
+
+struct ArchiveWriteGuard
+{
+    struct archive* a = nullptr;
+    explicit ArchiveWriteGuard(struct archive* handle)
+        : a(handle)
+    {
+    }
+    ~ArchiveWriteGuard()
+    {
+        if (a)
+        {
+            archive_write_close(a);
+            archive_write_free(a);
+        }
+    }
+    ArchiveWriteGuard(const ArchiveWriteGuard&) = delete;
+    ArchiveWriteGuard& operator=(const ArchiveWriteGuard&) = delete;
+};
+
 // Streams raw data blocks from the reader to the disk writer.
 // Returns ARCHIVE_OK on success or the first error code encountered.
 static int copy_data(struct archive* ar, struct archive* aw)
@@ -79,6 +118,12 @@ static void validate_bit7z_extraction(const fs::path& destination, mo2core::Logg
             to_remove.push_back(entry.path());
         }
     }
+    // Sort by descending path length so deepest entries are removed first,
+    // preventing remove_all on a parent from invalidating child entries.
+    std::sort(to_remove.begin(),
+              to_remove.end(),
+              [](const fs::path& a, const fs::path& b)
+              { return a.string().size() > b.string().size(); });
     for (const auto& p : to_remove)
     {
         std::error_code ec;
@@ -177,14 +222,14 @@ void ArchiveService::extract_with_libarchive(const std::string& archive_path,
     // support_filter_all / support_format_all enable auto-detection of any format/compression.
     auto a = archive_read_new();
     auto ext = archive_write_disk_new();
+    ArchiveReadGuard read_guard(a);
+    ArchiveWriteGuard write_guard(ext);
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
 
     if (archive_read_open_filename(a, archive_path.c_str(), kArchiveReadBlockSize) != ARCHIVE_OK)
     {
         std::string err = archive_error_string(a) ? archive_error_string(a) : "unknown error";
-        archive_read_free(a);
-        archive_write_free(ext);
         throw std::runtime_error("archive_read_open_filename() error: " + err);
     }
 
@@ -201,6 +246,7 @@ void ArchiveService::extract_with_libarchive(const std::string& archive_path,
     struct archive_entry* entry = nullptr;
     int r;
     int count = 0;
+    int failed_entries = 0;
     // Cache created directories - fs::create_directories is expensive (stat + mkdir) and many
     // archive entries share the same parent, so deduplicating saves significant I/O
     std::unordered_set<std::string> created_dirs;
@@ -210,10 +256,6 @@ void ArchiveService::extract_with_libarchive(const std::string& archive_path,
         if (r < ARCHIVE_WARN)
         {
             std::string err = archive_error_string(a) ? archive_error_string(a) : "unknown error";
-            archive_read_close(a);
-            archive_read_free(a);
-            archive_write_close(ext);
-            archive_write_free(ext);
             throw std::runtime_error("Archive read error: " + err);
         }
 
@@ -255,6 +297,7 @@ void ArchiveService::extract_with_libarchive(const std::string& archive_path,
                 logger.log_warning(
                     std::format("[archive] Copy data warning: {}",
                                 archive_error_string(ext) ? archive_error_string(ext) : "unknown"));
+                failed_entries++;
             }
         }
         archive_write_finish_entry(ext);
@@ -266,12 +309,17 @@ void ArchiveService::extract_with_libarchive(const std::string& archive_path,
         }
     }
 
-    archive_read_close(a);
-    archive_read_free(a);
-    archive_write_close(ext);
-    archive_write_free(ext);
-
-    logger.log(std::format("[archive] Libarchive extraction completed: {} entries", count));
+    if (failed_entries > 0)
+    {
+        logger.log_warning(std::format(
+            "[archive] Libarchive extraction completed with {} failed entries out of {}",
+            failed_entries,
+            count));
+    }
+    else
+    {
+        logger.log(std::format("[archive] Libarchive extraction completed: {} entries", count));
+    }
 }
 
 void ArchiveService::extract(const std::string& archive_path, const std::string& destination_path)
@@ -360,6 +408,7 @@ ArchiveService::EntryListing ArchiveService::list_entries_with_sizes(
     // libarchive fallback - reads headers sequentially, skipping data blocks
     logger.log(std::format("[archive] list_entries via libarchive for {} file", ext));
     auto a = archive_read_new();
+    ArchiveReadGuard guard(a);
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
 
@@ -367,7 +416,6 @@ ArchiveService::EntryListing ArchiveService::list_entries_with_sizes(
     {
         // Return empty listing on open failure rather than throwing - callers
         // treat empty results as "no entries found" which is a safe default
-        archive_read_free(a);
         return listing;
     }
 
@@ -378,15 +426,15 @@ ArchiveService::EntryListing ArchiveService::list_entries_with_sizes(
         if (path)
         {
             listing.paths.emplace_back(path);
-            listing.sizes[normalize_entry_path(path)] =
-                static_cast<uint64_t>(archive_entry_size(entry));
+            auto raw_size = archive_entry_size(entry);
+            if (raw_size >= 0)
+            {
+                listing.sizes[normalize_entry_path(path)] = static_cast<uint64_t>(raw_size);
+            }
         }
         // Advance past the data block without decompressing - header-only scan
         archive_read_data_skip(a);
     }
-
-    archive_read_close(a);
-    archive_read_free(a);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0).count();
     logger.log(std::format("[archive] list_entries: {} entries, {} sizes via libarchive ({}ms)",
                            listing.paths.size(),
@@ -404,14 +452,14 @@ void ArchiveService::extract_filtered(const std::string& archive_path,
 
     auto a = archive_read_new();
     auto ext = archive_write_disk_new();
+    ArchiveReadGuard read_guard(a);
+    ArchiveWriteGuard write_guard(ext);
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
 
     if (archive_read_open_filename(a, archive_path.c_str(), kArchiveReadBlockSize) != ARCHIVE_OK)
     {
         std::string err = archive_error_string(a) ? archive_error_string(a) : "unknown error";
-        archive_read_free(a);
-        archive_write_free(ext);
         throw std::runtime_error("extract_filtered open error: " + err);
     }
 
@@ -461,16 +509,16 @@ void ArchiveService::extract_filtered(const std::string& archive_path,
         int r = archive_write_header(ext, entry);
         if (r >= ARCHIVE_OK && archive_entry_size(entry) > 0)
         {
-            copy_data(a, ext);
+            int cd_r = copy_data(a, ext);
+            if (cd_r < ARCHIVE_OK)
+            {
+                logger.log_warning(
+                    std::format("[archive] copy_data failed for entry: code {}", cd_r));
+            }
         }
         archive_write_finish_entry(ext);
         count++;
     }
-
-    archive_read_close(a);
-    archive_read_free(a);
-    archive_write_close(ext);
-    archive_write_free(ext);
 
     logger.log(std::format("[archive] extract_filtered: extracted {} entries", count));
 }
@@ -569,25 +617,23 @@ std::vector<char> ArchiveService::read_entry(const std::string& archive_path,
     // libarchive: sequential scan - entries are streamed in order so we
     // must walk through until we find the match or reach the end
     auto a = archive_read_new();
+    ArchiveReadGuard guard(a);
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
 
     if (archive_read_open_filename(a, archive_path.c_str(), kArchiveReadBlockSize) != ARCHIVE_OK)
     {
-        archive_read_free(a);
         return {};
     }
 
     // Normalize the target the same way as entry paths for case-insensitive comparison
-    std::string target = to_lower(entry_name);
-    std::replace(target.begin(), target.end(), '\\', '/');
+    std::string target = normalize_entry_path(entry_name);
 
     struct archive_entry* entry = nullptr;
     while (archive_read_next_header(a, &entry) == ARCHIVE_OK)
     {
         std::string path = archive_entry_pathname(entry) ? archive_entry_pathname(entry) : "";
-        path = to_lower(path);
-        std::replace(path.begin(), path.end(), '\\', '/');
+        path = normalize_entry_path(path);
 
         if (path == target)
         {
@@ -596,9 +642,6 @@ std::vector<char> ArchiveService::read_entry(const std::string& archive_path,
             auto size = archive_entry_size(entry);
             if (size < 0 || size > kMaxEntrySize)
             {
-                // Unknown or excessively large size - skip
-                archive_read_close(a);
-                archive_read_free(a);
                 return {};
             }
             std::vector<char> data(static_cast<size_t>(size));
@@ -607,22 +650,15 @@ std::vector<char> ArchiveService::read_entry(const std::string& archive_path,
                 auto bytes_read = archive_read_data(a, data.data(), data.size());
                 if (bytes_read < 0)
                 {
-                    archive_read_close(a);
-                    archive_read_free(a);
                     return {};
                 }
                 data.resize(static_cast<size_t>(bytes_read));
             }
-            // Close immediately - no need to scan remaining entries
-            archive_read_close(a);
-            archive_read_free(a);
             return data;
         }
         archive_read_data_skip(a);
     }
 
-    archive_read_close(a);
-    archive_read_free(a);
     return {};
 }
 
@@ -759,12 +795,12 @@ std::unordered_map<std::string, std::vector<char>> ArchiveService::read_entries_
     // libarchive fallback - single sequential pass over the archive.
     // Matched entries are read into memory; non-matches are skipped without decompression.
     auto a = archive_read_new();
+    ArchiveReadGuard guard(a);
     archive_read_support_filter_all(a);
     archive_read_support_format_all(a);
 
     if (archive_read_open_filename(a, archive_path.c_str(), kArchiveReadBlockSize) != ARCHIVE_OK)
     {
-        archive_read_free(a);
         return results;
     }
 
@@ -774,9 +810,10 @@ std::unordered_map<std::string, std::vector<char>> ArchiveService::read_entries_
     struct archive_entry* entry = nullptr;
     while (remaining > 0 && archive_read_next_header(a, &entry) == ARCHIVE_OK)
     {
-        std::string path = archive_entry_pathname(entry) ? archive_entry_pathname(entry) : "";
-        path = to_lower(path);
-        std::replace(path.begin(), path.end(), '\\', '/');
+        std::string raw_path = archive_entry_pathname(entry) ? archive_entry_pathname(entry) : "";
+        // Use normalize_entry_path for consistent matching with bit7z path
+        // (strips leading "./" and "/" prefixes in addition to lowercase + slash conversion)
+        auto path = normalize_entry_path(raw_path);
 
         if (entry_names.count(path))
         {
@@ -807,8 +844,6 @@ std::unordered_map<std::string, std::vector<char>> ArchiveService::read_entries_
         }
     }
 
-    archive_read_close(a);
-    archive_read_free(a);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0).count();
     logger.log(std::format("[archive] read_entries_batch: {}/{} entries via libarchive ({}ms)",
                            results.size(),
@@ -822,10 +857,10 @@ void ArchiveService::create_zip(const std::string& folder_path, const std::strin
     fs::create_directories(fs::path(output_zip_path).parent_path());
 
     auto a = archive_write_new();
+    ArchiveWriteGuard guard(a);
     archive_write_set_format_zip(a);
     if (archive_write_open_filename(a, output_zip_path.c_str()) != ARCHIVE_OK)
     {
-        archive_write_free(a);
         throw std::runtime_error("Failed to open " + output_zip_path + " for writing");
     }
 
@@ -864,21 +899,27 @@ void ArchiveService::create_zip(const std::string& folder_path, const std::strin
         // Stream file contents in 8 KiB chunks to avoid loading large files entirely into memory
         std::ifstream ifs(p.path(), std::ios::binary);
         char buffer[8192];
-        while (ifs.read(buffer, sizeof(buffer)) || ifs.gcount())
+        bool write_ok = true;
+        while (write_ok && (ifs.read(buffer, sizeof(buffer)) || ifs.gcount()))
         {
-            auto written = archive_write_data(a, buffer, static_cast<size_t>(ifs.gcount()));
-            if (written < 0)
+            auto to_write = static_cast<size_t>(ifs.gcount());
+            size_t total_written = 0;
+            while (total_written < to_write)
             {
-                Logger::instance().log_warning(
-                    std::format("[archive] Partial write in zip for: {}", rel_path));
-                break;
+                auto written =
+                    archive_write_data(a, buffer + total_written, to_write - total_written);
+                if (written <= 0)
+                {
+                    Logger::instance().log_warning(
+                        std::format("[archive] Write error in zip for: {}", rel_path));
+                    write_ok = false;
+                    break;
+                }
+                total_written += static_cast<size_t>(written);
             }
         }
         archive_entry_free(entry);
     }
-
-    archive_write_close(a);
-    archive_write_free(a);
 }
 
 }  // namespace mo2core
