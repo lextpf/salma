@@ -65,16 +65,27 @@ using LogCallback = void (*)(const char*);
  * threads may invoke the callback concurrently.  The callback
  * implementation **must** be thread-safe.
  *
- * **Callback failure:** If the callback throws or crashes, the
- * exception propagates to the calling log site. There is no
- * internal fallback to file logging when the callback fails.
- * Callers registering a callback should ensure it does not throw.
+ * **Callback failure:** Every callback invocation is wrapped in a
+ * `catch (...)` block. If the callback throws, the exception is
+ * caught internally and a diagnostic message is written to stderr.
+ * Exceptions do **not** propagate to the calling log site.
  *
  * **Reentrancy:** The callback may be invoked while a previous
  * callback invocation is still running (from another thread).
- * It must not call Logger methods, as file-write paths acquire
- * `mutex_` and would deadlock if the callback itself is on the
- * file-logging code path.
+ * The callback pointer is snapshotted under `mutex_`, but the
+ * callback itself is invoked **outside** the lock, so calling
+ * Logger methods from within a callback will not deadlock.
+ * However, this is discouraged because it can cause infinite
+ * recursion if the callback triggers another log message that
+ * in turn invokes the callback again.
+ *
+ * ## :material-autorenew: Log Rotation
+ *
+ * The log file rotates when it reaches 10 MiB. Up to 3 rotated
+ * files are kept (`salma.log.1` through `salma.log.3`). On
+ * rotation, existing rotated files are shifted (`.2` becomes `.3`,
+ * `.1` becomes `.2`), the oldest (`.3`) is deleted if present,
+ * and the active `salma.log` is moved to `.1`.
  *
  * @see CApi::setLogCallback
  */
@@ -98,6 +109,10 @@ public:
      *
      * The callback **must** be thread-safe -- it may be invoked
      * concurrently from multiple threads without serialization.
+     *
+     * @warning The callback pointer must remain valid until cleared
+     * (by passing `nullptr`) or until the Logger singleton is destroyed.
+     * Passing a dangling function pointer results in undefined behavior.
      *
      * @param callback Function pointer, or `nullptr` to clear.
      */
@@ -153,12 +168,21 @@ private:
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
 
-    void write_log(const std::string& level, const std::string& message);
+    // Writes to the log file. Caller must hold mutex_.
+    void write_log_unlocked(const std::string& level, const std::string& message);
+
+    // Rotates the log file if bytes_written_ exceeds kMaxLogSize.
+    // Caller must hold mutex_.
+    void rotate_if_needed();
+
+    static constexpr size_t kMaxLogSize = 10 * 1024 * 1024;  ///< Rotate at 10 MiB
+    static constexpr int kMaxRotatedFiles = 3;               ///< Keep salma.log.1 through .3
 
     std::atomic<LogCallback> callback_ = nullptr;  ///< External callback (null = use file logging)
     std::string log_directory_;                    ///< Absolute path to the logs directory
     std::ofstream log_file_;                       ///< Persistent log file handle (append mode)
     std::mutex mutex_;                             ///< Guards file writes
+    size_t bytes_written_ = 0;  ///< Approximate bytes written since last rotation
 };
 
 }  // namespace mo2core
