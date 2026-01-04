@@ -29,12 +29,42 @@ std::string normalize_path(const std::string& p)
     // Strip trailing "/"
     while (out.ends_with("/"))
         out.pop_back();
-    // Collapse consecutive slashes (e.g. from dest="textures\lod\" + "/" + rel)
-    size_t pos = 0;
-    while ((pos = out.find("//", pos)) != std::string::npos)
+    // Single-pass collapse of consecutive slashes
     {
-        out.erase(pos, 1);
+        std::string collapsed;
+        collapsed.reserve(out.size());
+        for (char c : out)
+        {
+            if (c == '/' && !collapsed.empty() && collapsed.back() == '/')
+                continue;
+            collapsed.push_back(c);
+        }
+        out = std::move(collapsed);
     }
+
+    // Remove "." and ".." path components to prevent directory traversal
+    {
+        std::vector<std::string> parts;
+        size_t start = 0;
+        while (start < out.size())
+        {
+            auto end = out.find('/', start);
+            if (end == std::string::npos)
+                end = out.size();
+            auto seg = out.substr(start, end - start);
+            if (!seg.empty() && seg != "." && seg != "..")
+                parts.push_back(std::move(seg));
+            start = end + 1;
+        }
+        out.clear();
+        for (size_t i = 0; i < parts.size(); ++i)
+        {
+            if (i > 0)
+                out += '/';
+            out += parts[i];
+        }
+    }
+
     return out;
 }
 
@@ -102,6 +132,68 @@ PluginType parse_plugin_type_string(const std::string& type_name)
 std::string_view plugin_type_to_string(PluginType type)
 {
     return plugin_type_map.to_string(type);
+}
+
+std::string normalize_destination_for_join(std::string destination)
+{
+    // FOMOD destinations are mod-root-relative. Values like "\" or "/"
+    // mean "root", not an absolute filesystem path.
+    while (!destination.empty() && (destination.front() == '\\' || destination.front() == '/'))
+    {
+        destination.erase(destination.begin());
+    }
+    while (destination.starts_with("./") || destination.starts_with(".\\"))
+    {
+        destination = destination.substr(2);
+    }
+    return destination;
+}
+
+std::string resolve_file_destination(const std::string& source,
+                                     const std::string& raw_destination,
+                                     bool is_file)
+{
+    std::string destination = raw_destination;
+    if (is_file && destination.empty())
+    {
+        auto slash = source.find_last_of("/\\");
+        destination = (slash != std::string::npos) ? source.substr(slash + 1) : source;
+    }
+    else if (is_file && !destination.empty() &&
+             (destination.back() == '/' || destination.back() == '\\'))
+    {
+        auto slash = source.find_last_of("/\\");
+        auto filename = (slash != std::string::npos) ? source.substr(slash + 1) : source;
+        destination += filename;
+    }
+    return normalize_destination_for_join(destination);
+}
+
+bool is_safe_destination(const std::string& dest)
+{
+    if (dest.empty())
+        return true;
+    auto norm = normalize_path(dest);
+    // After normalize_path, ".." segments survive only if they would escape root.
+    if (norm.starts_with("..") || norm.find("/../") != std::string::npos || norm.ends_with("/.."))
+        return false;
+    // Absolute paths (e.g., "/etc/passwd" or "C:/...")
+    if (norm.front() == '/' || (norm.size() >= 2 && norm[1] == ':'))
+        return false;
+    return true;
+}
+
+bool is_inside(const std::filesystem::path& parent, const std::filesystem::path& child)
+{
+    std::error_code ec;
+    auto canonical_child = std::filesystem::weakly_canonical(child, ec);
+    if (ec)
+        return false;
+    auto canonical_parent = std::filesystem::weakly_canonical(parent, ec);
+    if (ec)
+        return false;
+    auto rel = canonical_child.lexically_relative(canonical_parent);
+    return !rel.empty() && !rel.string().starts_with("..");
 }
 
 }  // namespace mo2core
