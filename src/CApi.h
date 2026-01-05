@@ -16,8 +16,9 @@
  * ## :material-layers-outline: Architecture
  *
  * The C API is a thin wrapper - each function constructs the appropriate
- * C++ service, forwards the call, and copies the result into a static
- * `std::string` whose `.c_str()` is returned to the caller.
+ * C++ service, forwards the call, and returns a heap-allocated copy of
+ * the result via `_strdup()`. The caller owns the returned pointer and
+ * must release it with `freeResult()`.
  *
  * ```mermaid
  * ---
@@ -80,20 +81,20 @@
  *
  * ## :material-memory: Lifetime
  *
- * Returned `const char*` pointers are backed by `static std::string`
- * buffers. `install` and `installWithConfig` share one buffer;
- * `inferFomodSelections` uses a separate one. A pointer is valid
- * until the next call to any function sharing the same buffer.
- * Callers that need to keep the data should copy the string
- * immediately.
+ * Every `const char*` returned by `install`, `installWithConfig`, or
+ * `inferFomodSelections` is a heap-allocated string (`_strdup`).
+ * The caller **must** call `freeResult()` to release the memory when
+ * done. Failing to do so will leak memory.
  *
  * ## :material-help: Thread Safety
  *
- * The API is **not** thread-safe. `install` and `installWithConfig`
- * share one static result buffer; `inferFomodSelections` uses a second.
- * Concurrent calls from different threads will race on those buffers.
- * The Python plugin serializes all calls through a single thread, so
- * this is not an issue in practice.
+ * The API is thread-safe. Each call returns an independent heap
+ * allocation, so there is no shared buffer to worry about.
+ * Note: `installSucceeded()` reads a mutex-guarded global bool that is
+ * set by `install()` / `installWithConfig()`. If multiple threads call
+ * these functions concurrently, `installSucceeded()` reflects the
+ * outcome of whichever install completed last, not necessarily the
+ * caller's own install.
  *
  * @see InstallationService, FomodInferenceService
  */
@@ -138,9 +139,9 @@ extern "C"
      *
      * @param archivePath Null-terminated UTF-8 path to the archive. Must not be `nullptr`.
      * @param modPath Null-terminated UTF-8 path to the output mod directory. Must not be `nullptr`.
-     * @return The mod path string on success. Valid until the next
-     *         `install` or `installWithConfig` call. On fatal error
-     *         or null input the string contains the error message.
+     * @return Heap-allocated mod path string on success. On fatal error or null
+     *         input the string contains the error message. The caller **must**
+     *         call freeResult() to release the returned pointer.
      */
     MO2_API const char* install(const char* archivePath, const char* modPath);
 
@@ -160,9 +161,9 @@ extern "C"
      * @param jsonPath Null-terminated UTF-8 path to the FOMOD selections
      *        JSON file. Pass `nullptr` or empty string to skip optional
      *        steps (equivalent to install()).
-     * @return The mod path string on success. Valid until the next
-     *         `install` or `installWithConfig` call. On fatal error
-     *         or null input the string contains the error message.
+     * @return Heap-allocated mod path string on success. On fatal error or null
+     *         input the string contains the error message. The caller **must**
+     *         call freeResult() to release the returned pointer.
      */
     MO2_API const char* installWithConfig(const char* archivePath,
                                           const char* modPath,
@@ -183,10 +184,29 @@ extern "C"
      * @param archivePath Null-terminated UTF-8 path to the archive.
      * @param modPath Null-terminated UTF-8 path to the installed mod
      *        directory to compare against.
-     * @return JSON selections string. Valid until the next
-     *         `inferFomodSelections` call. Empty string on failure.
+     * @return Heap-allocated JSON selections string. Empty string on failure.
+     *         The caller **must** call freeResult() to release the returned pointer.
      */
     MO2_API const char* inferFomodSelections(const char* archivePath, const char* modPath);
+
+    /**
+     * @brief Check whether the last install() or installWithConfig() call succeeded.
+     *
+     * @return true if the last result was a valid mod path (success), false if it
+     *         was an error message.
+     */
+    MO2_API bool installSucceeded();
+
+    /**
+     * @brief Free a result string returned by install(), installWithConfig(), or
+     * inferFomodSelections().
+     *
+     * Each call to those functions returns a heap-allocated string. The caller
+     * **must** call freeResult() to release the memory when done.
+     *
+     * @param result Pointer previously returned by an API function, or `nullptr` (no-op).
+     */
+    MO2_API void freeResult(const char* result);
 
 }  // extern "C"
 

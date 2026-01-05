@@ -21,13 +21,23 @@ ConfigService::ConfigService()
     // Retry with larger buffer if MAX_PATH is insufficient (long path support).
     std::wstring exe_buf(MAX_PATH, L'\0');
     DWORD len = GetModuleFileNameW(nullptr, exe_buf.data(), static_cast<DWORD>(exe_buf.size()));
-    while (len >= exe_buf.size())
+    constexpr int kMaxRetries = 5;
+    int retries = 0;
+    while (len >= exe_buf.size() && retries < kMaxRetries)
     {
         exe_buf.resize(exe_buf.size() * 2);
         len = GetModuleFileNameW(nullptr, exe_buf.data(), static_cast<DWORD>(exe_buf.size()));
+        ++retries;
     }
-    exe_buf.resize(len);
-    config_path_ = fs::path(exe_buf).parent_path() / "salma.json";
+    if (len == 0 || retries >= kMaxRetries)
+    {
+        config_path_ = fs::current_path() / "salma.json";
+    }
+    else
+    {
+        exe_buf.resize(len);
+        config_path_ = fs::path(exe_buf).parent_path() / "salma.json";
+    }
 }
 
 ConfigService& ConfigService::instance()
@@ -51,6 +61,11 @@ void ConfigService::load()
     try
     {
         std::ifstream ifs(config_path_);
+        if (!ifs.is_open())
+        {
+            logger.log_error(std::format("[server] Cannot open config: {}", config_path_.string()));
+            return;
+        }
         auto j = json::parse(ifs);
         mo2_mods_path_ = j.value("mo2ModsPath", "");
         logger.log(std::format("[server] Config loaded: mods={}", mo2_mods_path_));
@@ -61,7 +76,7 @@ void ConfigService::load()
     }
 }
 
-void ConfigService::save()
+bool ConfigService::save()
 {
     std::lock_guard lock(mutex_);
     auto& logger = mo2core::Logger::instance();
@@ -70,12 +85,26 @@ void ConfigService::save()
     {
         json j = {{"mo2ModsPath", mo2_mods_path_}};
         std::ofstream ofs(config_path_);
+        if (!ofs.is_open())
+        {
+            logger.log_error(
+                std::format("[server] Cannot open config for writing: {}", config_path_.string()));
+            return false;
+        }
         ofs << j.dump(2);
+        ofs.flush();
+        if (!ofs.good())
+        {
+            logger.log_warning("[server] Failed to write config file");
+            return false;
+        }
         logger.log("[server] Config saved");
+        return true;
     }
     catch (const std::exception& ex)
     {
         logger.log_error(std::format("[server] Failed to save config: {}", ex.what()));
+        return false;
     }
 }
 

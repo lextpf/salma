@@ -1,15 +1,17 @@
 #include "CApi.h"
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
 #include <string>
 #include "FomodInferenceService.h"
 #include "InstallationService.h"
 #include "Logger.h"
 
-// Static result buffers - install/installWithConfig share g_result,
-// inferFomodSelections uses g_infer_result. Each buffer's .c_str()
-// is valid until the next call to the same function group.
-// Not thread-safe: concurrent calls race on these buffers.
-static std::string g_result;
-static std::string g_infer_result;
+// Mutex-guarded global so that installSucceeded() works correctly even when
+// install() and installSucceeded() are called from different threads (common
+// with Python ctypes).  A thread_local would silently return the wrong value.
+static std::mutex g_install_mutex;
+static bool g_last_install_success = false;
 
 namespace CApi
 {
@@ -27,27 +29,32 @@ extern "C"
     {
         if (!archivePath || !modPath)
         {
-            g_result = "archivePath and modPath must not be null";
-            return g_result.c_str();
+            std::lock_guard<std::mutex> lock(g_install_mutex);
+            g_last_install_success = false;
+            return _strdup("archivePath and modPath must not be null");
         }
         try
         {
             mo2core::InstallationService service;
-            g_result = service.install_mod(archivePath, modPath);
-            return g_result.c_str();
+            auto result = service.install_mod(archivePath, modPath);
+            std::lock_guard<std::mutex> lock(g_install_mutex);
+            g_last_install_success = true;
+            return _strdup(result.c_str());
         }
         catch (const std::exception& e)
         {
             mo2core::Logger::instance().log_error(std::string("[install] Fatal error: ") +
                                                   e.what());
-            g_result = e.what();
-            return g_result.c_str();
+            std::lock_guard<std::mutex> lock(g_install_mutex);
+            g_last_install_success = false;
+            return _strdup(e.what());
         }
         catch (...)
         {
             mo2core::Logger::instance().log_error("[install] Fatal error: unknown exception");
-            g_result = "Unknown fatal error during installation";
-            return g_result.c_str();
+            std::lock_guard<std::mutex> lock(g_install_mutex);
+            g_last_install_success = false;
+            return _strdup("Unknown fatal error during installation");
         }
     }
 
@@ -57,55 +64,69 @@ extern "C"
     {
         if (!archivePath || !modPath)
         {
-            g_result = "archivePath and modPath must not be null";
-            return g_result.c_str();
+            std::lock_guard<std::mutex> lock(g_install_mutex);
+            g_last_install_success = false;
+            return _strdup("archivePath and modPath must not be null");
         }
         // Null jsonPath is coerced to empty string (skips optional steps).
         try
         {
             mo2core::InstallationService service;
-            g_result = service.install_mod(archivePath, modPath, jsonPath ? jsonPath : "");
-            return g_result.c_str();
+            auto result = service.install_mod(archivePath, modPath, jsonPath ? jsonPath : "");
+            std::lock_guard<std::mutex> lock(g_install_mutex);
+            g_last_install_success = true;
+            return _strdup(result.c_str());
         }
         catch (const std::exception& e)
         {
-            mo2core::Logger::instance().log_error(std::string("[install] Fatal error: ") +
+            mo2core::Logger::instance().log_error(std::string("[installWithConfig] Fatal error: ") +
                                                   e.what());
-            g_result = e.what();
-            return g_result.c_str();
+            std::lock_guard<std::mutex> lock(g_install_mutex);
+            g_last_install_success = false;
+            return _strdup(e.what());
         }
         catch (...)
         {
-            mo2core::Logger::instance().log_error("[install] Fatal error: unknown exception");
-            g_result = "Unknown fatal error during installation";
-            return g_result.c_str();
+            mo2core::Logger::instance().log_error(
+                "[installWithConfig] Fatal error: unknown exception");
+            std::lock_guard<std::mutex> lock(g_install_mutex);
+            g_last_install_success = false;
+            return _strdup("Unknown fatal error during installation");
         }
     }
 
     MO2_API const char* inferFomodSelections(const char* archivePath, const char* modPath)
     {
-        // Null inputs are coerced to empty strings (will fail gracefully).
+        if (!archivePath || !modPath)
+            return _strdup("archivePath and modPath must not be null");
         // Returns JSON selections on success, empty string on failure.
-        // Uses separate g_infer_result buffer so inference doesn't clobber install results.
         try
         {
             mo2core::FomodInferenceService service;
-            g_infer_result =
-                service.infer_selections(archivePath ? archivePath : "", modPath ? modPath : "");
-            return g_infer_result.c_str();
+            auto result = service.infer_selections(archivePath, modPath);
+            return _strdup(result.c_str());
         }
         catch (const std::exception& e)
         {
             mo2core::Logger::instance().log_error(std::string("[infer] Fatal error: ") + e.what());
-            g_infer_result = "";
-            return g_infer_result.c_str();
+            return _strdup("");
         }
         catch (...)
         {
             mo2core::Logger::instance().log_error("[infer] Fatal error: unknown exception");
-            g_infer_result = "";
-            return g_infer_result.c_str();
+            return _strdup("");
         }
+    }
+
+    MO2_API bool installSucceeded()
+    {
+        std::lock_guard<std::mutex> lock(g_install_mutex);
+        return g_last_install_success;
+    }
+
+    MO2_API void freeResult(const char* result)
+    {
+        free(const_cast<char*>(result));
     }
 
 }  // extern "C"

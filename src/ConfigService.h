@@ -48,10 +48,11 @@ public:
     void load();
 
     /// Persist current configuration to salma.json. Write errors are
-    /// logged and silently ignored -- the method never throws.
-    /// **Note:** the ofstream state is not checked after writing, so
-    /// a partial write (e.g. disk full mid-write) will not be detected.
-    void save();
+    /// logged -- the method never throws.
+    ///
+    /// @return `true` if the config was written successfully, `false`
+    ///         on any I/O failure (disk full, permissions, etc.).
+    bool save();
 
     std::string mo2_mods_path() const;
     void set_mo2_mods_path(const std::string& path);

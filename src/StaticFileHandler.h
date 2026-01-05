@@ -87,7 +87,7 @@ public:
 
 private:
     std::string static_dir_;  ///< Root directory for static assets
-    std::string get_content_type(const std::string& extension);
+    std::string GetContentType(const std::string& extension);
 };
 
 }  // namespace mo2server
