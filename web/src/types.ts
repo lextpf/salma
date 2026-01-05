@@ -98,3 +98,31 @@ export interface InstallStatus {
   modName?: string
   error?: string
 }
+
+export interface FomodPlugin {
+  name?: string
+  pluginName?: string
+  displayName?: string
+  file?: string
+  selected?: boolean
+  isSelected?: boolean
+}
+
+export interface FomodGroup {
+  name?: string
+  plugins?: FomodPlugin[]
+}
+
+export interface FomodStep {
+  name?: string
+  optionalFileGroups?: FomodGroup[]
+  groups?: FomodGroup[]
+  plugins?: FomodPlugin[]
+}
+
+export interface FomodDetail {
+  moduleName?: string
+  steps?: FomodStep[]
+  updated?: number
+  modified?: number
+}

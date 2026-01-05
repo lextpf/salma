@@ -10,6 +10,8 @@ export default function FomodBrowserPage() {
   const [fomods, setFomods] = useState<FomodEntry[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [deletingName, setDeletingName] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlightRef = useRef(false)
 
@@ -51,15 +53,20 @@ export default function FomodBrowserPage() {
   }, [])
 
   const handleDelete = async (name: string) => {
+    setDeletingName(name)
+    setDeleteError(null)
     try {
       await deleteFomod(name)
       setFomods(prev => prev.filter(f => f.name !== name))
     } catch (e) {
       if (isFetchUnavailableError(e)) {
-        console.warn(`[fomods] failed to delete "${name}" due to unavailable backend`, e)
-        return
+        setDeleteError(`Failed to delete "${name}": backend unavailable`)
+      } else {
+        setDeleteError(`Failed to delete "${name}"`)
       }
       console.warn(`[fomods] failed to delete "${name}"`, e)
+    } finally {
+      setDeletingName(null)
     }
   }
 
@@ -118,6 +125,16 @@ export default function FomodBrowserPage() {
         </div>
       )}
 
+      {deleteError && (
+        <div className="mb-3 shrink-0 rounded-xl border border-error/15 bg-error/5 px-4 py-2.5 text-xs text-error-light flex items-center gap-2">
+          <i className="fa-duotone fa-solid fa-circle-exclamation duo-error" />
+          <span className="flex-1">{deleteError}</span>
+          <button onClick={() => setDeleteError(null)} className="text-error/60 hover:text-error transition-colors">
+            <i className="fa-duotone fa-solid fa-xmark" />
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex-1 min-h-0 py-2 px-2">
           <div className="flex flex-col gap-2.5">
@@ -156,7 +173,7 @@ export default function FomodBrowserPage() {
         <div className="flex-1 min-h-0 overflow-y-auto scroll-pane px-3">
           <div className="flex flex-col gap-2 pb-3">
             {filtered.map(f => (
-              <FomodListItem key={f.name} fomod={f} onDelete={handleDelete} />
+              <FomodListItem key={f.name} fomod={f} onDelete={handleDelete} disabled={deletingName !== null} />
             ))}
           </div>
         </div>

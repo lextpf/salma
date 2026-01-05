@@ -9,7 +9,12 @@ export default function SettingsPage() {
   const [modsPath, setModsPath] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [testArgs, setTestArgs] = useState(() => localStorage.getItem('salma_test_args') || '')
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const retryCountRef = useRef(0)
+  const isPathValid = (p: string) => p.trim().length > 0 && !/[*?<>|]/.test(p)
+  const pathValid = isPathValid(modsPath)
   const pathFieldClass = "w-full px-3.5 py-2.5 rounded-xl border border-outline-variant/60 bg-surface-container-high text-sm text-on-surface placeholder:text-outline focus:outline-none focus:border-primary/50 focus:bg-surface-container-highest transition-all log-viewer"
   const readonlyPathFieldClass = "w-full px-3.5 pr-28 py-2.5 rounded-xl border border-outline-variant/40 bg-surface-dim/55 text-sm text-on-surface-variant focus:outline-none cursor-not-allowed transition-all log-viewer"
 
@@ -20,21 +25,28 @@ export default function SettingsPage() {
     }
   }
 
-  useEffect(() => {
-    const loadConfig = () => {
-      getConfig()
-        .then(c => {
-          setConfig(c)
-          setModsPath(c.mo2ModsPath)
-          clearRetryTimer()
-        })
-        .catch(e => {
-          console.warn('[settings] failed to load config, retrying', e)
-          clearRetryTimer()
+  const loadConfig = () => {
+    setLoadError(null)
+    getConfig()
+      .then(c => {
+        setConfig(c)
+        setModsPath(c.mo2ModsPath)
+        retryCountRef.current = 0
+        clearRetryTimer()
+      })
+      .catch(e => {
+        retryCountRef.current++
+        console.warn(`[settings] failed to load config (attempt ${retryCountRef.current})`, e)
+        clearRetryTimer()
+        if (retryCountRef.current >= 3) {
+          setLoadError('Unable to connect to backend. Please check the server is running.')
+        } else {
           retryTimerRef.current = setTimeout(loadConfig, RETRY_DELAY_MS)
-        })
-    }
+        }
+      })
+  }
 
+  useEffect(() => {
     loadConfig()
     return clearRetryTimer
   }, [])
@@ -45,6 +57,7 @@ export default function SettingsPage() {
     try {
       const updated = await putConfig({ mo2ModsPath: modsPath })
       setConfig(updated)
+      localStorage.setItem('salma_test_args', testArgs)
       setMessage({ type: 'success', text: 'Configuration saved successfully.' })
     } catch (e) {
       if (isFetchUnavailableError(e)) {
@@ -71,17 +84,30 @@ export default function SettingsPage() {
       </header>
 
       {!config ? (
-        <div className="max-w-2xl space-y-3 rounded-2xl">
-          <div className="rounded-xl border border-outline-variant/30 bg-surface-container/35 p-4">
-            <div className="skeleton-line h-3.5 w-32 mb-3" />
-            <div className="skeleton-line h-9 w-full mb-2.5" />
-            <div className="skeleton-line h-3 w-40" />
+        loadError ? (
+          <div className="max-w-2xl rounded-2xl border border-error/15 bg-error/5 p-6 flex flex-col items-center gap-4">
+            <i className="fa-duotone fa-solid fa-circle-exclamation duo-error text-2xl" />
+            <p className="text-sm text-error-light text-center">{loadError}</p>
+            <button
+              onClick={() => { retryCountRef.current = 0; loadConfig() }}
+              className="rounded-xl px-4 py-2 text-xs font-semibold bg-error/12 text-error-light border border-error/20 hover:bg-error/24 transition-colors"
+            >
+              <i className="fa-duotone fa-solid fa-rotate-right mr-1.5" />Retry
+            </button>
           </div>
-          <div className="rounded-xl border border-outline-variant/30 bg-surface-container/35 p-4">
-            <div className="skeleton-line h-3.5 w-44 mb-3" />
-            <div className="skeleton-line h-9 w-full" />
+        ) : (
+          <div className="max-w-2xl space-y-3 rounded-2xl">
+            <div className="rounded-xl border border-outline-variant/30 bg-surface-container/35 p-4">
+              <div className="skeleton-line h-3.5 w-32 mb-3" />
+              <div className="skeleton-line h-9 w-full mb-2.5" />
+              <div className="skeleton-line h-3 w-40" />
+            </div>
+            <div className="rounded-xl border border-outline-variant/30 bg-surface-container/35 p-4">
+              <div className="skeleton-line h-3.5 w-44 mb-3" />
+              <div className="skeleton-line h-9 w-full" />
+            </div>
           </div>
-        </div>
+        )
       ) : (
       <div className="max-w-2xl space-y-5">
         {/* Mods Path */}
@@ -132,6 +158,25 @@ export default function SettingsPage() {
           </div>
         )}
 
+        {/* Test Script Arguments */}
+        <div className="rounded-2xl border border-outline-variant/30 bg-surface-container/35 p-5">
+          <label className="flex items-center gap-2 ui-xs font-semibold text-on-surface mb-1.5 uppercase tracking-wider">
+            <i className="fa-duotone fa-solid fa-flask icon-gradient icon-gradient-steel icon-sm" />
+            Test Script Arguments
+          </label>
+          <p className="text-[0.66rem] text-on-surface-variant/85 mb-3 pl-0.5">
+            Arguments passed to <code className="px-1 py-0.5 rounded bg-surface-container-high text-[0.62rem]">test.py</code> when running tests.
+            e.g. <code className="px-1 py-0.5 rounded bg-surface-container-high text-[0.62rem]">--separator "My Separator" --limit 5 --no-full</code>
+          </p>
+          <input
+            type="text"
+            value={testArgs}
+            onChange={e => setTestArgs(e.target.value)}
+            placeholder='e.g. --separator "My Separator" --limit 10'
+            className={pathFieldClass}
+          />
+        </div>
+
         {/* Messages */}
         {message && (
           <div className={`rounded-xl border px-4 py-3 text-xs flex items-center gap-2 ${
@@ -147,7 +192,7 @@ export default function SettingsPage() {
         {/* Save */}
         <button
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || !pathValid}
           className={`rounded-xl px-5 py-2.5 text-xs font-semibold transition-all flex items-center gap-2 action-btn action-btn-success
             ${saving
               ? 'bg-surface-container-high text-on-surface-variant border border-outline-variant/40 cursor-not-allowed opacity-70'

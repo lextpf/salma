@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { getFomod, listFomods } from '../api'
 import FomodStepCard from '../components/FomodStepCard'
+import type { FomodDetail } from '../types'
 
 const RETRY_DELAY_MS = 2000
 
@@ -37,7 +38,7 @@ function formatSize(bytes: number): string {
 
 export default function FomodDetailPage() {
   const { name } = useParams<{ name: string }>()
-  const [data, setData] = useState<Record<string, unknown> | null>(null)
+  const [data, setData] = useState<FomodDetail | null>(null)
   const [loadedAt, setLoadedAt] = useState<number | null>(null)
   const [metaSize, setMetaSize] = useState<number | null>(null)
   const [metaModified, setMetaModified] = useState<number | null>(null)
@@ -48,6 +49,7 @@ export default function FomodDetailPage() {
     if (!name) return
     const decoded = decodeURIComponent(name)
     setData(null)
+    const abortController = new AbortController()
 
     const clearRetryTimer = () => {
       if (retryTimerRef.current) {
@@ -61,11 +63,13 @@ export default function FomodDetailPage() {
       inFlightRef.current = true
       getFomod(decoded)
         .then(d => {
+          if (abortController.signal.aborted) return
           setData(d)
           setLoadedAt(Date.now())
           clearRetryTimer()
         })
         .catch(e => {
+          if (abortController.signal.aborted) return
           console.warn(`[fomod-detail] failed to load "${decoded}", retrying`, e)
           if (!retryTimerRef.current) {
             retryTimerRef.current = setTimeout(() => {
@@ -83,6 +87,7 @@ export default function FomodDetailPage() {
 
     listFomods()
       .then(items => {
+        if (abortController.signal.aborted) return
         const item = items.find(f => f.name === decoded)
         if (item) {
           setMetaSize(item.size)
@@ -90,10 +95,14 @@ export default function FomodDetailPage() {
         }
       })
       .catch(e => {
+        if (abortController.signal.aborted) return
         console.warn('[fomod-detail] failed to load metadata list', e)
       })
 
-    return clearRetryTimer
+    return () => {
+      abortController.abort()
+      clearRetryTimer()
+    }
   }, [name])
 
   const decodedName = name ? decodeURIComponent(name) : 'Unknown'
@@ -106,8 +115,13 @@ export default function FomodDetailPage() {
       : 'Unknown'
   const sizeText = typeof metaSize === 'number' ? formatSize(metaSize) : 'N/A'
 
-  const modName = (data?.moduleName as string) || decodedName
-  const steps = data ? ((data.steps as Record<string, unknown>[]) || []) : []
+  const modName = data?.moduleName || decodedName
+  const steps = data?.steps ?? []
+
+  const highlightedJson = useMemo(
+    () => data ? highlightJson(JSON.stringify(data, null, 2)) : null,
+    [data]
+  )
 
   return (
     <div className="fomods-page animate-fade-in h-[calc(100vh-4rem)] flex flex-col overflow-hidden">
@@ -167,7 +181,7 @@ export default function FomodDetailPage() {
               <div className="relative rounded-xl panel-modern overflow-hidden py-2.5 px-1.5">
                 <div className="max-h-[55vh] overflow-auto scroll-pane">
                   <pre className="m-0 p-4 text-xs log-viewer">
-                    {highlightJson(JSON.stringify(data, null, 2)).map((p, i) => (
+                    {highlightedJson?.map((p, i) => (
                       p.cls
                         ? <span key={i} className={p.cls}>{p.text}</span>
                         : <span key={i}>{p.text}</span>
@@ -191,7 +205,7 @@ export default function FomodDetailPage() {
             <div className="flex-1 min-h-0 overflow-y-auto scroll-pane px-3">
               <div className="flex flex-col gap-3 pb-2">
                 {steps.map((step, i) => (
-                  <FomodStepCard key={i} step={step} index={i} />
+                  <FomodStepCard key={step.name || `step-${i}`} step={step} index={i} />
                 ))}
               </div>
             </div>
