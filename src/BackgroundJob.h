@@ -46,25 +46,32 @@ public:
 
     ~BackgroundJob()
     {
-        cancel_requested_.store(true);
-        std::unique_lock<std::mutex> lock(mutex_);
-        if (thread_.joinable())
+        try
         {
-            if (running_.load())
+            cancel_requested_.store(true);
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (thread_.joinable())
             {
-                // Wait up to 10s for the work function to notice the cancellation.
-                bool finished = cv_.wait_for(
-                    lock, std::chrono::seconds(10), [this]() { return !running_.load(); });
-                if (!finished)
+                if (running_.load())
                 {
-                    // Use stderr directly -- Logger singleton may already be destroyed.
-                    std::cerr << "[BackgroundJob] Destructor: work function did not stop "
-                                 "within 10s, blocking on join\n";
+                    // Wait up to 10s for the work function to notice the cancellation.
+                    bool finished = cv_.wait_for(
+                        lock, std::chrono::seconds(10), [this]() { return !running_.load(); });
+                    if (!finished)
+                    {
+                        // Use stderr directly -- Logger singleton may already be destroyed.
+                        std::cerr << "[BackgroundJob] Destructor: work function did not stop "
+                                     "within 10s, blocking on join\n";
+                    }
                 }
+                // Unlock before join to avoid deadlock with the lambda that acquires mutex_.
+                lock.unlock();
+                thread_.join();
             }
-            // Unlock before join to avoid deadlock with the lambda that acquires mutex_.
-            lock.unlock();
-            thread_.join();
+        }
+        catch (...)
+        {
+            // Swallow all exceptions — destructors must not throw (MISRA 15-5-1).
         }
     }
     BackgroundJob(const BackgroundJob&) = delete;
