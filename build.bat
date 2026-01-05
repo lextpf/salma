@@ -3,10 +3,10 @@ REM ============================================================================
 REM build.bat - Complete build pipeline for salma
 REM ============================================================================
 REM This script:
-REM   1. Formats source code with clang-format (if available)
+REM   1. Runs clang-format on source files
 REM   2. Configures the project using CMake with the default preset
 REM   3. Builds the Release configuration
-REM   4. Generates API documentation with doxide (if available)
+REM   4. Generates documentation with doxide (if available)
 REM   5. Builds the documentation site with mkdocs (if available)
 REM ============================================================================
 
@@ -18,18 +18,17 @@ echo ===========================================================================
 echo.
 
 REM ============================================================================
-REM STEP 1: Format Source Code (clang-format)
+REM STEP 1: Run clang-format
 REM ============================================================================
-echo [1/5] Formatting source code...
+echo [1/5] Running clang-format...
 echo ----------------------------------------------------------------------------
+
 where clang-format >nul 2>&1
-if %ERRORLEVEL% neq 0 (
+if errorlevel 1 (
     echo SKIP: clang-format not found in PATH
 ) else (
     for %%f in (src\*.cpp src\*.h src\*.hpp src\*.c) do (
-        if exist "%%f" (
-            clang-format -i "%%f"
-        )
+        if exist "%%f" clang-format -i "%%f"
     )
     echo Formatting complete.
 )
@@ -103,12 +102,15 @@ echo                           BUILD PIPELINE COMPLETE
 echo ============================================================================
 echo.
 echo Build Output:
-echo   - DLL:    build\bin\Release\mo2-salma.dll
-echo   - Server: build\bin\Release\mo2-server.exe
+echo   Release: build\bin\Release\mo2-salma.dll
+echo            build\bin\Release\mo2-server.exe
+echo   Linkage: Dynamic (/MD, x64-windows-static-md)
 echo.
 echo Documentation:
-echo   - API:  docs\  (if doxide available)
-echo   - Site: site\  (if mkdocs available)
+echo   - Md:   docs\  (if doxide available)
+echo   - Html: site\  (if mkdocs available)
+echo.
+echo  *** Run deploy.bat to install the plugin as an MO2 mod ***
 echo.
 echo ============================================================================
 
