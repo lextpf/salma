@@ -10,11 +10,39 @@
     {
       font-family: 'Caveat', cursive !important;
     }
-    /* Fix spurious scrollbar on both sidebars */
-    .md-sidebar--primary .md-sidebar__scrollwrap,
-    .md-sidebar--secondary .md-sidebar__scrollwrap
+    /* zoom: 2 halves the effective viewport, triggering Material's mobile
+       sidebar layout (position: fixed, overflow: hidden). Force both
+       sidebars back to desktop-style sticky positioning so the nav
+       stays inside the document flow and scrolls independently. */
+    .md-sidebar
     {
-      overflow: hidden !important;
+      position: sticky !important;
+      top: 0 !important;
+      height: 100vh !important;
+      max-height: 100vh !important;
+      transform: none !important;
+      z-index: 3 !important;
+    }
+    .md-sidebar .md-sidebar__scrollwrap
+    {
+      position: relative !important;
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+      max-height: calc(100vh - 1rem) !important;
+      scrollbar-width: thin;
+    }
+    .md-sidebar .md-sidebar__scrollwrap::-webkit-scrollbar
+    {
+      width: 4px;
+    }
+    .md-sidebar .md-sidebar__scrollwrap::-webkit-scrollbar-thumb
+    {
+      background-color: var(--md-default-fg-color--lighter);
+      border-radius: 2px;
+    }
+    .md-sidebar .md-sidebar__inner
+    {
+      padding-bottom: 3rem;
     }
 
     /* !!! function blue */
