@@ -19,10 +19,10 @@ export default function LogsPage() {
   const [clearing, setClearing] = useState(false)
   const [source, setSource] = useState<LogSource>('salma')
   const [logStats, setLogStats] = useState({ errors: 0, warnings: 0, passes: 0 })
-  const { scrollRef, handleScroll, isAtBottomRef, resetScroll, startIdx: getStartIdx, endIdx: getEndIdx } = useVirtualScroll()
+  const { scrollRef, scrollEl, handleScroll, isAtBottomRef, resetScroll, startIdx: getStartIdx, endIdx: getEndIdx } = useVirtualScroll()
   const dropdownRef = useRef<HTMLDivElement>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const inFlightRef = useRef(false)
+  const refreshBusyRef = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
   const offsetRef = useRef<number | undefined>(undefined)
   const cachedScanBarRef = useRef<TqdmBar | null>(null)
@@ -44,7 +44,7 @@ export default function LogsPage() {
     if (retryTimerRef.current) return
     retryTimerRef.current = setTimeout(() => {
       retryTimerRef.current = null
-      loadFull(false, true)
+      loadFull(false)
     }, RETRY_DELAY_MS)
   }
 
@@ -60,16 +60,15 @@ export default function LogsPage() {
     return () => document.removeEventListener('mousedown', handler)
   }, [dropdownOpen])
 
-  // Full load: fetches last N lines, replaces state entirely
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const loadFull = useCallback((showBusy = false, force = false) => {
-    if (inFlightRef.current && !force) return
+  // Full load: fetches last N lines, replaces state entirely.
+  // Returns a promise so callers can chain after completion.
+  const loadFull = useCallback((showBusy = false) => {
     if (showBusy) setLoading(true)
-    inFlightRef.current = true
+    refreshBusyRef.current = true
     const currentSource = sourceRef.current
     const currentLineCount = lineCountRef.current
     const fetcher = currentSource === 'test' ? getTestLogs : getLogs
-    fetcher(currentLineCount)
+    return fetcher(currentLineCount)
       .then(data => {
         if (abortRef.current?.signal.aborted) return
         setLines(data.lines)
@@ -86,31 +85,30 @@ export default function LogsPage() {
         scheduleRetry()
       })
       .finally(() => {
-        inFlightRef.current = false
+        refreshBusyRef.current = false
       })
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- uses refs for all mutable state
   }, [])
 
-  // Incremental load: fetches only new lines since last offset
-  const loadIncremental = useCallback(() => {
-    if (inFlightRef.current) return
-    if (offsetRef.current == null) { loadFull(); return }
-    inFlightRef.current = true
+  // Incremental load: fetches only new lines since last offset.
+  // Returns a promise that resolves when the fetch completes, so the
+  // polling loop can chain the next setTimeout off it.
+  const loadIncremental = useCallback((): Promise<void> => {
+    if (offsetRef.current == null) return loadFull()
     const currentSource = sourceRef.current
     const currentLineCount = lineCountRef.current
     const fetcher = currentSource === 'test' ? getTestLogs : getLogs
-    fetcher(currentLineCount, offsetRef.current)
+    return fetcher(currentLineCount, offsetRef.current)
       .then(data => {
         if (abortRef.current?.signal.aborted) return
         if (data.reset) {
-          // Log was cleared - do a full reload
+          // Log was cleared/rotated - do a full reload
           offsetRef.current = undefined
           setLogStats({ errors: 0, warnings: 0, passes: 0 })
           cachedScanBarRef.current = null
           cachedScanStartTsRef.current = null
           cachedTestStartTsRef.current = null
-          inFlightRef.current = false
-          loadFull()
-          return
+          return loadFull()
         }
         offsetRef.current = data.nextOffset
         if (data.lines.length > 0) {
@@ -135,16 +133,12 @@ export default function LogsPage() {
         if (abortRef.current?.signal.aborted) return
         console.warn(`[logs] incremental load failed`, e)
       })
-      .finally(() => {
-        inFlightRef.current = false
-      })
   }, [loadFull])
 
   // Reset offset when source or lineCount changes
   useEffect(() => {
     if (abortRef.current) abortRef.current.abort()
     abortRef.current = new AbortController()
-    inFlightRef.current = false
     offsetRef.current = undefined
     setLogStats({ errors: 0, warnings: 0, passes: 0 })
     cachedScanBarRef.current = null
@@ -153,19 +147,32 @@ export default function LogsPage() {
     return () => {
       if (abortRef.current) abortRef.current.abort()
     }
-  }, [lineCount, source, loadFull])
+  }, [lineCount, source, loadFull, resetScroll])
 
+  // Auto-refresh: self-scheduling setTimeout ensures the next poll only
+  // starts after the previous one completes, preventing overlap and the
+  // stale inFlightRef races that setInterval + a shared guard caused.
   useEffect(() => {
     if (!autoRefresh) return
-    const id = setInterval(loadIncremental, 1000)
-    return () => clearInterval(id)
-  }, [autoRefresh, lineCount, source, loadIncremental])
+    let active = true
+    let tid: ReturnType<typeof setTimeout>
+
+    const poll = () => {
+      loadIncremental().finally(() => {
+        if (active) tid = setTimeout(poll, 1000)
+      })
+    }
+
+    tid = setTimeout(poll, 1000)
+    return () => { active = false; clearTimeout(tid) }
+  }, [autoRefresh, loadIncremental])
 
   useEffect(() => {
     if (!isAtBottomRef.current) return
-    const el = scrollRef.current
+    const el = scrollEl.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [lines])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- isAtBottomRef is a stable ref
+  }, [lines, scrollEl])
 
   useEffect(() => clearRetryTimer, [])
 
@@ -316,7 +323,7 @@ export default function LogsPage() {
           </button>
 
           <button
-            onClick={() => loadFull(false)}
+            onClick={() => { if (!refreshBusyRef.current) loadFull(false) }}
             className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary bg-primary/8 hover:bg-primary/14
                        action-btn action-btn-primary
                        transition-colors border border-primary/10"
