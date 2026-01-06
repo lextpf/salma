@@ -82,7 +82,7 @@ struct FomodDependencyContext
 {
     std::string game_path;                            ///< Root path of the game installation
     std::unordered_set<std::string> installed_files;  ///< Files present in the mod directory
-                                                      /** < (normalized: lowercase, forward-slash) */
+    /** < (normalized: lowercase, forward-slash) */
     std::unordered_set<std::string>
         installed_plugins;  ///< Active game plugins (.esp/.esm, lowercase)
     std::unordered_set<std::string> installed_fomods;  ///< Previously installed FOMOD packages
