@@ -108,10 +108,23 @@ static int run_batch_script(const fs::path& script_path,
                        &si,
                        &pi))
     {
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        DWORD code = 0;
-        GetExitCodeProcess(pi.hProcess, &code);
-        exit_code = static_cast<int>(code);
+        // 30-minute timeout to prevent indefinite blocking if the script hangs.
+        constexpr DWORD kScriptTimeoutMs = 30 * 60 * 1000;
+        DWORD wait = WaitForSingleObject(pi.hProcess, kScriptTimeoutMs);
+        if (wait == WAIT_TIMEOUT)
+        {
+            mo2core::Logger::instance().log_error(
+                "[server] Batch script timed out after 30 minutes, terminating");
+            TerminateProcess(pi.hProcess, 1);
+            WaitForSingleObject(pi.hProcess, 5000);
+            exit_code = -2;
+        }
+        else
+        {
+            DWORD code = 0;
+            GetExitCodeProcess(pi.hProcess, &code);
+            exit_code = static_cast<int>(code);
+        }
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     }
@@ -130,7 +143,7 @@ static bool path_contains_shell_metachar(const std::string& s)
     for (char c : s)
     {
         if (c == '&' || c == '|' || c == '>' || c == '<' || c == '^' || c == '%' || c == '!' ||
-            c == '(' || c == ')' || c == '"')
+            c == '(' || c == ')' || c == '"' || c == ';' || c == '\'' || c == '`')
         {
             return true;
         }
