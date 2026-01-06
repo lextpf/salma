@@ -113,25 +113,14 @@ bool xml_bool_attribute_true(const pugi::xml_attribute& attr)
     return value == "true" || value == "1";
 }
 
-static constexpr EnumStringMap<PluginType, 5> plugin_type_map = {
-    std::array<std::pair<PluginType, std::string_view>, 5>{{
-        {PluginType::Required, "Required"},
-        {PluginType::Recommended, "Recommended"},
-        {PluginType::Optional, "Optional"},
-        {PluginType::NotUsable, "NotUsable"},
-        {PluginType::CouldBeUsable, "CouldBeUsable"},
-    }},
-    PluginType::Optional,
-};
-
 PluginType parse_plugin_type_string(const std::string& type_name)
 {
-    return plugin_type_map.from_string(type_name);
+    return parse_enum<PluginType>(type_name);
 }
 
 std::string_view plugin_type_to_string(PluginType type)
 {
-    return plugin_type_map.to_string(type);
+    return enum_to_string(type);
 }
 
 std::string normalize_destination_for_join(std::string destination)

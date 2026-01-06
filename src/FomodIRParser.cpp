@@ -54,7 +54,7 @@ static FomodCondition compile_condition_impl(const pugi::xml_node& deps_node, in
     FomodCondition cond;
     cond.type = FomodConditionType::Composite;
 
-    if (depth > FomodDependencyEvaluator::MAX_DEPENDENCY_DEPTH)
+    if (depth > MAX_DEPENDENCY_DEPTH)
     {
         // Bail out with an always-false empty Or to safely reject overly deep conditions
         mo2core::Logger::instance().log_warning(
@@ -63,8 +63,7 @@ static FomodCondition compile_condition_impl(const pugi::xml_node& deps_node, in
         return cond;
     }
 
-    std::string op = deps_node.attribute("operator").as_string("And");
-    cond.op = (op == "Or") ? FomodConditionOp::Or : FomodConditionOp::And;
+    cond.op = parse_enum<FomodConditionOp>(deps_node.attribute("operator").as_string("And"));
 
     int child_count = 0;
     for (auto child : deps_node.children())
@@ -179,20 +178,9 @@ FomodFileEntry FomodIRParser::parse_file_entry(const pugi::xml_node& node,
 // ---------------------------------------------------------------------------
 // parse_group_type
 // ---------------------------------------------------------------------------
-static constexpr EnumStringMap<FomodGroupType, 5> group_type_map = {
-    std::array<std::pair<FomodGroupType, std::string_view>, 5>{{
-        {FomodGroupType::SelectExactlyOne, "SelectExactlyOne"},
-        {FomodGroupType::SelectAtMostOne, "SelectAtMostOne"},
-        {FomodGroupType::SelectAtLeastOne, "SelectAtLeastOne"},
-        {FomodGroupType::SelectAll, "SelectAll"},
-        {FomodGroupType::SelectAny, "SelectAny"},
-    }},
-    FomodGroupType::SelectAny,
-};
-
 FomodGroupType FomodIRParser::parse_group_type(const std::string& type_str)
 {
-    return group_type_map.from_string(type_str);
+    return parse_enum<FomodGroupType>(type_str);
 }
 
 // ---------------------------------------------------------------------------
