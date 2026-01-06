@@ -14,7 +14,6 @@ namespace mo2core
 bool is_safe_dest(const std::string& dest)
 {
     return is_safe_destination(dest);
-    return true;
 }
 
 void expand_entry(const FomodFileEntry& entry,
