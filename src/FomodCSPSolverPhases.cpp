@@ -14,6 +14,23 @@ namespace mo2core
 
 // ---------------------------------------------------------------------------
 // Phase functions extracted from solve_fomod_csp
+//
+// Phase ordering rationale:
+//   1. Greedy + local search + targeted repair -- cheap O(N) and O(N*k)
+//      passes that solve the majority of FOMOD installers outright. Most
+//      installers are linear flag chains with little ambiguity.
+//   2. Component decomposition -- exploit the fact that many groups are
+//      independent (no shared dests or flag links). Solving each component
+//      separately turns an exponential search into a product of smaller ones.
+//   3. Residual repair -- when only 1-2 mismatches remain (size/hash), a
+//      narrow targeted search is cheaper than a global pass.
+//   4. Focused search -- re-examine only groups that contribute to remaining
+//      mismatches, with increasing exact-mode caps for thorough coverage.
+//   5. Global fallback -- progressively wider backtrack passes (narrow ->
+//      medium -> full SelectAny caps) over all groups, used only when earlier
+//      phases leave unresolved mismatches.
+//
+// Each phase exits early when an exact match is found.
 // ---------------------------------------------------------------------------
 
 // Phase 1: Greedy solve, local search, and first targeted repair.
@@ -122,6 +139,8 @@ void run_component_decomposition(
             state.search.selections = state.best.best.selections;
         state.search.flags = rebuild_flags(*pre.installer, state.search.selections, pre.overrides);
 
+        // 2 local search passes per component: enough to converge on small
+        // subproblems without dominating solve time on the many components.
         local_search(state, pre, comp, 2, select_any_cap, nullptr, options_cache, stats);
         if (state.search.found_exact)
             break;
@@ -162,6 +181,11 @@ void run_residual_repair(
     if (!state.best.has_best)
         return;
 
+    // "Near perfect" thresholds: <=1 size mismatch and <=2 hash mismatches.
+    // Size mismatches are rare in well-formed FOMODs (usually 0 or 1 from a
+    // single wrong variant), so 1 is a tight but sufficient bound. Hash
+    // mismatches are more common (mod authors repack files with trivial edits),
+    // so 2 allows for typical noise without triggering expensive global search.
     bool near_perfect = (state.best.best.missing == 0 && state.best.best.extra == 0 &&
                          state.best.best.size_mismatch <= 1 && state.best.best.hash_mismatch <= 2);
     if (!near_perfect)
@@ -190,6 +214,8 @@ void run_residual_repair(
 
     state.search.selections = state.best.best.selections;
     state.search.flags = rebuild_flags(*pre.installer, state.search.selections, pre.overrides);
+    // 3 passes for residual repair: one more than component-level because the
+    // repair set is small and inter-group flag effects may need an extra round.
     local_search(state, pre, repair_groups, 3, select_any_cap, nullptr, options_cache, stats);
     run_backtrack_pass(state,
                        pre,

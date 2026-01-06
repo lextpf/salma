@@ -9,6 +9,7 @@
 #include "Logger.h"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <format>
@@ -272,6 +273,13 @@ ReproMetrics evaluate_candidate(SolverState& state,
     return metrics;
 }
 
+// Collect all destination paths where the simulation diverges from the target.
+// Three mismatch categories:
+//   - Missing: dest is in target but not produced by the simulation.
+//   - Size/hash mismatch: dest exists in both but the file content differs
+//     (wrong source variant selected).
+//   - Extra: dest is produced by the simulation but absent from the target
+//     (an unwanted plugin was selected or a conditional pattern fired wrongly).
 std::vector<std::string> collect_mismatched_dests(const SimulatedTree& sim,
                                                   const TargetTree& target,
                                                   const std::unordered_set<std::string>& excluded)
@@ -286,14 +294,14 @@ std::vector<std::string> collect_mismatched_dests(const SimulatedTree& sim,
         auto it = sim.files.find(dest);
         if (it == sim.files.end())
         {
-            out.insert(dest);
+            out.insert(dest);  // missing
             continue;
         }
 
         if (tf.size != 0 && it->second.file_size != 0 && tf.size != it->second.file_size)
-            out.insert(dest);
+            out.insert(dest);  // size mismatch
         else if (tf.hash != 0 && it->second.content_hash != 0 && tf.hash != it->second.content_hash)
-            out.insert(dest);
+            out.insert(dest);  // hash mismatch
     }
 
     for (const auto& [dest, atom] : sim.files)
@@ -301,7 +309,7 @@ std::vector<std::string> collect_mismatched_dests(const SimulatedTree& sim,
         if (excluded.count(dest))
             continue;
         if (!target.count(dest))
-            out.insert(dest);
+            out.insert(dest);  // extra
     }
 
     std::vector<std::string> mismatched(out.begin(), out.end());
@@ -309,6 +317,19 @@ std::vector<std::string> collect_mismatched_dests(const SimulatedTree& sim,
     return mismatched;
 }
 
+// Find all groups whose selection could influence the given mismatched dests.
+//
+// Uses a BFS-style expansion through the flag dependency chain:
+//   1. Seed: groups that directly produce any mismatched dest path.
+//   2. Seed: for conditional dests (produced by flag-gated patterns), include
+//      all groups that set flags needed by those conditional patterns.
+//   3. Expand: for every affected group, find the flags it reads, then include
+//      the groups that set those flags. Repeat until no new groups are added.
+//      The queue doubles as the visited-set worklist, so expansion terminates
+//      when all transitive flag dependencies have been traced.
+//
+// This produces the minimal "repair neighborhood" -- only groups that could
+// change the mismatched output need to be re-searched.
 std::vector<int> groups_for_mismatches(const Precompute& pre,
                                        const std::vector<std::string>& mismatched)
 {
@@ -339,7 +360,8 @@ std::vector<int> groups_for_mismatches(const Precompute& pre,
         }
     }
 
-    // Include prerequisite groups that set flags read by already affected groups.
+    // BFS expansion: include prerequisite groups that set flags read by
+    // already-affected groups. The queue grows during iteration.
     for (size_t q = 0; q < queue.size(); ++q)
     {
         int gidx = queue[q];
@@ -418,7 +440,10 @@ static std::unordered_map<int, std::vector<int>> build_repair_plugin_map(
     }
 
     std::unordered_map<int, std::vector<int>> out;
-    constexpr int kMaxRepairBits = 11;  // 2048 combinations per group
+    // Cap at 11 toggle bits per group: 2^11 = 2048 combos is the empirical
+    // sweet spot -- enough to cover typical multi-select groups without making
+    // the repair pass itself combinatorially expensive.
+    constexpr int kMaxRepairBits = 11;
     for (int gidx : repair_groups)
     {
         auto it = per_group.find(gidx);
@@ -449,6 +474,14 @@ static std::unordered_map<int, std::vector<int>> build_repair_plugin_map(
     return out;
 }
 
+// Targeted repair: exhaustive bit-flip search over a small plugin neighborhood.
+//
+// Strategy: for each repair group (SelectAny/AtLeastOne only), identify the
+// plugins that produce mismatched dests plus those currently selected. Enumerate
+// all 2^k on/off combinations of those plugins (capped at k=11 => 2048 combos
+// per group). Run up to 2 passes: the second pass picks up improvements enabled
+// by cross-group flag changes from pass 1. This is much cheaper than full
+// backtracking but often resolves remaining mismatches after greedy/local search.
 void targeted_repair_search(SolverState& state,
                             const Precompute& pre,
                             const std::vector<int>& repair_groups,
@@ -1492,6 +1525,27 @@ SolverResult solve_fomod_csp(const FomodInstaller& installer,
         for (size_t gi = 0; gi < installer.steps[si].groups.size(); ++gi)
             state.search.selections[si][gi].assign(installer.steps[si].groups[gi].plugins.size(),
                                                    false);
+    }
+
+    // Verify that every precomputed GroupRef indexes validly into the
+    // selections array.  The indices are guaranteed by construction (both
+    // the installer and pre.groups are built from the same data), but an
+    // out-of-bounds access here would be undefined behavior in hot loops
+    // that intentionally skip per-access bounds checks for performance.
+    for (const auto& g : pre.groups)
+    {
+        assert(g.step_idx >= 0);
+        assert(static_cast<size_t>(g.step_idx) < state.search.selections.size());
+        assert(g.group_idx >= 0);
+        assert(static_cast<size_t>(g.group_idx) <
+               state.search.selections[static_cast<size_t>(g.step_idx)].size());
+        assert(g.plugin_count >= 0);
+        assert(
+            static_cast<size_t>(g.flat_start + g.plugin_count) <=
+            state.search
+                    .selections[static_cast<size_t>(g.step_idx)][static_cast<size_t>(g.group_idx)]
+                    .size() +
+                static_cast<size_t>(g.flat_start));
     }
 
     state.progress.deadline =

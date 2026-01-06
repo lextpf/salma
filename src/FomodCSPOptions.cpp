@@ -35,6 +35,27 @@ std::string group_name(const Precompute& pre, const GroupRef& g)
                        pre.installer->steps[g.step_idx].groups[g.group_idx].name);
 }
 
+// Generate candidate selection options for a single FOMOD group.
+//
+// Algorithm strategy:
+//   1. Classify each plugin as required/usable/dynamic by evaluating its
+//      dependencyType patterns against the current flag state.
+//   2. Demote Required status on externally-dynamic plugins (file/plugin/game
+//      checks are unknowable during standalone inference).
+//   3. Sort plugins by descending evidence score to bias search toward likely
+//      correct selections.
+//   4. Branch by group cardinality type:
+//      - SelectAll/ExactlyOne/AtMostOne: emit deterministic or single-plugin
+//        options directly.
+//      - SelectAtLeastOne/SelectAny with <=10 usable plugins: enumerate the
+//        full powerset, scored by sum of evidence, to guarantee optimal coverage.
+//      - SelectAtLeastOne/SelectAny with >10 plugins: use greedy + neighborhood
+//        heuristic (toggle-off variants, singletons, pair candidates) to avoid
+//        combinatorial blowup while still covering likely multi-select combos.
+//   5. Post-filter: discard options where intra-group flag side-effects make a
+//      selected plugin NotUsable (e.g. choosing "Merged" disables non-merged
+//      alternatives within the same group).
+//   6. Guarantee at least one option is always returned.
 static std::vector<GroupOption> generate_raw_options(
     const FomodGroup& group,
     const std::vector<int>& evidence,
@@ -189,6 +210,8 @@ static std::vector<GroupOption> generate_raw_options(
                 (select_any_cap > 0 && group.type == FomodGroupType::SelectAny && !has_required &&
                  positive_evidence == 0 && n >= 8);
 
+            // 10 plugins -> 1024 subsets: still tractable for exhaustive enumeration.
+            // Beyond 10, the powerset grows too fast for per-solve budgets.
             if (n <= 10 && !force_heuristic_select_any)
             {
                 uint64_t limit = 1ULL << n;
@@ -295,6 +318,8 @@ static std::vector<GroupOption> generate_raw_options(
                     // Large SelectAny "filter" groups frequently need two
                     // simultaneous selectors. For small-to-medium groups keep
                     // the full pair neighborhood; only trim truly large ones.
+                    // Up to 16 candidates: keep all C(16,2)=120 pairs.
+                    // Above 16: trim to top-8 by evidence to cap pairs at C(8,2)=28.
                     constexpr size_t kFullPairLimit = 16;
                     constexpr size_t kHeuristicPairLimit = 8;
                     size_t pair_limit = (pair_candidates.size() <= kFullPairLimit)
@@ -434,6 +459,11 @@ static uint64_t option_signature(const OptionProfile& p)
     return h;
 }
 
+// Tiebreaker for options that produce identical file outputs (same signature).
+// Prefer: (1) higher evidence -- more corroborated by target files,
+// (2) higher unique support -- files only this plugin can explain,
+// (3) more useful dests -- more target coverage,
+// (4) fewer extra dests -- less unwanted output (Occam's razor).
 static bool better_equivalent_option(const OptionProfile& a, const OptionProfile& b)
 {
     if (a.evidence_score != b.evidence_score)
@@ -445,6 +475,17 @@ static bool better_equivalent_option(const OptionProfile& a, const OptionProfile
     return a.extra_dests < b.extra_dests;
 }
 
+// Reduce the raw option set to a compact, high-quality subset for the solver.
+//
+// Three-stage reduction:
+//   1. Drop "extra-only" options that produce no target-matching files and set
+//      no needed flags -- these are dead weight in the search.
+//   2. Collapse options with identical output signatures (same produced atoms
+//      + same flags written), keeping the best by evidence/support/coverage.
+//   3. For SelectAny/AtLeastOne groups, cap the option count to select_any_cap
+//      using diversity sampling: keep the top-ranked option, then pick options
+//      with distinct selected-plugin counts to explore varied cardinalities,
+//      then fill remaining slots by rank.
 static std::vector<GroupOption> reduce_options(const GroupRef& gref,
                                                const std::vector<GroupOption>& raw,
                                                const Precompute& pre,

@@ -74,6 +74,11 @@ static void sort_unique(std::vector<int>& v)
 
 using FlagSetterMap = std::unordered_map<std::string, std::vector<std::pair<int, std::string>>>;
 
+// Propagate evidence from a flag-gated condition back to the plugins that set
+// the required flag values. This creates an indirect evidence link: if a
+// conditional file pattern produces target-matching files, the plugins whose
+// flag outputs would activate that pattern gain evidence proportional to the
+// number of matching files (the `weight` parameter).
 static void collect_flag_evidence(const FomodCondition& cond,
                                   const FlagSetterMap& flag_setters,
                                   std::vector<int>& evidence,
@@ -96,6 +101,22 @@ static void collect_flag_evidence(const FomodCondition& cond,
     }
 }
 
+// Compute per-plugin evidence scores: how strongly each plugin's file output
+// correlates with the target file tree. Higher evidence => more likely the
+// plugin was selected in the original installation.
+//
+// Evidence weights for direct file matches:
+//   3 = unique producer: only one plugin can produce this target dest, so it
+//       is near-certain that plugin was selected. Strong signal.
+//   2 = contested dest with hash match: multiple plugins produce this dest,
+//       but this one has a matching content hash. Good but not conclusive
+//       (another plugin might also hash-match).
+//   1 = contested dest, size-compatible but no hash confirmation. Weak signal
+//       since any size-compatible producer could be the source.
+//
+// Indirect evidence via flags: if conditional file patterns match the target,
+// the plugins that set the activating flags get evidence weighted by the
+// number of matching conditional files.
 std::vector<int> compute_evidence(const FomodInstaller& installer,
                                   const ExpandedAtoms& atoms,
                                   const AtomIndex& atom_index,
@@ -132,13 +153,13 @@ std::vector<int> compute_evidence(const FomodInstaller& installer,
 
         if (matches.size() == 1)
         {
-            evidence[matches[0]] += 3;
+            evidence[matches[0]] += 3;  // unique producer: strong signal
         }
         else
         {
             for (int idx : matches)
             {
-                bool hash_matched = false;
+                bool hash_matched = false;  // contested dest: 2 if hash confirms, 1 otherwise
                 for (const auto& atom : it->second)
                 {
                     if (atom.plugin_index == idx && tf.hash != 0 && atom.content_hash != 0 &&
@@ -251,6 +272,9 @@ std::vector<int> compute_evidence(const FomodInstaller& installer,
     return evidence;
 }
 
+// Add an undirected edge between two groups in the dependency graph.
+// Groups are linked when they share a dest path or participate in the same
+// flag setter/reader chain, meaning a change in one can affect the other.
 static void link_groups(std::vector<std::unordered_set<int>>& graph, int a, int b)
 {
     if (a == b)
@@ -259,6 +283,20 @@ static void link_groups(std::vector<std::unordered_set<int>>& graph, int a, int 
     graph[b].insert(a);
 }
 
+// Discover connected components among groups via BFS on an undirected graph.
+//
+// Graph construction:
+//   - Edge between groups that share a destination path (selecting either can
+//     change which source file wins at that dest).
+//   - Edge between a flag-setter group and any flag-reader group for the same
+//     flag (the setter's choice affects the reader's visibility/type outcomes).
+//   - Edge between groups that set the same flag (they compete for that flag's
+//     value, so their choices are interdependent).
+//
+// Each connected component can be solved independently, which dramatically
+// reduces the effective search space (product of component sizes vs. one
+// monolithic exponential). Components are returned largest-first so the solver
+// tackles the hardest subproblem while the budget is freshest.
 static std::vector<std::vector<int>> build_components(const Precompute& pre)
 {
     int n = static_cast<int>(pre.groups.size());
