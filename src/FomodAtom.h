@@ -10,7 +10,7 @@ namespace mo2core
 {
 
 /**
- * @class FomodAtom
+ * @struct FomodAtom
  * @brief Single file-install operation produced by FOMOD XML evaluation.
  * @author Alex (https://github.com/lextpf)
  * @ingroup FomodService
@@ -37,25 +37,28 @@ namespace mo2core
  */
 struct FomodAtom
 {
-    std::string source_path;  // normalized archive entry
-    std::string dest_path;    // normalized destination
-    int priority = 0;
-    int document_order = 0;
-    uint64_t content_hash = 0;  // FNV-1a of archive bytes (0 = unknown)
-    uint64_t file_size = 0;
+    std::string source_path;  ///< Normalized archive-relative source entry path
+    std::string dest_path;    ///< Normalized mod-relative destination path
+    int priority = 0;         ///< Overwrite priority; higher values win conflicts
+    int document_order = 0;   ///< XML document order tiebreaker (higher wins among equal priority)
+    uint64_t content_hash = 0;  ///< FNV-1a hash of archive bytes (0 = not yet computed)
+    uint64_t file_size = 0;     ///< File size in bytes (0 = unknown)
 
+    /** @brief Where this atom originated in the FOMOD XML. */
     enum class Origin
     {
-        Required,
-        Plugin,
-        Conditional
+        Required,    ///< From `<requiredInstallFiles>` -- always included
+        Plugin,      ///< From a `<plugin>/<files>` block -- included when the plugin is selected
+        Conditional  ///< From `<conditionalFileInstalls>` -- included when the pattern condition is
+                     /** < met */
     };
-    Origin origin = Origin::Required;
-    int plugin_index = -1;  // flat index across all steps/groups
-    int conditional_index = -1;
+    Origin origin = Origin::Required;  ///< Which FOMOD section produced this atom
+    int plugin_index = -1;  ///< Flat plugin index across all steps/groups (-1 if not from a plugin)
+    int conditional_index =
+        -1;  ///< Index into `FomodInstaller::conditional_patterns` (-1 if not conditional)
 
-    bool always_install = false;
-    bool install_if_usable = false;
+    bool always_install = false;     ///< Inherited from `FomodFileEntry::always_install`
+    bool install_if_usable = false;  ///< Inherited from `FomodFileEntry::install_if_usable`
 };
 
 /**
@@ -72,10 +75,10 @@ struct TargetFile
     uint64_t hash = 0;  // FNV-1a (0 = not computed)
 };
 
-/// @brief Maps a lowercased destination path to every atom that targets it.
+/** @brief Maps a lowercased destination path to every atom that targets it. */
 using AtomIndex = std::unordered_map<std::string, std::vector<FomodAtom>>;
 
-/// @brief Maps a lowercased destination path to metadata of the installed file.
+/** @brief Maps a lowercased destination path to metadata of the installed file. */
 using TargetTree = std::unordered_map<std::string, TargetFile>;
 
 /**
@@ -94,8 +97,10 @@ struct ExpandedAtoms
     std::vector<std::vector<FomodAtom>> per_plugin;       // [flat_plugin_index]
     std::vector<std::vector<FomodAtom>> per_conditional;  // [conditional_index]
 
-    /// Apply a callable to every atom across all origin containers.
-    /// Deducing `this` provides const and non-const overloads from one definition.
+    /**
+     * Apply a callable to every atom across all origin containers.
+     * Deducing `this` provides const and non-const overloads from one definition.
+     */
     template <typename Self, typename Func>
         requires std::invocable<Func, decltype(*std::declval<Self>().required.begin())>
     void for_each(this Self&& self, Func&& fn)

@@ -97,6 +97,8 @@ public:
      *
      * @param req The Crow HTTP request.
      * @return JSON response with install result or error.
+     * @note Does not throw. All exceptions are caught internally and
+     *       returned as a 500 JSON error response.
      */
     crow::response handle_upload(const crow::request& req);
 
@@ -109,6 +111,8 @@ public:
      *
      * @param req The Crow HTTP request.
      * @return JSON response with install result or error.
+     * @note Does not throw. All exceptions are caught internally and
+     *       returned as a 500 JSON error response.
      */
     crow::response handle_install(const crow::request& req);
 

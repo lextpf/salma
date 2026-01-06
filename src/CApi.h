@@ -142,6 +142,8 @@ extern "C"
      * @return Heap-allocated mod path string on success. On fatal error or null
      *         input the string contains the error message. The caller **must**
      *         call freeResult() to release the returned pointer.
+     * @note All C++ exceptions are caught internally and returned as error
+     *       strings -- callers will never see a C++ exception propagate.
      */
     MO2_API const char* install(const char* archivePath, const char* modPath);
 
@@ -164,6 +166,8 @@ extern "C"
      * @return Heap-allocated mod path string on success. On fatal error or null
      *         input the string contains the error message. The caller **must**
      *         call freeResult() to release the returned pointer.
+     * @note All C++ exceptions are caught internally and returned as error
+     *       strings -- callers will never see a C++ exception propagate.
      */
     MO2_API const char* installWithConfig(const char* archivePath,
                                           const char* modPath,
@@ -186,6 +190,8 @@ extern "C"
      *        directory to compare against.
      * @return Heap-allocated JSON selections string. Empty string on failure.
      *         The caller **must** call freeResult() to release the returned pointer.
+     * @note All C++ exceptions are caught internally and returned as an
+     *       empty string -- callers will never see a C++ exception propagate.
      */
     MO2_API const char* inferFomodSelections(const char* archivePath, const char* modPath);
 

@@ -42,25 +42,52 @@ class ConfigService
 public:
     static ConfigService& instance();
 
-    /// Load configuration from salma.json. Missing file is not an error
-    /// (defaults are used). Parse errors are logged and silently ignored --
-    /// the method never throws.
+    /**
+     * Load configuration from salma.json. Missing file is not an error
+     * (defaults are used). Parse errors are logged and silently ignored --
+     * the method never throws.
+     */
     void load();
 
-    /// Persist current configuration to salma.json. Write errors are
-    /// logged -- the method never throws.
-    ///
-    /// @return `true` if the config was written successfully, `false`
-    ///         on any I/O failure (disk full, permissions, etc.).
+    /**
+     * Persist current configuration to salma.json. Write errors are
+     * logged -- the method never throws.
+     *
+     * @return `true` if the config was written successfully, `false`
+     *         on any I/O failure (disk full, permissions, etc.).
+     */
     bool save();
 
+    /**
+     * @brief Get the configured MO2 mods directory path.
+     * @return The mods path string, or empty string if not configured.
+     */
     std::string mo2_mods_path() const;
+
+    /**
+     * @brief Set the MO2 mods directory path (not auto-persisted).
+     *
+     * Call save() afterwards to persist the change to salma.json.
+     *
+     * @param path Absolute path to the MO2 mods directory.
+     */
     void set_mo2_mods_path(const std::string& path);
 
-    /// Derived path: {mo2ModsPath}/Salma FOMODs Output/fomods/
+    /**
+     * @brief Get the derived FOMOD output directory.
+     *
+     * Computed as `{mo2ModsPath}/Salma FOMODs Output/fomods/`.
+     *
+     * @return The FOMOD output path, or an empty path if mo2_mods_path
+     *         is not configured.
+     */
     std::filesystem::path fomod_output_dir() const;
 
-    /// Path to the salma.json config file (next to executable).
+    /**
+     * @brief Get the path to the salma.json config file.
+     * @return Absolute path next to the executable. Effectively
+     *         immutable after construction (safe to call without locking).
+     */
     std::filesystem::path config_path() const;
 
 private:

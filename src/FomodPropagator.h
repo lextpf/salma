@@ -53,6 +53,30 @@ struct PropagationResult
  *
  * All steps are treated as visible because original step visibility at
  * install time cannot be determined during inference.
+ *
+ * The propagator runs a fixpoint iteration loop:
+ *
+ * ```mermaid
+ * flowchart TD
+ *     start[Initialize all domains to true] --> loop{Changed & iter < 16?}
+ *     loop -->|yes| step1[Apply plugin type constraints]
+ *     step1 --> step2[Filter by file evidence]
+ *     step2 --> step3[Resolve cardinality]
+ *     step3 --> loop
+ *     loop -->|no| done[Return PropagationResult]
+ * ```
+ *
+ * @param installer      Parsed FOMOD installer definition.
+ * @param atoms          Expanded file-install atoms indexed per-plugin and per-conditional.
+ * @param atom_index     Reverse index mapping destination paths to atoms.
+ * @param target         Target file tree the solver tries to reproduce.
+ * @param excluded_dests Destination paths to ignore during evidence evaluation.
+ * @param overrides      Tri-state overrides for external conditions.
+ * @param context        Optional external dependency context for plugin type evaluation.
+ *                       Pass `nullptr` during standalone inference.
+ * @return A `PropagationResult` containing narrowed plugin domains, a list of
+ *         fully resolved groups, and a `fully_resolved` flag indicating whether
+ *         all groups were determined without needing the CSP solver.
  */
 MO2_API PropagationResult propagate(const FomodInstaller& installer,
                                     const ExpandedAtoms& atoms,

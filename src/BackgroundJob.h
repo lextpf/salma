@@ -71,7 +71,7 @@ public:
         }
         catch (...)
         {
-            // Swallow all exceptions — destructors must not throw (MISRA 15-5-1).
+            // Swallow all exceptions - destructors must not throw (MISRA 15-5-1).
         }
     }
     BackgroundJob(const BackgroundJob&) = delete;
@@ -150,16 +150,27 @@ public:
         return true;
     }
 
-    /// Check if the job is currently running (lock-free).
+    /** Check if the job is currently running (lock-free). */
     [[nodiscard]] bool is_running() const { return running_.load(); }
 
-    /// Request cooperative cancellation. Work functions should check `is_cancel_requested()`.
+    /**
+     * @brief Request cooperative cancellation of the running job.
+     *
+     * Sets the cancellation flag that work functions can poll via
+     * is_cancel_requested() or cancel_token(). This is a non-blocking,
+     * lock-free operation. The work function must check the flag
+     * periodically and exit voluntarily.
+     */
     void request_cancel() { cancel_requested_.store(true); }
 
-    /// Check if cancellation has been requested (lock-free).
+    /**
+     * @brief Check if cancellation has been requested (lock-free).
+     * @return `true` if request_cancel() has been called since the
+     *         last try_start().
+     */
     [[nodiscard]] bool is_cancel_requested() const { return cancel_requested_.load(); }
 
-    /// Return a reference to the cancellation token for passing to work functions.
+    /** Return a reference to the cancellation token for passing to work functions. */
     [[nodiscard]] const std::atomic<bool>& cancel_token() const { return cancel_requested_; }
 
     /**
