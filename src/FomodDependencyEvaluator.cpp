@@ -274,12 +274,7 @@ private:
     /// Resolve an external condition (File/Plugin/Fomod) via the override mode.
     bool apply_external_override() const
     {
-        if (external_override == ExternalConditionOverride::ForceTrue)
-            return true;
-        if (external_override == ExternalConditionOverride::ForceFalse)
-            return false;
-        // Unknown -> conservative false
-        return false;
+        return external_override == ExternalConditionOverride::ForceTrue;
     }
 
     /// FOMM version comparison (MO2 hardcodes "0.13.21").
