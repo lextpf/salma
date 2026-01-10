@@ -13,7 +13,22 @@ export interface ReadinessStyles {
   readinessLabelClass: string;
   readinessGlowColor: string;
   ringBackground: string;
-  miniRingStyle: React.CSSProperties;
+}
+
+/**
+ * Circular ring mask with a 1px feathered inner edge.
+ *
+ * Spreading the stops ±0.5px around the target thickness gives the
+ * compositor a 1px band to feather the inner circle cleanly.
+ */
+export function ringMaskStyle(thicknessPx: number): React.CSSProperties {
+  const outer = thicknessPx + 0.5;
+  const inner = Math.max(0.1, thicknessPx - 0.5);
+  const mask = `radial-gradient(farthest-side, transparent calc(100% - ${outer}px), #000 calc(100% - ${inner}px))`;
+  return {
+    WebkitMaskImage: mask,
+    maskImage: mask,
+  };
 }
 
 export function computeReadinessStyles(readiness: number | null): ReadinessStyles {
@@ -24,21 +39,16 @@ export function computeReadinessStyles(readiness: number | null): ReadinessStyle
   const isWarningReadiness = !isCriticalReadiness && clampedReadiness <= 33;
   const isPerfectReadiness = clampedReadiness === 100;
 
+  // Single-tone Atelier ring: oxblood (critical/error), ochre (warning), moss (perfect/ok), ink-3 default.
   const ringPrimary = isCriticalReadiness
-    ? 'rgba(239, 68, 68, 0.86)'
+    ? 'var(--accent)'
     : isWarningReadiness
-      ? 'rgba(245, 158, 11, 0.86)'
+      ? 'var(--ochre)'
       : isPerfectReadiness
-        ? 'rgba(52, 211, 153, 0.92)'
-        : 'rgba(56, 189, 248, 0.82)';
+        ? 'var(--moss)'
+        : 'var(--moss)';
 
-  const ringSecondary = isCriticalReadiness
-    ? 'rgba(248, 113, 113, 0.78)'
-    : isWarningReadiness
-      ? 'rgba(251, 191, 36, 0.78)'
-      : isPerfectReadiness
-        ? 'rgba(56, 189, 248, 0.88)'
-        : 'rgba(52, 211, 153, 0.78)';
+  const ringSecondary = ringPrimary;
 
   const readinessTextClass = isCriticalReadiness
     ? 'text-error'
@@ -47,30 +57,21 @@ export function computeReadinessStyles(readiness: number | null): ReadinessStyle
       : 'text-on-surface';
 
   const readinessLabelClass = isCriticalReadiness
-    ? 'text-error-light/80'
+    ? 'text-error/80'
     : isWarningReadiness
       ? 'text-warning/80'
-      : isPerfectReadiness
-        ? 'text-on-surface/80'
-        : 'text-on-surface-variant';
+      : 'text-on-surface-variant';
 
   const readinessGlowColor = isCriticalReadiness
-    ? 'rgba(239, 68, 68, 0.25)'
+    ? 'rgba(138, 42, 31, 0.20)'
     : isWarningReadiness
-      ? 'rgba(245, 158, 11, 0.2)'
-      : isPerfectReadiness
-        ? 'rgba(52, 211, 153, 0.35)'
-        : 'rgba(56, 189, 248, 0.2)';
+      ? 'rgba(166, 122, 42, 0.20)'
+      : 'rgba(61, 122, 61, 0.20)';
 
+  const trackColor = 'var(--readiness-ring-track, rgba(154, 146, 127, 0.30))';
   const ringBackground = isPerfectReadiness
-    ? `conic-gradient(${ringPrimary} 0deg, ${ringSecondary} 120deg, rgba(192, 132, 252, 0.8) 240deg, ${ringPrimary} 360deg)`
-    : `conic-gradient(${ringPrimary} 0deg, ${ringSecondary} ${ringDeg}deg, rgba(79, 99, 127, 0.22) ${ringDeg}deg 360deg)`;
-
-  const miniRingStyle: React.CSSProperties = {
-    background: ringBackground,
-    WebkitMaskImage: 'radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px))',
-    maskImage: 'radial-gradient(farthest-side, transparent calc(100% - 2.5px), #000 calc(100% - 2.5px))',
-  };
+    ? `conic-gradient(${ringPrimary} 0deg, ${ringPrimary} 360deg)`
+    : `conic-gradient(${ringPrimary} 0deg, ${ringPrimary} ${ringDeg}deg, ${trackColor} ${ringDeg}deg 360deg)`;
 
   return {
     readinessValue,
@@ -85,6 +86,5 @@ export function computeReadinessStyles(readiness: number | null): ReadinessStyle
     readinessLabelClass,
     readinessGlowColor,
     ringBackground,
-    miniRingStyle,
   };
 }
