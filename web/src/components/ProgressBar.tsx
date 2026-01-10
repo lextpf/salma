@@ -1,21 +1,38 @@
 interface ProgressBarProps {
-  progress: number // 0-100
+  progress: number
   status?: string
+  /** Color override for the fill (default: oxblood accent) */
+  color?: string
+  /** When true, overlays a sweeping shimmer to indicate active work */
+  active?: boolean
 }
 
-export default function ProgressBar({ progress, status }: ProgressBarProps) {
+export default function ProgressBar({ progress, status, color, active = true }: ProgressBarProps) {
   const clamped = Math.min(100, Math.max(0, progress))
   return (
     <div className="w-full mt-3">
-      <div className="w-full h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+      <div className="atelier-progress">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-primary via-secondary to-tertiary transition-all duration-500 ease-out shadow-[0_0_8px_-2px_rgba(56,189,248,0.4)]"
-          style={{ width: `${clamped}%` }}
+          className={`atelier-progress-fill ${active ? 'atelier-progress-sweep' : ''}`}
+          style={{
+            width: `${clamped}%`,
+            background: color || 'var(--accent)',
+          }}
         />
       </div>
-      <div className="flex justify-between mt-1.5 text-[0.75rem] text-on-surface-variant">
+      <div
+        className="flex justify-between mt-1.5"
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10.5,
+          color: 'var(--ink-3)',
+          letterSpacing: '0.04em',
+        }}
+      >
         {status && <span className="flex-1 truncate">{status}</span>}
-        <span className="font-semibold min-w-[40px] text-right tabular-nums">{Math.round(clamped)}%</span>
+        <span className="tabular-nums" style={{ minWidth: 40, textAlign: 'right' }}>
+          {Math.round(clamped)}%
+        </span>
       </div>
     </div>
   )
