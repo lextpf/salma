@@ -1,27 +1,88 @@
 import { useState, useEffect, useRef } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useTheme } from '../ThemeContext'
-import { getMo2Status } from '../api'
+import { getMo2Status, getFomodScanStatus, getTestStatus, getInstallStatus } from '../api'
+import type { Mo2Status } from '../types'
 
-const navItems = [
-  { to: '/', label: 'Install', icon: 'fa-duotone fa-solid fa-cloud-arrow-up', grad: 'icon-gradient-nebula' },
-  { to: '/fomods', label: 'FOMODs', icon: 'fa-duotone fa-solid fa-box-archive', grad: 'icon-gradient-spring' },
-  { to: '/logs', label: 'Logs', icon: 'fa-duotone fa-solid fa-terminal', grad: 'icon-gradient-ember' },
-  { to: '/settings', label: 'Settings', icon: 'fa-duotone fa-solid fa-gear', grad: 'icon-gradient-steel' },
+type EngineState = 'idle' | 'scanning' | 'testing' | 'installing'
+
+const engineLabel: Record<EngineState, { value: string; color: string; pulse: boolean }> = {
+  idle:       { value: 'ready',   color: 'var(--moss)',     pulse: false },
+  scanning:   { value: 'scan',    color: 'var(--ochre)',    pulse: true  },
+  testing:    { value: 'test',    color: 'var(--ink-blue)', pulse: true  },
+  installing: { value: 'install', color: 'var(--accent)',   pulse: true  },
+}
+
+interface NavItem {
+  to: string
+  label: string
+  num: string
+  icon: string
+  end?: boolean
+}
+
+const navItems: NavItem[] = [
+  { to: '/',         label: 'Install',  num: '01', icon: 'fa-duotone fa-solid fa-cloud-arrow-up', end: true },
+  { to: '/fomods',   label: 'FOMODs',   num: '02', icon: 'fa-duotone fa-solid fa-box-archive' },
+  { to: '/logs',     label: 'Logs',     num: '03', icon: 'fa-duotone fa-solid fa-scroll' },
+  { to: '/settings', label: 'Settings', num: '04', icon: 'fa-duotone fa-solid fa-gear' },
 ]
+
+const breadcrumbForPath: Record<string, { chapter: string; section: string; title: string }> = {
+  '/':         { chapter: '01', section: 'Atelier',   title: 'Install / Upload' },
+  '/fomods':   { chapter: '02', section: 'Library',   title: 'FOMODs / Browse' },
+  '/logs':     { chapter: '03', section: 'Stream',    title: 'Logs / Tail' },
+  '/settings': { chapter: '04', section: 'Atelier',   title: 'Settings / Config' },
+}
+
+function pad(n: number) {
+  return String(n).padStart(2, '0')
+}
+
+function formatClock(d: Date) {
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function formatElapsed(ms: number) {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  const s = sec % 60
+  if (h > 0) return `${h}h ${pad(m)}m`
+  if (m > 0) return `${m}m ${pad(s)}s`
+  return `${s}s`
+}
 
 export default function Layout() {
   const { theme, toggleTheme } = useTheme()
+  const location = useLocation()
+
+  const [status, setStatus] = useState<Mo2Status | null>(null)
   const [backendUp, setBackendUp] = useState<boolean | null>(null)
+  const [scanRunning, setScanRunning] = useState(false)
+  const [testRunning, setTestRunning] = useState(false)
+  const [installRunning, setInstallRunning] = useState(false)
+  const [now, setNow] = useState(() => new Date())
+  const [sessionStartMs] = useState(() => Date.now())
   const inFlightRef = useRef(false)
 
   useEffect(() => {
     const check = () => {
       if (inFlightRef.current) return
       inFlightRef.current = true
-      getMo2Status()
-        .then(() => setBackendUp(true))
-        .catch(() => setBackendUp(false))
+      Promise.all([
+        getMo2Status().catch(() => null),
+        getFomodScanStatus().catch(() => null),
+        getTestStatus().catch(() => null),
+        getInstallStatus().catch(() => null),
+      ])
+        .then(([s, scan, test, install]) => {
+          if (s) { setStatus(s); setBackendUp(true) }
+          else { setBackendUp(false) }
+          setScanRunning(scan?.running === true)
+          setTestRunning(test?.running === true)
+          setInstallRunning(install?.running === true)
+        })
         .finally(() => { inFlightRef.current = false })
     }
     check()
@@ -29,90 +90,191 @@ export default function Layout() {
     return () => clearInterval(id)
   }, [])
 
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const mo2On      = backendUp === true && status?.configured === true && status?.pluginInstalled === true
+  const serverOn   = backendUp === true
+  const dllLoaded  = status?.pluginInstalled === true
+
+  const engineState: EngineState =
+    installRunning ? 'installing' :
+    scanRunning    ? 'scanning'   :
+    testRunning    ? 'testing'    :
+    'idle'
+  const engine = engineLabel[engineState]
+
+  const breadcrumb =
+    breadcrumbForPath[location.pathname] ||
+    (location.pathname.startsWith('/fomods/')
+      ? { chapter: '02', section: 'Library', title: 'FOMODs / Detail' }
+      : { chapter: '01', section: 'Atelier', title: 'Install' })
+
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* Sidebar */}
-      <nav className="relative w-sidebar shrink-0 bg-gradient-to-b from-surface-container via-surface-container to-surface-dim border-r border-outline-variant/40 flex flex-col">
-        {/* Aurora accent line on right edge */}
-        <div className="sidebar-aurora-line" />
-
-        {/* Brand */}
-        <div className="px-5 pt-7 pb-5 flex items-start justify-between">
-          <div>
-            <h1 className="text-[1.7rem] font-extrabold text-gradient leading-tight tracking-tight flex items-center gap-2.5">
-              <i className="fa-duotone fa-solid fa-foot-wing icon-gradient icon-gradient-aurora text-xl" />
+      {/* ============================================================
+          SIDEBAR
+          ============================================================ */}
+      <aside
+        className="shrink-0 sticky top-0 h-screen flex flex-col"
+        style={{
+          width: 236,
+          background: 'var(--paper-2)',
+          borderRight: '1px solid var(--rule)',
+          padding: '28px 20px 24px',
+        }}
+      >
+        {/* Wordmark */}
+        <div style={{ marginBottom: 36 }}>
+          <div className="flex items-baseline" style={{ gap: 6 }}>
+            <span
+              className="display-serif-italic"
+              style={{ fontSize: 30, color: 'var(--ink)', lineHeight: 1 }}
+            >
               salma
-            </h1>
-            <p className="text-[0.6rem] uppercase tracking-[0.2em] text-outline font-semibold mt-0.5">mod installer</p>
+            </span>
+            <span
+              aria-hidden="true"
+              style={{
+                width: 5,
+                height: 5,
+                borderRadius: '50%',
+                background: 'var(--accent)',
+                marginBottom: 4,
+              }}
+            />
           </div>
-          <button
-            onClick={toggleTheme}
-            className="mt-1 p-1.5 rounded-lg text-on-surface-variant hover:text-primary transition-colors duration-150"
-            aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          <div
+            className="flex justify-between"
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 9.5,
+              letterSpacing: '0.22em',
+              textTransform: 'uppercase',
+              color: 'var(--ink-4)',
+              marginTop: 8,
+            }}
           >
-            <i className={`fa-duotone fa-solid ${theme === 'dark' ? 'fa-sun' : 'fa-moon'} text-sm`} />
-          </button>
-        </div>
-
-        {/* Divider */}
-        <div className="mx-4 mb-3 aurora-divider" />
-
-        {/* Navigation */}
-        <ul className="flex-1 px-3 space-y-0.5">
-          {navItems.map(item => (
-            <li key={item.to}>
-              <NavLink
-                to={item.to}
-                end={item.to === '/'}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[0.825rem] font-medium transition-all duration-150 border
-                   ${isActive
-                     ? 'nav-active text-primary-light border-transparent'
-                     : 'text-on-surface-variant border-transparent hover:bg-surface-container-high hover:text-on-surface hover:border-outline-variant/35'
-                   }`
-                }
-              >
-                <span className="w-5 text-center text-[0.9rem]">
-                  <i className={`${item.icon} icon-gradient ${item.grad}`} />
-                </span>
-                <span>{item.label}</span>
-              </NavLink>
-            </li>
-          ))}
-        </ul>
-
-        {/* Footer */}
-        <div className="px-4 py-4">
-          <div className="aurora-divider mb-3" />
-          <div className="flex items-center gap-2 text-[0.625rem] text-outline">
-            {backendUp === null ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-outline/40" />
-                <span className="text-outline font-medium">Checking...</span>
-              </>
-            ) : backendUp ? (
-              <>
-                <span
-                  className="w-2 h-2 rounded-full shadow-[0_0_6px_2px_rgba(34,197,94,0.45)]"
-                  style={{ background: 'conic-gradient(rgba(34,197,94,0.9) 0deg, rgba(52,211,153,0.85) 180deg, rgba(34,197,94,0.9) 360deg)' }}
-                />
-                <span className="text-success font-medium">Connected</span>
-              </>
-            ) : (
-              <>
-                <span className="w-2 h-2 rounded-full bg-error shadow-[0_0_6px_2px_rgba(239,68,68,0.45)]" />
-                <span className="text-error font-medium">Disconnected</span>
-              </>
-            )}
-            <span className="text-outline/60">-</span>
-            <span>v1.0.0</span>
+            <span>mod installer</span>
+            <span style={{ color: 'var(--ink-3)' }}>v1.1.0</span>
           </div>
         </div>
-      </nav>
 
-      {/* Main content - static aurora gradient bg, no animations */}
-      <main className="flex-1 overflow-y-auto aurora-bg">
-        <div className="content-shell mx-auto px-8 py-8">
+        {/* Hairline divider with oxblood dot at left */}
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'relative',
+            height: 1,
+            background: 'var(--rule)',
+            marginBottom: 28,
+          }}
+        >
+          <span
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: -2,
+              width: 5,
+              height: 5,
+              background: 'var(--accent)',
+              borderRadius: '50%',
+            }}
+          />
+        </div>
+
+        {/* Nav */}
+        <nav className="flex flex-col" style={{ gap: 2 }}>
+          {navItems.map(item => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                `nav-rail-item${isActive ? ' nav-rail-item-active' : ''}`
+              }
+            >
+              <span className="nav-rail-num">{item.num}</span>
+              <span className="nav-rail-icon">
+                <i className={item.icon} style={{ fontSize: 15 }} />
+              </span>
+              <span className="nav-rail-label">{item.label}</span>
+              {item.to === '/fomods' && status && status.jsonCount > 0 ? (
+                <span className="nav-rail-count tabular-nums">{status.jsonCount}</span>
+              ) : null}
+            </NavLink>
+          ))}
+        </nav>
+
+        {/* Flex spacer */}
+        <div style={{ flex: 1 }} />
+
+        {/* System status block */}
+        <div
+          style={{
+            padding: '14px 0',
+            borderTop: '1px solid var(--rule-soft)',
+            marginBottom: 12,
+          }}
+        >
+          <div className="ui-label" style={{ marginBottom: 10, fontSize: 9.5 }}>
+            System
+          </div>
+          <StatRow label="mo2"    value={mo2On     ? 'connected' : (backendUp === false ? 'offline' : 'checking')} on={mo2On} />
+          <StatRow label="server" value={serverOn  ? ':5000'     : 'down'}                                          on={serverOn} />
+          <StatRow label="dll"    value={dllLoaded ? 'loaded'    : 'missing'}                                       on={dllLoaded} />
+          <StatRow label="session" value={formatElapsed(now.getTime() - sessionStartMs)}                            on neutral />
+          <StatRow label="engine"  value={engine.value} on dotColor={engine.color} pulse={engine.pulse} />
+        </div>
+
+        {/* Theme toggle */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '10px 12px',
+            border: '1px solid var(--rule)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--card-2)',
+            transition: 'border-color 150ms ease, background-color 150ms ease',
+            cursor: 'pointer',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--ink-4)' }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--rule)' }}
+        >
+          <span
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 10.5,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              color: 'var(--ink-3)',
+            }}
+          >
+            {theme === 'dark' ? 'Dark' : 'Light'}
+          </span>
+          <i
+            className={`fa-duotone fa-solid ${theme === 'dark' ? 'fa-moon' : 'fa-sun'}`}
+            style={{ fontSize: 14, color: 'var(--ink-3)' }}
+          />
+        </button>
+      </aside>
+
+      {/* ============================================================
+          MAIN — breadcrumb + page outlet
+          ============================================================ */}
+      <main className="flex-1 overflow-y-auto" style={{ background: 'var(--paper)' }}>
+        <div
+          className="content-shell mx-auto"
+          style={{ maxWidth: 1180, width: '100%', padding: '28px 44px 48px' }}
+        >
+          <TopBar breadcrumb={breadcrumb} clock={formatClock(now)} />
           <Outlet />
         </div>
       </main>
@@ -120,3 +282,114 @@ export default function Layout() {
   )
 }
 
+/* ================================================================
+   Sidebar StatRow
+   ================================================================ */
+function StatRow({
+  label,
+  value,
+  on,
+  neutral,
+  dotColor,
+  pulse,
+}: {
+  label: string
+  value: string
+  on: boolean
+  neutral?: boolean
+  dotColor?: string
+  pulse?: boolean
+}) {
+  const baseClass = neutral
+    ? 'dot-status'
+    : on
+      ? 'dot-status dot-status-on'
+      : 'dot-status dot-status-off'
+  const customDot = dotColor
+    ? {
+        background: dotColor,
+        boxShadow: `0 0 0 3px ${
+          dotColor === 'var(--moss)'     ? 'rgba(61, 122, 61, 0.12)' :
+          dotColor === 'var(--ochre)'    ? 'rgba(166, 122, 42, 0.12)' :
+          dotColor === 'var(--ink-blue)' ? 'rgba(42, 58, 90, 0.14)' :
+          dotColor === 'var(--accent)'   ? 'rgba(138, 42, 31, 0.14)' :
+          'transparent'
+        }`,
+      }
+    : undefined
+  return (
+    <div className="stat-row">
+      <span style={{ letterSpacing: '0.04em' }}>{label}</span>
+      <span className="stat-row-value">
+        <span>{value}</span>
+        <span
+          className={`${baseClass}${pulse ? ' dot-status-pulse' : ''}`}
+          style={customDot}
+        />
+      </span>
+    </div>
+  )
+}
+
+/* ================================================================
+   TopBar — breadcrumb + clock + Docs button
+   ================================================================ */
+function TopBar({
+  breadcrumb,
+  clock,
+}: {
+  breadcrumb: { chapter: string; section: string; title: string }
+  clock: string
+}) {
+  return (
+    <div
+      className="flex items-center justify-between"
+      style={{ marginBottom: 36, paddingBottom: 14 }}
+    >
+      <div
+        className="flex items-center"
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10,
+          letterSpacing: '0.2em',
+          textTransform: 'uppercase',
+          color: 'var(--ink-4)',
+          gap: 14,
+        }}
+      >
+        <span style={{ color: 'var(--ink-3)' }}>
+          <span style={{ color: 'var(--accent)', fontStyle: 'italic' }}>{breadcrumb.chapter}</span>
+          {' / '}
+          {breadcrumb.section}
+        </span>
+        <span style={{ color: 'var(--ink-5)' }}>—</span>
+        <span>{breadcrumb.title}</span>
+      </div>
+      <div className="flex items-center" style={{ gap: 18 }}>
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--ink-4)' }}>
+          <span style={{ color: 'var(--ink-5)' }}>t.</span> {clock}
+        </span>
+        <span aria-hidden="true" style={{ width: 1, height: 14, background: 'var(--rule)' }} />
+        <a
+          href="https://github.com/lextpf/salma"
+          target="_blank"
+          rel="noreferrer"
+          className="tool-btn"
+          style={{ padding: '6px 10px', fontSize: 10 }}
+        >
+          <i className="fa-duotone fa-solid fa-book-open-cover" style={{ fontSize: 12 }} />
+          <span
+            style={{
+              fontFamily: 'var(--font-mono)',
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              color: 'var(--ink-2)',
+            }}
+          >
+            Docs
+          </span>
+        </a>
+      </div>
+    </div>
+  )
+}
