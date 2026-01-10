@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { listFomods, deleteFomod, isFetchUnavailableError } from '../api'
 import FomodListItem from '../components/FomodListItem'
+import Section from '../components/Section'
 import type { FomodEntry } from '../types'
 
 const RETRY_DELAY_MS = 2000
@@ -75,109 +76,252 @@ export default function FomodBrowserPage() {
   )
 
   return (
-    <div className="fomods-page animate-fade-in h-[calc(100vh-4rem)] flex flex-col overflow-hidden">
-      <header className="page-header page-header-fomods mb-6 flex items-end justify-between shrink-0">
-        <div>
-          <h1 className="page-title text-2xl font-bold text-on-surface flex items-center gap-3">
-            <span className="inline-flex w-6 shrink-0 items-center justify-center">
-              <i className="fa-duotone fa-solid fa-box-archive icon-gradient icon-gradient-spring text-2xl" />
-            </span>
-            FOMODs
-          </h1>
-          <p className="page-subtitle mt-1 pl-9 text-sm">Browse inferred FOMOD selection JSONs</p>
-        </div>
-        {!loading && (
-          <span className="text-xs text-on-surface-variant tabular-nums">
-            <span className="font-bold text-primary">{filtered.length}</span>
-            <span className="mx-0.5">/</span>
-            {fomods.length}
+    <div className="page-fill">
+      {/* Header */}
+      <header style={{ marginBottom: 28, flexShrink: 0 }}>
+        <p
+          className="reveal reveal-delay-1"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 10,
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            letterSpacing: '0.18em',
+            textTransform: 'uppercase',
+            color: 'var(--ink-3)',
+            marginBottom: 18,
+          }}
+        >
+          <span
+            className="display-serif-italic"
+            style={{ fontSize: 12, color: 'var(--accent)', textTransform: 'none' }}
+          >
+            02.
           </span>
-        )}
-      </header>
+          <span>§ Parsed FOMOD library</span>
+        </p>
 
-      {/* Search */}
-      {loading ? (
-        <div className="mb-5 shrink-0">
-          <div className="skeleton-line h-[2.625rem] w-full rounded-xl" />
-        </div>
-      ) : (
-        <div className="relative mb-5 shrink-0">
-          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-outline text-xs pointer-events-none">
-            <i className="fa-duotone fa-solid fa-magnifying-glass" />
-          </span>
-          <input
-            type="text"
-            placeholder="Search mods..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full pl-10 pr-9 py-2.5 rounded-xl border border-outline-variant/40 bg-surface-container
-                       text-sm text-on-surface placeholder:text-outline focus:outline-none focus:border-primary/40
-                       focus:bg-surface-container-high focus:shadow-[0_0_20px_-8px_rgba(56,189,248,0.12)] transition-all"
-          />
-          {search && (
-            <button
-              onClick={() => setSearch('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface transition-colors"
-            >
-              <i className="fa-duotone fa-solid fa-circle-xmark text-sm" />
-            </button>
+        <div className="flex items-end reveal reveal-delay-2" style={{ gap: 20, flexWrap: 'wrap' }}>
+          <h1
+            className="display-serif"
+            style={{ fontSize: 92, lineHeight: 0.92, color: 'var(--ink)', margin: 0 }}
+          >
+            FOMODs<span style={{ color: 'var(--accent)' }}>.</span>
+          </h1>
+          {!loading && (
+            <span style={{ marginBottom: 16 }}>
+              <span
+                className="display-serif tabular-nums"
+                style={{ fontSize: 26, color: 'var(--ink)', letterSpacing: '-0.02em' }}
+              >
+                {filtered.length}
+              </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  color: 'var(--ink-4)',
+                  marginLeft: 6,
+                  letterSpacing: '0.04em',
+                }}
+              >
+                / {fomods.length} entries
+              </span>
+            </span>
           )}
         </div>
-      )}
+
+        <p
+          className="reveal reveal-delay-3 display-serif-italic"
+          style={{
+            margin: '18px 0 0',
+            fontSize: 15,
+            color: 'var(--ink-3)',
+            maxWidth: 620,
+            lineHeight: 1.55,
+          }}
+        >
+          Browse the inferred FOMOD selection JSONs that salma has parsed from your installed mods. Click an entry to inspect its installation steps.
+        </p>
+      </header>
 
       {deleteError && (
-        <div className="mb-3 shrink-0 rounded-xl border border-error/15 bg-error/5 px-4 py-2.5 text-xs text-error-light flex items-center gap-2">
-          <i className="fa-duotone fa-solid fa-circle-exclamation duo-error" />
-          <span className="flex-1">{deleteError}</span>
-          <button onClick={() => setDeleteError(null)} className="text-error/60 hover:text-error transition-colors">
+        <div
+          className="reveal"
+          style={{
+            marginBottom: 16,
+            padding: '10px 14px',
+            background: 'var(--paper-3)',
+            border: '1px solid var(--rule)',
+            borderRadius: 'var(--radius-sm)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            flexShrink: 0,
+          }}
+        >
+          <span className="dot-status dot-status-error" />
+          <span style={{ flex: 1, fontSize: 12, color: 'var(--accent)' }}>{deleteError}</span>
+          <button
+            onClick={() => setDeleteError(null)}
+            type="button"
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--ink-4)',
+              cursor: 'pointer',
+              padding: 4,
+            }}
+          >
             <i className="fa-duotone fa-solid fa-xmark" />
           </button>
         </div>
       )}
 
-      {loading ? (
-        <div className="flex-1 min-h-0 py-2 px-2">
-          <div className="flex flex-col gap-2.5">
-            {[0, 1, 2].map(i => (
-              <div key={i} className="rounded-xl border border-outline-variant/30 bg-surface-container/35 p-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-lg skeleton-line" />
-                  <div className="flex-1">
-                    <div className="skeleton-line h-3.5 w-40 mb-2" />
-                    <div className="skeleton-line h-3 w-28" />
+      <Section
+          n="01"
+          label="Library"
+          title="Browse FOMODs"
+          corner="01"
+          bodyPadding="none"
+          className="atelier-section-fill reveal reveal-delay-4"
+          meta={
+            <div style={{ position: 'relative', minWidth: 240 }}>
+              <i
+                className="fa-duotone fa-solid fa-magnifying-glass"
+                style={{
+                  position: 'absolute',
+                  left: 10,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  fontSize: 12,
+                  color: 'var(--ink-4)',
+                  pointerEvents: 'none',
+                }}
+              />
+              <input
+                type="text"
+                placeholder="Search mods..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '6px 28px 6px 28px',
+                  border: '1px solid var(--rule)',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'var(--card)',
+                  fontFamily: 'var(--font-body)',
+                  fontSize: 12.5,
+                  color: 'var(--ink)',
+                  outline: 'none',
+                  letterSpacing: '-0.005em',
+                }}
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  style={{
+                    position: 'absolute',
+                    right: 8,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    border: 'none',
+                    background: 'transparent',
+                    color: 'var(--ink-4)',
+                    cursor: 'pointer',
+                    padding: 2,
+                  }}
+                >
+                  <i className="fa-duotone fa-solid fa-circle-xmark" style={{ fontSize: 12 }} />
+                </button>
+              )}
+            </div>
+          }
+        >
+          <div className="scroll-pane" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+            {loading ? (
+              <div style={{ padding: 24 }}>
+                {[0, 1, 2, 3].map(i => (
+                  <div
+                    key={i}
+                    className="grid"
+                    style={{
+                      gridTemplateColumns: '32px 1fr 110px 90px 100px 28px 24px',
+                      gap: 16,
+                      padding: '14px 0',
+                      borderBottom: '1px solid var(--rule-soft)',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <div className="skeleton-line" style={{ width: 28, height: 28, borderRadius: 'var(--radius-sm)' }} />
+                    <div className="skeleton-line" style={{ height: 12 }} />
+                    <div className="skeleton-line" style={{ width: 80, height: 10 }} />
+                    <div className="skeleton-line" style={{ width: 60, height: 10 }} />
+                    <div className="skeleton-line" style={{ width: 80, height: 10 }} />
+                    <div />
+                    <div />
+                  </div>
+                ))}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div style={{ padding: 28 }}>
+                <div className="empty-state-card">
+                  <div
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: '50%',
+                      border: '1px solid var(--rule-strong)',
+                      background: 'var(--paper-3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: 'var(--ink-3)',
+                      flexShrink: 0,
+                    }}
+                  >
+                    <i className="fa-duotone fa-solid fa-folder-open" style={{ fontSize: 14 }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <p
+                      className="display-serif-italic"
+                      style={{ fontSize: 18, color: 'var(--ink)', lineHeight: 1.2 }}
+                    >
+                      {fomods.length === 0 ? 'No FOMOD JSONs found' : 'No matches'}
+                      <span className="display-period">.</span>
+                    </p>
+                    <p className="timestamp-print" style={{ marginTop: 4 }}>
+                      {fomods.length === 0 ? (
+                        <>
+                          // configure mo2 path in{' '}
+                          <Link to="/settings" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>
+                            settings
+                          </Link>
+                          , then run a scan
+                        </>
+                      ) : (
+                        <>// no entries match "{search}"</>
+                      )}
+                    </p>
                   </div>
                 </div>
               </div>
-            ))}
+            ) : (
+              <div>
+                {filtered.map(f => (
+                  <FomodListItem
+                    key={f.name}
+                    fomod={f}
+                    onDelete={handleDelete}
+                    disabled={deletingName !== null}
+                  />
+                ))}
+              </div>
+            )}
           </div>
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="flex-1 min-h-0 py-10">
-          <div className="empty-state-card">
-            <div className="w-9 h-9 rounded-xl bg-surface-container-high/60 border border-outline-variant/25 flex items-center justify-center shadow-elevation-1">
-              <i className="fa-duotone fa-solid fa-box-open icon-gradient icon-gradient-steel icon-sm" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-sm text-on-surface">
-                {fomods.length === 0 ? 'No FOMOD JSONs found.' : 'No results match your search.'}
-              </p>
-              {fomods.length === 0 && (
-                <p className="ui-micro mt-1">
-                  Configure MO2 path in <Link to="/settings" className="text-primary hover:underline underline-offset-2">Settings</Link>.
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="flex-1 min-h-0 overflow-y-auto scroll-pane px-3">
-          <div className="flex flex-col gap-2 pb-3">
-            {filtered.map(f => (
-              <FomodListItem key={f.name} fomod={f} onDelete={handleDelete} disabled={deletingName !== null} />
-            ))}
-          </div>
-        </div>
-      )}
+        </Section>
     </div>
   )
 }
