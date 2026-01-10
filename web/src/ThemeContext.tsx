@@ -3,14 +3,14 @@ import { createContext, useContext, useState, useEffect, type ReactNode } from '
 type Theme = 'dark' | 'light'
 
 const ThemeContext = createContext<{ theme: Theme; toggleTheme: () => void }>({
-  theme: 'dark',
+  theme: 'light',
   toggleTheme: () => {},
 })
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() => {
     const stored = localStorage.getItem('salma-theme')
-    return stored === 'light' ? 'light' : 'dark'
+    return stored === 'dark' ? 'dark' : 'light'
   })
 
   useEffect(() => {
