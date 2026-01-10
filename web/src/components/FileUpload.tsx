@@ -5,94 +5,159 @@ interface FileUploadProps {
   disabled?: boolean
 }
 
+const SUPPORTED_FORMATS: { ext: string; color: string }[] = [
+  { ext: '.7z',    color: 'var(--accent)' },
+  { ext: '.zip',   color: 'var(--ink-blue)' },
+  { ext: '.rar',   color: 'var(--ochre)' },
+  { ext: '.fomod', color: 'var(--moss)' },
+  { ext: '.tar',   color: 'var(--ink-2)' },
+]
+
 export default function FileUpload({ onFileSelect, disabled = false }: FileUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (disabled) return
-    if (e.target.files && e.target.files.length > 0) {
-      onFileSelect(e.target.files)
-    }
+    if (e.target.files && e.target.files.length > 0) onFileSelect(e.target.files)
   }
-
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
-    if (disabled) return
-    setIsDragging(true)
+    if (!disabled) setIsDragging(true)
   }
-
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault()
-    if (disabled) return
-    setIsDragging(false)
+    if (!disabled) setIsDragging(false)
   }
-
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     if (disabled) return
     setIsDragging(false)
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      onFileSelect(e.dataTransfer.files)
-    }
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) onFileSelect(e.dataTransfer.files)
   }
 
   return (
     <div
-      className={`group relative rounded-2xl p-8 text-center
-        transition-colors duration-200 overflow-hidden upload-border
-        ${disabled
-          ? 'cursor-not-allowed bg-surface-container-high/55 border-outline-variant/55 opacity-90'
-          : 'cursor-pointer'
-        }
-        ${isDragging && !disabled
-          ? 'upload-border-active bg-primary/[0.04]'
-          : (disabled ? '' : 'hover:bg-primary/[0.02]')
-        }`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onClick={() => { if (!disabled) fileInputRef.current?.click() }}
+      style={{
+        padding: '32px 28px',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        background: 'transparent',
+        opacity: disabled ? 0.7 : 1,
+      }}
     >
-      {/* Static aurora gradient bg */}
-      <div className="absolute inset-0 bg-gradient-to-br from-primary/[0.035] via-transparent to-primary/[0.02] pointer-events-none" />
-      {disabled && <div className="absolute inset-0 rounded-2xl bg-surface-container-highest/[0.25] pointer-events-none" />}
-      <div className="absolute inset-0 pointer-events-none rounded-2xl border border-outline-variant/20" />
-      <div className="absolute inset-0 pointer-events-none rounded-2xl upload-corner-soften" />
-
       <input
         ref={fileInputRef}
         type="file"
         multiple
-        accept=".001,.7z,.fomod,.zip,.rar,.json"
+        accept=".001,.7z,.fomod,.zip,.rar,.tar,.gz,.bz2,.xz,.json"
         onChange={handleFileChange}
         disabled={disabled}
         className="hidden"
       />
-      <div className="relative flex flex-col items-center gap-3">
-        <div className={`rounded-2xl p-4 border shadow-elevation-1 ${
-          disabled
-            ? 'bg-surface-container-high border-outline-variant/40'
-            : 'bg-gradient-to-br from-primary/14 to-primary/7 border-outline-variant/20'
-        }`}>
-          <i className={`fa-duotone fa-solid ${
-            disabled
-              ? 'fa-lock text-error/70'
-              : (isDragging ? 'fa-box-open text-primary' : 'fa-conveyor-belt-boxes')
-          } text-3xl ${disabled ? '' : `icon-gradient ${isDragging ? 'icon-gradient-atlas' : 'icon-gradient-nebula'}`}`} />
+
+      <div
+        className="empty-state-card"
+        style={{
+          background: isDragging ? 'var(--paper-2)' : 'var(--card-2)',
+          borderColor: isDragging ? 'var(--accent)' : undefined,
+          gap: 18,
+          transition: 'background-color 200ms ease, border-color 200ms ease',
+        }}
+      >
+        {/* Feather icon in oxblood circle */}
+        <div
+          style={{
+            width: 38,
+            height: 38,
+            border: '1px solid var(--rule-strong)',
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'var(--paper-2)',
+            color: disabled ? 'var(--ink-4)' : 'var(--accent)',
+            transform: isDragging ? 'scale(1.05) rotate(-6deg)' : 'scale(1) rotate(0)',
+            transition: 'transform 300ms cubic-bezier(0.21, 0.9, 0.3, 1)',
+            flexShrink: 0,
+          }}
+        >
+          <i
+            className={`fa-duotone fa-solid ${disabled ? 'fa-lock' : isDragging ? 'fa-wand-magic-sparkles' : 'fa-feather-pointed'}`}
+            style={{ fontSize: 16 }}
+          />
         </div>
-        <div>
-          <p className={`text-[1.02rem] font-semibold tracking-tight ${disabled ? 'text-error/75' : 'text-on-surface'}`}>
-            {disabled ? 'Upload disabled until MO2 plugin is deployed' : (isDragging ? 'Drop files here' : 'Click or drag files to upload')}
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Headline */}
+          <p
+            className="display-serif-italic"
+            style={{
+              fontSize: 22,
+              lineHeight: 1.15,
+              color: 'var(--ink)',
+              margin: 0,
+            }}
+          >
+            {disabled ? (
+              <>Upload<span className="display-period">.</span> locked</>
+            ) : isDragging ? (
+              <>Drop it here<span className="display-period">.</span></>
+            ) : (
+              <>Click or drag to install<span className="display-period">.</span></>
+            )}
           </p>
-          <p className={`text-sm mt-1.5 ${disabled ? 'text-on-surface-variant/80' : 'text-on-surface-variant'}`}>
-            Supports
-            {' '}<span className={disabled ? 'text-on-surface-variant/80 font-semibold' : 'text-primary font-semibold'}>.7z</span>,
-            {' '}<span className={disabled ? 'text-on-surface-variant/80 font-semibold' : 'text-secondary font-semibold'}>.zip</span>,
-            {' '}<span className={disabled ? 'text-on-surface-variant/80 font-semibold' : 'text-warning font-semibold'}>.rar</span>,
-            {' '}<span className={disabled ? 'text-on-surface-variant/80 font-semibold' : 'text-tertiary font-semibold'}>.fomod</span>,
-            {' '}and <span className={disabled ? 'text-on-surface-variant/80 font-semibold' : 'text-info font-semibold'}>.json</span> files
-          </p>
+
+          {/* Format list — plain colored mono text per type */}
+          {!disabled ? (
+            <div className="flex items-baseline" style={{ gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  letterSpacing: '0.04em',
+                  color: 'var(--ink-4)',
+                }}
+              >
+                // supports
+              </span>
+              <span
+                className="flex items-baseline"
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  letterSpacing: '0.04em',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                }}
+              >
+                {SUPPORTED_FORMATS.map(f => (
+                  <span key={f.ext} style={{ color: f.color, fontWeight: 500 }}>{f.ext}</span>
+                ))}
+              </span>
+              <span style={{ color: 'var(--ink-5)' }}>·</span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  letterSpacing: '0.04em',
+                  color: 'var(--ink-blue)',
+                }}
+              >
+                browse →
+              </span>
+            </div>
+          ) : (
+            <p
+              className="timestamp-print"
+              style={{ marginTop: 4, color: 'var(--ink-4)' }}
+            >
+              // deploy the MO2 plugin to unlock uploads
+            </p>
+          )}
         </div>
       </div>
     </div>
