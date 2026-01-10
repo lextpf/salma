@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import { getLogs, getTestLogs, clearLogs } from '../api'
 import { isProgressLine, parseProgressBars, highlightRawBar, renderTqdmBar, TqdmBar } from '../utils/progressBarParsing'
 import { LogLine } from '../components/LogLine'
+import Section from '../components/Section'
 import { useVirtualScroll, LINE_HEIGHT } from '../hooks/useVirtualScroll'
 
 const LINE_OPTIONS = [50, 100, 200, 500, 1000, 0] as const
@@ -13,7 +14,6 @@ export default function LogsPage() {
   const [lines, setLines] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [autoRefresh, setAutoRefresh] = useState(true)
-  const [heartBeatTick, setHeartBeatTick] = useState(0)
   const [lineCount, setLineCount] = useState(1000)
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const [clearing, setClearing] = useState(false)
@@ -48,7 +48,6 @@ export default function LogsPage() {
     }, RETRY_DELAY_MS)
   }
 
-  // Close dropdown on outside click
   useEffect(() => {
     if (!dropdownOpen) return
     const handler = (e: MouseEvent) => {
@@ -60,8 +59,6 @@ export default function LogsPage() {
     return () => document.removeEventListener('mousedown', handler)
   }, [dropdownOpen])
 
-  // Full load: fetches last N lines, replaces state entirely.
-  // Returns a promise so callers can chain after completion.
   const loadFull = useCallback((showBusy = false) => {
     if (showBusy) setLoading(true)
     refreshBusyRef.current = true
@@ -76,7 +73,6 @@ export default function LogsPage() {
         offsetRef.current = data.nextOffset
         setLoading(false)
         clearRetryTimer()
-        setHeartBeatTick(t => t + 1)
       })
       .catch(e => {
         if (abortRef.current?.signal.aborted) return
@@ -87,12 +83,9 @@ export default function LogsPage() {
       .finally(() => {
         refreshBusyRef.current = false
       })
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- uses refs for all mutable state
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Incremental load: fetches only new lines since last offset.
-  // Returns a promise that resolves when the fetch completes, so the
-  // polling loop can chain the next setTimeout off it.
   const loadIncremental = useCallback((): Promise<void> => {
     if (offsetRef.current == null) return loadFull()
     const currentSource = sourceRef.current
@@ -102,7 +95,6 @@ export default function LogsPage() {
       .then(data => {
         if (abortRef.current?.signal.aborted) return
         if (data.reset) {
-          // Log was cleared/rotated - do a full reload
           offsetRef.current = undefined
           setLogStats({ errors: 0, warnings: 0, passes: 0 })
           cachedScanBarRef.current = null
@@ -114,20 +106,18 @@ export default function LogsPage() {
         if (data.lines.length > 0) {
           setLines(prev => {
             const combined = [...prev, ...data.lines]
-            // If lineCount is set (not "all"), trim from front
             if (currentLineCount > 0 && combined.length > currentLineCount) {
               return combined.slice(combined.length - currentLineCount)
             }
             return combined
           })
           setLogStats(prev => ({
-            errors: prev.errors + (data.errors ?? 0),
+            errors:   prev.errors   + (data.errors ?? 0),
             warnings: prev.warnings + (data.warnings ?? 0),
-            passes: prev.passes + (data.passes ?? 0),
+            passes:   prev.passes   + (data.passes ?? 0),
           }))
         }
         clearRetryTimer()
-        setHeartBeatTick(t => t + 1)
       })
       .catch(e => {
         if (abortRef.current?.signal.aborted) return
@@ -135,7 +125,6 @@ export default function LogsPage() {
       })
   }, [loadFull])
 
-  // Reset offset when source or lineCount changes
   useEffect(() => {
     if (abortRef.current) abortRef.current.abort()
     abortRef.current = new AbortController()
@@ -149,20 +138,15 @@ export default function LogsPage() {
     }
   }, [lineCount, source, loadFull, resetScroll])
 
-  // Auto-refresh: self-scheduling setTimeout ensures the next poll only
-  // starts after the previous one completes, preventing overlap and the
-  // stale inFlightRef races that setInterval + a shared guard caused.
   useEffect(() => {
     if (!autoRefresh) return
     let active = true
     let tid: ReturnType<typeof setTimeout>
-
     const poll = () => {
       loadIncremental().finally(() => {
         if (active) tid = setTimeout(poll, 1000)
       })
     }
-
     tid = setTimeout(poll, 1000)
     return () => { active = false; clearTimeout(tid) }
   }, [autoRefresh, loadIncremental])
@@ -171,7 +155,7 @@ export default function LogsPage() {
     if (!isAtBottomRef.current) return
     const el = scrollEl.current
     if (el) el.scrollTop = el.scrollHeight
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- isAtBottomRef is a stable ref
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lines, scrollEl])
 
   useEffect(() => clearRetryTimer, [])
@@ -220,205 +204,339 @@ export default function LogsPage() {
   const startIdx = getStartIdx(totalFiltered)
   const endIdx = getEndIdx(totalFiltered)
 
-  return (
-    <div className="animate-fade-in">
-      <header className="page-header page-header-logs mb-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="page-title text-2xl font-bold text-on-surface flex items-center gap-3 shrink-0">
-            <span className="inline-flex w-6 shrink-0 items-center justify-center">
-              <i className="fa-duotone fa-solid fa-terminal icon-gradient icon-gradient-ember text-2xl" />
-            </span>
-            Logs
-          </h1>
-        </div>
+  const sectionTitle = source === 'salma' ? 'salma.log' : 'test.log'
 
-        <p className="page-subtitle mt-1 text-sm ml-9 flex flex-wrap items-center gap-1.5">
-          <span>Inspect logs in real time</span>
-          <button
-            type="button"
-            onClick={() => setSource('salma')}
-            className={`text-xs transition-colors underline-offset-2 ${
-              source === 'salma'
-                ? 'text-primary underline'
-                : 'text-on-surface-variant hover:text-primary'
-            }`}
-            aria-pressed={source === 'salma'}
+  return (
+    <div className="page-fill">
+      <header style={{ marginBottom: 20, flexShrink: 0 }}>
+        <p
+          className="reveal reveal-delay-1"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 10,
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            letterSpacing: '0.18em',
+            textTransform: 'uppercase',
+            color: 'var(--ink-3)',
+            marginBottom: 10,
+          }}
+        >
+          <span
+            className="display-serif-italic"
+            style={{ fontSize: 12, color: 'var(--accent)', textTransform: 'none' }}
           >
+            03.
+          </span>
+          <span>§ Stream</span>
+        </p>
+
+        <div className="flex items-end reveal reveal-delay-2" style={{ gap: 20, flexWrap: 'wrap' }}>
+          <h1
+            className="display-serif"
+            style={{ fontSize: 72, lineHeight: 0.92, color: 'var(--ink)', margin: 0 }}
+          >
+            Logs<span style={{ color: 'var(--accent)' }}>.</span>
+          </h1>
+          {!loading && (
+            <span style={{ marginBottom: 10 }}>
+              <span
+                className="display-serif tabular-nums"
+                style={{ fontSize: 24, color: 'var(--ink)', letterSpacing: '-0.02em' }}
+              >
+                {lines.length}
+              </span>
+              <span
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 11,
+                  color: 'var(--ink-4)',
+                  marginLeft: 6,
+                  letterSpacing: '0.04em',
+                }}
+              >
+                lines
+              </span>
+            </span>
+          )}
+        </div>
+        <p
+          className="reveal reveal-delay-3 display-serif-italic"
+          style={{
+            margin: '14px 0 0',
+            fontSize: 14,
+            color: 'var(--ink-3)',
+            maxWidth: 620,
+            lineHeight: 1.5,
+          }}
+        >
+          Tailing the live{' '}
+          <SourceSwitch active={source === 'salma'} onClick={() => setSource('salma')}>
             salma.log
-          </button>
-          <span className="text-outline/70">|</span>
-          <button
-            type="button"
-            onClick={() => setSource('test')}
-            className={`text-xs transition-colors underline-offset-2 ${
-              source === 'test'
-                ? 'text-primary underline'
-                : 'text-on-surface-variant hover:text-primary'
-            }`}
-            aria-pressed={source === 'test'}
-          >
+          </SourceSwitch>
+          <span style={{ margin: '0 8px', color: 'var(--ink-5)' }}>·</span>
+          <SourceSwitch active={source === 'test'} onClick={() => setSource('test')}>
             test.log
-          </button>
+          </SourceSwitch>{' '}
+          stream — pause to inspect.
         </p>
       </header>
 
-      {loading ? (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <div className="skeleton-line h-[1.875rem] w-20 rounded-lg" />
-          <div className="skeleton-line h-[1.875rem] w-20 rounded-lg" />
-          <div className="skeleton-line h-[1.875rem] w-20 rounded-lg" />
-        </div>
-      ) : (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setDropdownOpen(o => !o)}
-              className="rounded-lg border border-outline-variant/60 bg-surface-container px-3 py-1.5 text-xs text-on-surface
-                         hover:bg-surface-container-high hover:border-primary/40 transition-all flex items-center gap-2"
-            >
-              <span className="tabular-nums font-medium">{lineCount === 0 ? 'All' : lineCount}</span>
-              <span className="text-on-surface-variant">lines</span>
-              <i className={`fa-duotone fa-solid fa-chevron-down text-[0.5rem] text-outline transition-transform duration-200 ${dropdownOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {dropdownOpen && (
-              <div className="absolute left-0 top-full mt-1.5 py-1.5 rounded-xl overflow-hidden bg-surface-container-high border border-outline-variant/40 shadow-elevation-3 z-50 min-w-[7rem] animate-fade-in">
-                {LINE_OPTIONS.map(n => (
-                  <button
-                    key={n}
-                    onClick={() => { setLineCount(n); setDropdownOpen(false) }}
-                    className={`w-full text-left px-3.5 py-2 text-xs transition-colors flex items-center justify-between
-                      ${n === lineCount
-                        ? 'text-primary bg-primary/8 font-medium'
-                        : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-highest'
-                      }`}
+      <Section
+        n="01"
+        label="Stream"
+        title={sectionTitle}
+        corner="01"
+        bodyPadding="none"
+        className="atelier-section-fill reveal reveal-delay-4"
+        meta={
+            <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
+              {/* Line count dropdown */}
+              <div style={{ position: 'relative' }} ref={dropdownRef}>
+                <button
+                  type="button"
+                  onClick={() => setDropdownOpen(o => !o)}
+                  className="tool-btn"
+                  style={{ padding: '6px 10px', fontSize: 11 }}
+                >
+                  <span className="tabular-nums" style={{ color: 'var(--ink-2)' }}>
+                    {lineCount === 0 ? 'all' : lineCount}
+                  </span>
+                  <span style={{ color: 'var(--ink-4)', fontFamily: 'var(--font-mono)' }}>lines</span>
+                  <i
+                    className={`fa-duotone fa-solid fa-angle-down ${dropdownOpen ? 'fa-rotate-180' : ''}`}
+                    style={{ fontSize: 9 }}
+                  />
+                </button>
+                {dropdownOpen && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      right: 0,
+                      top: 'calc(100% + 4px)',
+                      minWidth: 100,
+                      padding: '4px 0',
+                      background: 'var(--card)',
+                      border: '1px solid var(--rule)',
+                      borderRadius: 'var(--radius-sm)',
+                      boxShadow: 'var(--shadow-elevation-2)',
+                      zIndex: 50,
+                    }}
                   >
-                    <span className="tabular-nums">{n === 0 ? 'All' : n}</span>
-                    {n === lineCount && <i className="fa-duotone fa-solid fa-check text-[0.55rem] text-primary" />}
-                  </button>
+                    {LINE_OPTIONS.map(n => (
+                      <button
+                        key={n}
+                        type="button"
+                        onClick={() => { setLineCount(n); setDropdownOpen(false) }}
+                        style={{
+                          width: '100%',
+                          padding: '6px 12px',
+                          fontSize: 11,
+                          fontFamily: 'var(--font-mono)',
+                          background: n === lineCount ? 'var(--paper-3)' : 'transparent',
+                          color: n === lineCount ? 'var(--accent)' : 'var(--ink-2)',
+                          border: 'none',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          letterSpacing: '0.04em',
+                        }}
+                      >
+                        {n === 0 ? 'all' : n}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setAutoRefresh(a => !a)}
+                className={`tool-btn ${autoRefresh ? '' : ''}`}
+                style={{ padding: '6px 10px', fontSize: 11 }}
+              >
+                <span
+                  className={autoRefresh ? 'dot-status dot-status-on dot-status-pulse' : 'dot-status dot-status-off'}
+                />
+                <span style={{ fontFamily: 'var(--font-mono)', letterSpacing: '0.08em', color: 'var(--ink-3)', textTransform: 'uppercase' }}>
+                  {autoRefresh ? 'Live' : 'Paused'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { if (!refreshBusyRef.current) loadFull(false) }}
+                className="tool-btn"
+                style={{ padding: '6px 10px', fontSize: 11 }}
+                title="Refresh"
+              >
+                <i className="fa-duotone fa-solid fa-arrows-rotate" style={{ fontSize: 11 }} />
+              </button>
+
+              <button
+                type="button"
+                onClick={handleClearLogs}
+                disabled={clearing}
+                className="tool-btn"
+                style={{ padding: '6px 10px', fontSize: 11 }}
+                title="Clear log"
+              >
+                <i
+                  className={`fa-duotone fa-solid fa-broom${clearing ? ' fa-shake' : ''}`}
+                  style={{ fontSize: 11 }}
+                />
+              </button>
+
+              {/* Stat dots */}
+              <span style={{ width: 1, height: 14, background: 'var(--rule)', margin: '0 4px' }} />
+              <Stat color="var(--accent)" value={logStats.errors} label={source === 'test' ? 'failed' : 'errors'} />
+              <Stat color="var(--ochre)"  value={logStats.warnings} label="warn" />
+              {source === 'test' && (
+                <Stat color="var(--moss)" value={logStats.passes} label="pass" />
+              )}
+            </div>
+          }
+        >
+          <div
+            style={{
+              borderTop: '1px solid var(--rule-soft)',
+              background: 'var(--card)',
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+            }}
+          >
+            {loading ? (
+              <div className="flex flex-col" style={{ padding: 20, gap: 8 }}>
+                <div className="skeleton-line" style={{ height: 12, width: '70%' }} />
+                <div className="skeleton-line" style={{ height: 12, width: '60%' }} />
+                <div className="skeleton-line" style={{ height: 12, width: '78%' }} />
+                <div className="skeleton-line" style={{ height: 12, width: '52%' }} />
+              </div>
+            ) : lines.length === 0 ? (
+              <div style={{ padding: 28 }}>
+                <p
+                  className="display-serif-italic"
+                  style={{ fontSize: 18, color: 'var(--ink)', lineHeight: 1.2 }}
+                >
+                  No log entries yet<span className="display-period">.</span>
+                </p>
+                <button
+                  onClick={() => loadFull(false)}
+                  type="button"
+                  className="timestamp-print"
+                  style={{
+                    marginTop: 6,
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent)',
+                    cursor: 'pointer',
+                    padding: 0,
+                    textDecoration: 'underline',
+                    textUnderlineOffset: 2,
+                  }}
+                >
+                  // refresh
+                </button>
+              </div>
+            ) : (
+              <div
+                ref={scrollRef}
+                onScroll={handleScroll}
+                className="scroll-pane"
+                style={{
+                  flex: 1,
+                  overflow: 'auto',
+                  padding: '8px 0',
+                }}
+              >
+                <div className="log-viewer" style={{ padding: '0 20px' }}>
+                  <div style={{ height: startIdx * LINE_HEIGHT }} />
+                  {filteredLines.slice(startIdx, endIdx).map((line, i) => (
+                    <LogLine key={startIdx + i} line={line} />
+                  ))}
+                  <div style={{ height: (totalFiltered - endIdx) * LINE_HEIGHT }} />
+                </div>
+              </div>
+            )}
+
+            {progressBars.length > 0 && (
+              <div className="log-progress-footer">
+                {progressBars.map((bar, i) => (
+                  <div key={i} className="log-progress-bar-line">
+                    <span className="log-tag">[{bar.tag}]</span>{' '}
+                    {bar.rawBar
+                      ? highlightRawBar(bar.rawBar)
+                      : bar.current != null && bar.total != null
+                        ? renderTqdmBar(bar.current, bar.total, bar.detail, bar.elapsedS)
+                        : null
+                    }
+                  </div>
                 ))}
               </div>
             )}
           </div>
-
-          <button
-            onClick={() => setAutoRefresh(a => !a)}
-            className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all
-              ${autoRefresh ? 'action-btn action-btn-success' : 'action-btn action-btn-primary'}
-              ${autoRefresh
-                ? 'bg-success/10 text-success border border-success/15'
-                : 'bg-surface-container text-on-surface-variant border border-outline-variant/60 hover:border-primary/40'
-              }`}
-          >
-            {autoRefresh ? (
-              <span className="inline-flex items-center gap-1">
-                <i key={heartBeatTick} className="fa-duotone fa-solid fa-heart-pulse heart-beat-once icon-gradient icon-gradient-spring" />
-                Live
-              </span>
-            ) : (
-              <span>
-                <i className="fa-duotone fa-solid fa-play mr-1 icon-gradient icon-gradient-steel" />
-                Paused
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => { if (!refreshBusyRef.current) loadFull(false) }}
-            className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-primary bg-primary/8 hover:bg-primary/14
-                       action-btn action-btn-primary
-                       transition-colors border border-primary/10"
-          >
-            <i className="fa-duotone fa-solid fa-arrows-rotate mr-1 icon-gradient icon-gradient-atlas" />Refresh
-          </button>
-
-          <button
-            onClick={handleClearLogs}
-            disabled={clearing}
-            className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors border action-btn action-btn-error
-              ${clearing
-                ? 'bg-surface-container text-on-surface-variant border-outline-variant/60 opacity-70 cursor-not-allowed'
-                : 'text-error bg-error/8 hover:bg-error/14 border-error/20'
-              }`}
-          >
-            <i className={`fa-duotone fa-solid ${clearing ? 'fa-spinner fa-spin text-error' : 'fa-trash-can icon-gradient icon-gradient-ember'} mr-1`} />
-            {clearing ? 'Clearing...' : 'Clear'}
-          </button>
-        </div>
-      )}
-
-      <div className="relative rounded-2xl border border-outline-variant/30 bg-surface-container/35 py-2.5 px-1.5 max-h-[calc(100vh-14rem)] overflow-hidden flex flex-col">
-        {loading ? (
-          <div className="p-3 flex flex-col gap-2">
-            <div className="skeleton-line h-3.5 w-96" />
-            <div className="skeleton-line h-3.5 w-80" />
-            <div className="skeleton-line h-3 w-88" />
-            <div className="skeleton-line h-3 w-68" />
-          </div>
-        ) : lines.length === 0 ? (
-          <div className="p-5 flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-surface-container-high/60 border border-outline-variant/25 flex items-center justify-center shadow-elevation-1">
-              <i className="fa-duotone fa-solid fa-file-lines icon-gradient icon-gradient-steel icon-sm" />
-            </div>
-            <div>
-              <p className="text-sm text-on-surface-variant">No log entries yet.</p>
-              <button
-                onClick={() => loadFull(false)}
-                className="ui-micro text-primary hover:underline underline-offset-2 mt-1"
-              >
-                Refresh
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div ref={scrollRef} className="max-h-[calc(100vh-15rem)] overflow-y-auto scroll-pane" onScroll={handleScroll}>
-            <div className="log-viewer">
-              <div style={{ height: startIdx * LINE_HEIGHT }} />
-              {filteredLines.slice(startIdx, endIdx).map((line, i) => (
-                <LogLine key={startIdx + i} line={line} />
-              ))}
-              <div style={{ height: (totalFiltered - endIdx) * LINE_HEIGHT }} />
-            </div>
-          </div>
-        )}
-
-        {progressBars.length > 0 && (
-          <div className="log-progress-footer">
-            {progressBars.map((bar, i) => (
-              <div key={i} className="log-progress-bar-line">
-                <span className="log-tag">[{bar.tag}]</span>{' '}
-                {bar.rawBar
-                  ? highlightRawBar(bar.rawBar)
-                  : bar.current != null && bar.total != null
-                    ? renderTqdmBar(bar.current, bar.total, bar.detail, bar.elapsedS)
-                    : null
-                }
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {!loading && lines.length > 0 && (
-        <div className="mt-2 flex justify-end gap-3 px-1">
-          <span className="inline-flex items-center gap-1.5 text-xs">
-            <span className="w-2 h-2 rounded-full bg-error shadow-[0_0_6px_rgba(239,68,68,0.4)]" />
-            <span className="text-error font-semibold tabular-nums">{logStats.errors}</span>
-            <span className="text-on-surface-variant">{source === 'test' ? 'failed' : 'errors'}</span>
-          </span>
-          <span className="inline-flex items-center gap-1.5 text-xs">
-            <span className="w-2 h-2 rounded-full bg-warning shadow-[0_0_6px_rgba(245,158,11,0.4)]" />
-            <span className="text-warning font-semibold tabular-nums">{logStats.warnings}</span>
-            <span className="text-on-surface-variant">warnings</span>
-          </span>
-          {source === 'test' && (
-            <span className="inline-flex items-center gap-1.5 text-xs">
-              <span className="w-2 h-2 rounded-full bg-success shadow-[0_0_6px_rgba(34,197,94,0.4)]" />
-              <span className="text-success font-semibold tabular-nums">{logStats.passes}</span>
-              <span className="text-on-surface-variant">passed</span>
-            </span>
-          )}
-        </div>
-      )}
+      </Section>
     </div>
+  )
+}
+
+function SourceSwitch({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() }
+      }}
+      style={{
+        cursor: active ? 'default' : 'pointer',
+        fontStyle: 'normal',
+        fontFamily: 'var(--font-body)',
+        fontSize: 13,
+        fontWeight: active ? 700 : 400,
+        color: active ? 'var(--ink)' : 'var(--ink-4)',
+        transition: 'color 150ms ease',
+      }}
+      onMouseEnter={e => { if (!active) e.currentTarget.style.color = 'var(--ink-2)' }}
+      onMouseLeave={e => { if (!active) e.currentTarget.style.color = 'var(--ink-4)' }}
+    >
+      {children}
+    </span>
+  )
+}
+
+function Stat({ color, value, label }: { color: string; value: number; label: string }) {
+  return (
+    <span className="flex items-center" style={{ gap: 5 }}>
+      <span style={{ width: 5, height: 5, borderRadius: '50%', background: color }} />
+      <span
+        className="tabular-nums"
+        style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--ink-2)' }}
+      >
+        {value}
+      </span>
+      <span
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10,
+          color: 'var(--ink-4)',
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+        }}
+      >
+        {label}
+      </span>
+    </span>
   )
 }
