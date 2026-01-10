@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { getFomod, listFomods } from '../api'
 import FomodStepCard from '../components/FomodStepCard'
+import Section from '../components/Section'
 import type { FomodDetail } from '../types'
 
 const RETRY_DELAY_MS = 2000
 
 function highlightJson(json: string) {
-  // Tokenize JSON string into colored spans
   const regex = /("(?:\\.|[^"\\])*"\s*:)|("(?:\\.|[^"\\])*")|([-+]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(\btrue\b|\bfalse\b)|(\bnull\b)|([{}[\],])/g
   const parts: { text: string; cls: string }[] = []
   let lastIndex = 0
@@ -24,16 +24,38 @@ function highlightJson(json: string) {
     else if (match[6]) parts.push({ text: match[6], cls: 'json-bracket' })
     lastIndex = match.index + match[0].length
   }
-  if (lastIndex < json.length) {
-    parts.push({ text: json.slice(lastIndex), cls: '' })
-  }
+  if (lastIndex < json.length) parts.push({ text: json.slice(lastIndex), cls: '' })
   return parts
 }
 
 function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1048576).toFixed(1)} MB`
+  if (bytes < 1024) return `${bytes} b`
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} kb`
+  return `${(bytes / 1048576).toFixed(1)} mb`
+}
+
+function MetaChip({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="flex items-center" style={{ gap: 6 }}>
+      <span
+        className="ui-label"
+        style={{ fontSize: 9.5, letterSpacing: '0.18em' }}
+      >
+        {label}
+      </span>
+      <span
+        className="tabular-nums"
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 11.5,
+          color: 'var(--ink-2)',
+          letterSpacing: '0.04em',
+        }}
+      >
+        {value}
+      </span>
+    </span>
+  )
 }
 
 export default function FomodDetailPage() {
@@ -89,10 +111,7 @@ export default function FomodDetailPage() {
       .then(items => {
         if (abortController.signal.aborted) return
         const item = items.find(f => f.name === decoded)
-        if (item) {
-          setMetaSize(item.size)
-          setMetaModified(item.modified)
-        }
+        if (item) { setMetaSize(item.size); setMetaModified(item.modified) }
       })
       .catch(e => {
         if (abortController.signal.aborted) return
@@ -106,81 +125,186 @@ export default function FomodDetailPage() {
   }, [name])
 
   const decodedName = name ? decodeURIComponent(name) : 'Unknown'
-
   const updatedRaw = data?.updated ?? data?.modified ?? metaModified
   const updatedText = typeof updatedRaw === 'number'
-    ? new Date(updatedRaw).toLocaleString()
+    ? new Date(updatedRaw).toLocaleString(undefined, { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' })
     : loadedAt
       ? new Date(loadedAt).toLocaleTimeString()
-      : 'Unknown'
-  const sizeText = typeof metaSize === 'number' ? formatSize(metaSize) : 'N/A'
-
+      : 'unknown'
+  const sizeText = typeof metaSize === 'number' ? formatSize(metaSize) : 'n/a'
   const modName = data?.moduleName || decodedName
   const steps = data?.steps ?? []
-
   const highlightedJson = useMemo(
     () => data ? highlightJson(JSON.stringify(data, null, 2)) : null,
     [data]
   )
+  const [showJson, setShowJson] = useState(false)
 
   return (
-    <div className="fomods-page animate-fade-in h-[calc(100vh-4rem)] flex flex-col overflow-hidden">
-      <Link to="/fomods" className="inline-flex items-center gap-2 text-xs text-on-surface-variant hover:text-primary transition-colors mb-6 shrink-0">
-        <i className="fa-duotone fa-solid fa-arrow-left text-[0.6rem]" />Back to FOMODs
+    <div className="page-fill">
+      {/* Back link */}
+      <Link
+        to="/fomods"
+        className="flex items-center"
+        style={{
+          gap: 8,
+          fontFamily: 'var(--font-mono)',
+          fontSize: 10.5,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+          color: 'var(--ink-3)',
+          textDecoration: 'none',
+          marginBottom: 16,
+          width: 'fit-content',
+          flexShrink: 0,
+        }}
+      >
+        <i className="fa-duotone fa-solid fa-arrow-left-long" style={{ fontSize: 11 }} />
+        // back to library
       </Link>
 
-      <header className="page-header page-header-fomods mb-5 shrink-0">
-        <h1 className="page-title text-xl font-bold text-on-surface flex items-center gap-3">
-          <span className="inline-flex w-6 shrink-0 items-center justify-center">
-            <i className="fa-duotone fa-solid fa-box-archive icon-gradient icon-gradient-spring text-lg" />
+      {/* Header */}
+      <header style={{ marginBottom: 24, flexShrink: 0 }}>
+        <p
+          className="reveal reveal-delay-1"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 10,
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            letterSpacing: '0.18em',
+            textTransform: 'uppercase',
+            color: 'var(--ink-3)',
+            marginBottom: 18,
+          }}
+        >
+          <span
+            className="display-serif-italic"
+            style={{ fontSize: 12, color: 'var(--accent)', textTransform: 'none' }}
+          >
+            02 ·
           </span>
+          <span>§ Inspection · {decodedName}</span>
+        </p>
+
+        <h1
+          className="display-serif reveal reveal-delay-2"
+          style={{
+            fontSize: 56,
+            lineHeight: 0.95,
+            color: 'var(--ink)',
+            margin: 0,
+            wordBreak: 'break-word',
+          }}
+        >
           {modName}
+          <span style={{ color: 'var(--accent)' }}>.</span>
         </h1>
-        <div className="mt-1 ml-9 w-[calc(100%-2.25rem)] min-w-0 flex flex-nowrap items-center gap-1.5 text-on-surface-variant">
-          <span className="rounded-full pl-0 pr-2.5 py-1 inline-flex items-center gap-1.5 hover-intent shrink-0">
-            <i className="fa-duotone fa-solid fa-layer-group icon-gradient icon-gradient-forest icon-sm" />
-            <span className="ui-micro uppercase tracking-[0.08em]">Steps</span>
-            <span className="text-[0.72rem] text-on-surface tabular-nums">{steps.length}</span>
-          </span>
-          <span className="rounded-full px-2.5 py-1 inline-flex items-center gap-1.5 hover-intent shrink-0">
-            <i className="fa-duotone fa-solid fa-weight-hanging icon-gradient icon-gradient-copper icon-sm" />
-            <span className="ui-micro uppercase tracking-[0.08em]">Size</span>
-            <span className="text-[0.72rem] text-on-surface tabular-nums">{sizeText}</span>
-          </span>
-          <span className="rounded-full px-2.5 py-1 inline-flex items-center gap-1.5 hover-intent shrink-0">
-            <i className="fa-duotone fa-solid fa-clock icon-gradient icon-gradient-steel icon-sm" />
-            <span className="ui-micro uppercase tracking-[0.08em]">Updated</span>
-            <span className="text-[0.72rem] text-on-surface" title={updatedText}>{updatedText}</span>
-          </span>
+
+        <div
+          className="flex items-center reveal reveal-delay-3"
+          style={{
+            marginTop: 14,
+            gap: 24,
+            flexWrap: 'wrap',
+          }}
+        >
+          <MetaChip label="Steps" value={String(steps.length)} />
+          <span style={{ width: 1, height: 14, background: 'var(--rule)' }} />
+          <MetaChip label="Size" value={sizeText} />
+          <span style={{ width: 1, height: 14, background: 'var(--rule)' }} />
+          <MetaChip label="Updated" value={updatedText} />
         </div>
       </header>
 
+      <div className="scroll-pane" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
       {!data ? (
-        <div className="flex-1 min-h-0">
-          <div className="rounded-xl border border-outline-variant/30 bg-surface-container/35 p-4 mb-3">
-            <div className="skeleton-line h-4 w-56 mb-2" />
-            <div className="skeleton-line h-3 w-28" />
-          </div>
-          <div className="rounded-xl border border-outline-variant/30 bg-surface-container/35 p-4">
-            <div className="skeleton-line h-3 w-44 mb-2" />
-            <div className="skeleton-line h-3 w-64 mb-2" />
-            <div className="skeleton-line h-3 w-48" />
-          </div>
+        <div className="reveal reveal-delay-4">
+          <Section n="01" label="Steps" title="Loading..." corner="01">
+            <div className="skeleton-line" style={{ height: 14, width: 220, marginBottom: 12 }} />
+            <div className="skeleton-line" style={{ height: 12, width: 160, marginBottom: 8 }} />
+            <div className="skeleton-line" style={{ height: 12, width: 200 }} />
+          </Section>
         </div>
       ) : (
         <>
+          {/* Steps */}
+          <div className="reveal reveal-delay-4" style={{ marginBottom: 16 }}>
+            <Section
+              n="01"
+              label="Steps"
+              title="Installation steps"
+              corner="01"
+              meta={
+                <span className="ui-micro tabular-nums">
+                  {steps.length} {steps.length === 1 ? 'step' : 'steps'}
+                </span>
+              }
+            >
+              {steps.length === 0 ? (
+                <p className="timestamp-print">// no steps in this FOMOD configuration</p>
+              ) : (
+                <div className="flex flex-col" style={{ gap: 12 }}>
+                  {steps.map((step, i) => (
+                    <FomodStepCard key={step.name || `step-${i}`} step={step} index={i} />
+                  ))}
+                </div>
+              )}
+            </Section>
+          </div>
+
           {/* Raw JSON */}
-          <details className="mb-5 group shrink-0">
-            <summary className="cursor-pointer text-xs text-on-surface-variant hover:text-on-surface transition-colors
-                           flex items-center gap-2 select-none">
-              <i className="fa-duotone fa-solid fa-code icon-gradient icon-gradient-nebula text-[0.65rem]" />
-              View raw JSON
-              <i className="fa-duotone fa-solid fa-chevron-right text-[0.55rem] text-outline transition-transform duration-200 group-open:rotate-90" />
-            </summary>
-            <div className="mt-3 rounded-xl aurora-glow">
-              <div className="relative rounded-xl panel-modern overflow-hidden py-2.5 px-1.5">
-                <div className="max-h-[55vh] overflow-auto scroll-pane">
-                  <pre className="m-0 p-4 text-xs log-viewer">
+          <div className="reveal reveal-delay-5">
+            <Section
+              n="02"
+              label="JSON"
+              title="Raw configuration"
+              corner="02"
+              bodyPadding="none"
+              meta={
+                <button
+                  type="button"
+                  onClick={() => setShowJson(v => !v)}
+                  className="tool-btn"
+                  style={{ padding: '6px 10px', fontSize: 10 }}
+                >
+                  <i
+                    className={`fa-duotone fa-solid ${showJson ? 'fa-caret-down' : 'fa-caret-right'}`}
+                    style={{ fontSize: 11 }}
+                  />
+                  <span
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      letterSpacing: '0.14em',
+                      textTransform: 'uppercase',
+                      color: 'var(--ink-3)',
+                    }}
+                  >
+                    {showJson ? 'Collapse' : 'Expand'}
+                  </span>
+                </button>
+              }
+            >
+              {showJson ? (
+                <div
+                  style={{
+                    maxHeight: '55vh',
+                    overflow: 'auto',
+                    background: 'var(--paper-2)',
+                    borderTop: '1px solid var(--rule-soft)',
+                  }}
+                  className="scroll-pane"
+                >
+                  <pre
+                    className="log-viewer"
+                    style={{
+                      margin: 0,
+                      padding: '20px 28px',
+                      fontSize: 12,
+                      lineHeight: 1.7,
+                    }}
+                  >
                     {highlightedJson?.map((p, i) => (
                       p.cls
                         ? <span key={i} className={p.cls}>{p.text}</span>
@@ -188,30 +312,19 @@ export default function FomodDetailPage() {
                     ))}
                   </pre>
                 </div>
-              </div>
-            </div>
-          </details>
-
-          {steps.length === 0 ? (
-            <div className="flex-1 min-h-0 py-10">
-              <div className="empty-state-card">
-                <div className="w-9 h-9 rounded-xl bg-surface-container-high/60 border border-outline-variant/25 flex items-center justify-center shadow-elevation-1">
-                  <i className="fa-duotone fa-solid fa-circle-info icon-gradient icon-gradient-steel icon-sm" />
-                </div>
-                <p className="text-sm text-on-surface-variant">No steps in this FOMOD configuration.</p>
-              </div>
-            </div>
-          ) : (
-            <div className="flex-1 min-h-0 overflow-y-auto scroll-pane px-3">
-              <div className="flex flex-col gap-3 pb-2">
-                {steps.map((step, i) => (
-                  <FomodStepCard key={step.name || `step-${i}`} step={step} index={i} />
-                ))}
-              </div>
-            </div>
-          )}
+              ) : (
+                <p
+                  className="timestamp-print"
+                  style={{ padding: '16px 28px' }}
+                >
+                  // {JSON.stringify(data).length.toLocaleString()} bytes — click expand to view
+                </p>
+              )}
+            </Section>
+          </div>
         </>
       )}
+      </div>
     </div>
   )
 }
