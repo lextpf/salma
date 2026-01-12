@@ -6,6 +6,7 @@ import Section from '../components/Section'
 import type { FomodDetail } from '../types'
 
 const RETRY_DELAY_MS = 2000
+const MAX_RETRIES = 3
 
 function highlightJson(json: string) {
   const regex = /("(?:\\.|[^"\\])*"\s*:)|("(?:\\.|[^"\\])*")|([-+]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|(\btrue\b|\bfalse\b)|(\bnull\b)|([{}[\],])/g
@@ -64,13 +65,17 @@ export default function FomodDetailPage() {
   const [loadedAt, setLoadedAt] = useState<number | null>(null)
   const [metaSize, setMetaSize] = useState<number | null>(null)
   const [metaModified, setMetaModified] = useState<number | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const inFlightRef = useRef(false)
+  const retryCountRef = useRef(0)
+  const loadFomodRef = useRef<() => void>(() => {})
 
   useEffect(() => {
     if (!name) return
     const decoded = decodeURIComponent(name)
     setData(null)
+    setLoadError(null)
+    retryCountRef.current = 0
     const abortController = new AbortController()
 
     const clearRetryTimer = () => {
@@ -80,31 +85,36 @@ export default function FomodDetailPage() {
       }
     }
 
-    const loadFomod = (force = false) => {
-      if (inFlightRef.current && !force) return
-      inFlightRef.current = true
+    const loadFomod = () => {
+      setLoadError(null)
       getFomod(decoded)
         .then(d => {
           if (abortController.signal.aborted) return
           setData(d)
           setLoadedAt(Date.now())
+          retryCountRef.current = 0
           clearRetryTimer()
         })
         .catch(e => {
           if (abortController.signal.aborted) return
-          console.warn(`[fomod-detail] failed to load "${decoded}", retrying`, e)
+          retryCountRef.current++
+          const msg = e instanceof Error ? e.message : 'Failed to load FOMOD'
+          if (retryCountRef.current >= MAX_RETRIES) {
+            console.warn(`[fomod-detail] gave up loading "${decoded}" after ${MAX_RETRIES} attempts`, e)
+            setLoadError(msg)
+            return
+          }
+          console.warn(`[fomod-detail] failed to load "${decoded}", retrying (${retryCountRef.current}/${MAX_RETRIES})`, e)
           if (!retryTimerRef.current) {
             retryTimerRef.current = setTimeout(() => {
               retryTimerRef.current = null
-              loadFomod(true)
+              loadFomod()
             }, RETRY_DELAY_MS)
           }
         })
-        .finally(() => {
-          inFlightRef.current = false
-        })
     }
 
+    loadFomodRef.current = loadFomod
     loadFomod()
 
     listFomods()
@@ -183,9 +193,9 @@ export default function FomodDetailPage() {
             className="display-serif-italic"
             style={{ fontSize: 12, color: 'var(--accent)', textTransform: 'none' }}
           >
-            02 ·
+            02 -
           </span>
-          <span>§ Inspection · {decodedName}</span>
+          <span>Sec. Inspection - {decodedName}</span>
         </p>
 
         <h1
@@ -219,12 +229,82 @@ export default function FomodDetailPage() {
       </header>
 
       <div className="scroll-pane" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
-      {!data ? (
+      {loadError ? (
+        <div
+          className="reveal reveal-delay-4"
+          style={{
+            maxWidth: 620,
+            padding: '20px 24px',
+            background: 'var(--paper-3)',
+            border: '1px solid var(--rule)',
+            borderRadius: 'var(--radius-md)',
+          }}
+        >
+          <div className="flex items-center" style={{ gap: 10, marginBottom: 8 }}>
+            <span className="dot-status dot-status-error" />
+            <span
+              className="ui-label"
+              style={{ color: 'var(--accent)', fontSize: 10 }}
+            >
+              Failed to load
+            </span>
+          </div>
+          <p
+            className="display-serif-italic"
+            style={{ fontSize: 16, color: 'var(--ink)', marginBottom: 12 }}
+          >
+            {loadError}
+          </p>
+          <div className="flex" style={{ gap: 8 }}>
+            <button
+              type="button"
+              className="tool-btn"
+              onClick={() => {
+                retryCountRef.current = 0
+                setLoadError(null)
+                loadFomodRef.current()
+              }}
+            >
+              <i className="fa-duotone fa-solid fa-arrows-spin" style={{ fontSize: 12 }} />
+              <span>Retry</span>
+            </button>
+            <Link
+              to="/fomods"
+              className="tool-btn"
+              style={{ textDecoration: 'none' }}
+            >
+              <i className="fa-duotone fa-solid fa-arrow-left-long" style={{ fontSize: 12 }} />
+              <span>Back to library</span>
+            </Link>
+          </div>
+        </div>
+      ) : !data ? (
         <div className="reveal reveal-delay-4">
           <Section n="01" label="Steps" title="Loading..." corner="01">
-            <div className="skeleton-line" style={{ height: 14, width: 220, marginBottom: 12 }} />
-            <div className="skeleton-line" style={{ height: 12, width: 160, marginBottom: 8 }} />
-            <div className="skeleton-line" style={{ height: 12, width: 200 }} />
+            <div className="flex flex-col" style={{ gap: 12 }}>
+              {[0, 1, 2].map(i => (
+                <div
+                  key={i}
+                  style={{
+                    padding: '20px 24px',
+                    border: '1px solid var(--rule)',
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--card)',
+                  }}
+                >
+                  <div className="flex items-center" style={{ gap: 12, marginBottom: 14 }}>
+                    <div className="skeleton-line" style={{ height: 18, width: 32 }} />
+                    <div className="skeleton-line" style={{ width: 18, height: 1 }} />
+                    <div className="skeleton-line" style={{ height: 18, width: ['180px', '220px', '160px'][i] }} />
+                  </div>
+                  <div className="flex flex-col" style={{ gap: 6 }}>
+                    <div className="skeleton-line" style={{ height: 13, width: '70%' }} />
+                    <div className="skeleton-line" style={{ height: 13, width: '55%' }} />
+                    <div className="skeleton-line" style={{ height: 13, width: '62%' }} />
+                  </div>
+                </div>
+              ))}
+            </div>
           </Section>
         </div>
       ) : (
@@ -317,7 +397,7 @@ export default function FomodDetailPage() {
                   className="timestamp-print"
                   style={{ padding: '16px 28px' }}
                 >
-                  // {JSON.stringify(data).length.toLocaleString()} bytes — click expand to view
+                  // {JSON.stringify(data).length.toLocaleString()} bytes - click expand to view
                 </p>
               )}
             </Section>
