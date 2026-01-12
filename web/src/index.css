@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ================================================================
-   ATELIER — editorial paper aesthetic for salma's web UI.
+   ATELIER - editorial paper aesthetic for salma's web UI.
 
    Light is the default; [data-theme="dark"] flips to ash. Single
    oxblood accent. Typography: EB Garamond (display, italic),
@@ -37,6 +37,11 @@
   --accent-soft:  #e8d4cc;
   --accent-ink:   #5a1a12;
 
+  --teal:         #1f6e7a;  /* peacock - complementary cool */
+  --teal-2:       #3a8e9b;
+  --teal-soft:    #cfe2e6;
+  --teal-ink:     #134048;
+
   --ink-blue:     #2a3a5a;
   --ochre:        #a67a2a;
   --moss:         #3d7a3d;
@@ -67,7 +72,7 @@
   --spacing-sidebar: 236px;
 
   /* ============================================================
-     ALIAS BRIDGE — map legacy `--color-*` token names to Atelier
+     ALIAS BRIDGE - map legacy `--color-*` token names to Atelier
      values. Tailwind utilities like `bg-primary`, `text-success`,
      `border-outline-variant`, `from-primary via-secondary` keep
      resolving while components are rewritten. After Phase 5 sweep
@@ -112,10 +117,10 @@
   --color-warning-light:          #c49848;
   --color-error:                  var(--accent);
   --color-error-light:            var(--accent-2);
-  --color-info:                   var(--ink-blue);
-  --color-info-light:             #5a6a8a;
+  --color-info:                   var(--teal);
+  --color-info-light:             var(--teal-2);
 
-  /* Legacy aurora accent slots — neutralized to ink/accent so
+  /* Legacy aurora accent slots - neutralized to ink/accent so
      anything still grabbing them looks intentional, not rainbow. */
   --accent-frost:      var(--ink-blue);
   --accent-frost-deep: var(--ink-2);
@@ -130,12 +135,12 @@
   --accent-steel:      var(--ink-3);
   --accent-slate:      var(--ink-4);
 
-  /* Glow tokens — neutralised; box-shadow utilities still resolve
+  /* Glow tokens - neutralised; box-shadow utilities still resolve
      but render as quiet ink-tinted shadows. */
   --glow-success: rgba(61, 122, 61, 0.20);
   --glow-warning: rgba(166, 122, 42, 0.20);
   --glow-error:   rgba(138, 42, 31, 0.20);
-  --glow-info:    rgba(42, 58, 90, 0.18);
+  --glow-info:    rgba(31, 110, 122, 0.20);
   --glow-primary-soft:   rgba(138, 42, 31, 0.14);
   --glow-secondary-soft: rgba(42, 58, 90, 0.12);
   --glow-tertiary-soft:  rgba(58, 53, 45, 0.10);
@@ -192,7 +197,7 @@
 }
 
 /* ================================================================
-   BASE — body, typography, focus, selection, scrollbar
+   BASE - body, typography, focus, selection, scrollbar
    ================================================================ */
 
 @layer base {
@@ -213,7 +218,7 @@
     min-height: 100vh;
   }
 
-  /* Paper grain — fine fractal noise overlay; static, single paint */
+  /* Paper grain - fine fractal noise overlay; static, single paint */
   body::before {
     content: '';
     position: fixed;
@@ -256,16 +261,19 @@
   }
 
   /* ============================================================
-     FONT AWESOME DUOTONE — subtle ink + oxblood palette.
-     Primary draws the dominant strokes; secondary fills
-     decorative shapes at ~50% opacity. Inverted on dark/accent
-     backgrounds so the icon stays legible.
+     FONT AWESOME DUOTONE - peacock-led with faint warm silhouette.
+     Primary draws a soft warm-gray outline in --ink-5; secondary
+     fills decorative shapes in --teal-2 at ~80% opacity, doing the
+     real visibility work. Lifts to ~90% on hover and active nav.
+     Inverted on oxblood backgrounds (paper-on-accent) and overridden
+     by .icon-error to oxblood for error states. Dark mode bumps
+     primary back to --ink-2 so icons stay legible on near-black paper.
      ============================================================ */
   .fa-duotone {
-    --fa-primary-color: var(--ink-2);
-    --fa-secondary-color: var(--accent);
+    --fa-primary-color: var(--ink-5);
+    --fa-secondary-color: var(--teal-2);
     --fa-primary-opacity: 1;
-    --fa-secondary-opacity: 0.5;
+    --fa-secondary-opacity: 0.8;
   }
 
   .tool-btn-primary .fa-duotone,
@@ -276,13 +284,15 @@
   }
 
   .nav-rail-item-active .fa-duotone {
-    --fa-primary-color: var(--ink);
-    --fa-secondary-color: var(--accent);
-    --fa-secondary-opacity: 0.65;
+    --fa-primary-color: var(--ink-4);
+    --fa-secondary-color: var(--teal-2);
+    --fa-secondary-opacity: 0.9;
   }
 
-  .tool-btn:hover .fa-duotone {
-    --fa-secondary-opacity: 0.65;
+  .tool-btn:hover .fa-duotone,
+  .nav-rail-item:hover .fa-duotone,
+  .fomod-list-item:hover .fa-duotone {
+    --fa-secondary-opacity: 0.9;
   }
 
   /* Status-tinted modifier classes (opt-in) */
@@ -329,7 +339,7 @@
   }
 
   /* ============================================================
-     TYPOGRAPHY — DISPLAY, CHAPTERS, TIMESTAMPS, RULES
+     TYPOGRAPHY - DISPLAY, CHAPTERS, TIMESTAMPS, RULES
      ============================================================ */
 
   .display-serif {
@@ -357,7 +367,7 @@
     font-style: italic;
   }
 
-  /* Chapter marker — translucent serif numeral floated behind content
+  /* Chapter marker - translucent serif numeral floated behind content
      (legacy decoration; pages should use Section corner numeral instead) */
   .chapter-marker {
     position: absolute;
@@ -379,7 +389,7 @@
     right: 1rem;
   }
 
-  /* Inline chapter label: "01 · Section" small-cap pattern */
+  /* Inline chapter label: "01 - Section" small-cap pattern */
   .chapter-label {
     display: inline-flex;
     align-items: baseline;
@@ -415,7 +425,7 @@
     color: var(--ink-5);
   }
 
-  /* Hairline rule — 1px line with small oxblood dot caps at each end */
+  /* Hairline rule - 1px line with small peacock-teal dot caps at each end */
   .hairline-rule {
     position: relative;
     height: 1px;
@@ -428,7 +438,7 @@
     top: 50%;
     width: 5px;
     height: 5px;
-    background: var(--accent);
+    background: var(--teal);
     transform: translateY(-50%);
     border-radius: 50%;
   }
@@ -452,7 +462,7 @@
   .ui-xs { font-size: 0.75rem; }
 
   /* Page header dressing (kept for backward-compatibility; no decorative
-     line on Atelier pages — use Section primitives instead) */
+     line on Atelier pages - use Section primitives instead) */
   .page-header { position: relative; padding-bottom: 0.7rem; }
   .page-title  { line-height: 1.1; }
   .page-subtitle {
@@ -464,8 +474,8 @@
   }
 
   /* ============================================================
-     ATELIER SECTION — primitive shell used across pages.
-     Header bar with mono numeral + § label + serif title + meta
+     ATELIER SECTION - primitive shell used across pages.
+     Header bar with mono numeral + section label + serif title + meta
      slot, big faded corner numeral, body wrapper.
      ============================================================ */
 
@@ -543,7 +553,7 @@
     padding: 22px 28px;
   }
 
-  /* Fill mode — grow into the parent flex column. Body is a flex column
+  /* Fill mode - grow into the parent flex column. Body is a flex column
      itself; the caller decides whether to scroll inside (e.g. wrap a list
      in `flex:1 min-h:0 overflow:auto` or set up a custom scroll container
      for virtualization). */
@@ -584,7 +594,7 @@
      PANEL / CARD primitives
      ============================================================ */
 
-  /* Legacy alias — many components still reference panel-modern */
+  /* Legacy alias - many components still reference panel-modern */
   .panel-modern {
     position: relative;
     background: var(--card);
@@ -622,7 +632,7 @@
   }
 
   /* ============================================================
-     BUTTONS — tool-btn (default & primary), action-btn (legacy)
+     BUTTONS - tool-btn (default & primary), action-btn (legacy)
      ============================================================ */
 
   .tool-btn {
@@ -682,14 +692,14 @@
     box-shadow: 0 4px 12px -4px rgba(26, 24, 20, 0.30);
   }
 
-  /* Legacy action-btn base — kept so any references still resolve */
+  /* Legacy action-btn base - kept so any references still resolve */
   .action-btn {
     transition: border-color 180ms ease, background-color 180ms ease;
   }
   .action-btn:disabled { opacity: 0.55; }
 
   /* ============================================================
-     STATUS DOT — small circle with optional pulse glow
+     STATUS DOT - small circle with optional pulse glow
      ============================================================ */
 
   .dot-status {
@@ -720,7 +730,7 @@
   }
 
   /* ============================================================
-     STAT ROW — sidebar mono "label    value •" rows
+     STAT ROW - sidebar mono "label    value *" rows
      ============================================================ */
 
   .stat-row {
@@ -741,7 +751,7 @@
   }
 
   /* ============================================================
-     NAV RAIL — sidebar nav row
+     NAV RAIL - sidebar nav row
      ============================================================ */
 
   .nav-rail-item {
@@ -814,7 +824,7 @@
   }
 
   /* ============================================================
-     READY PIP — small green chip with pulse
+     READY PIP - small green chip with pulse
      ============================================================ */
 
   .ready-pip {
@@ -828,7 +838,7 @@
   }
 
   /* ============================================================
-     PROGRESS BAR — 2px hairline track with optional sweep
+     PROGRESS BAR - 2px hairline track with optional sweep
      ============================================================ */
 
   .atelier-progress {
@@ -854,7 +864,7 @@
   }
 
   /* ============================================================
-     FORMAT CHIP — base only. Color variants are inline now.
+     FORMAT CHIP - base only. Color variants are inline now.
      ============================================================ */
 
   .format-chip {
@@ -874,7 +884,7 @@
   }
 
   /* ============================================================
-     SKELETON — paper-toned shimmer
+     SKELETON - paper-toned shimmer
      ============================================================ */
 
   .skeleton-line {
@@ -916,7 +926,7 @@
   }
 
   /* ============================================================
-     CONTENT SHELL — main wrapper helper
+     CONTENT SHELL - main wrapper helper
      ============================================================ */
 
   .content-shell {
@@ -929,7 +939,7 @@
   }
 
   /* ============================================================
-     SYNTAX HIGHLIGHTING — JSON & log lines
+     SYNTAX HIGHLIGHTING - JSON & log lines
      Colors resolve through theme tokens so dark/light auto-flip.
      ============================================================ */
 
@@ -1005,7 +1015,7 @@
 }
 
 /* ================================================================
-   DARK THEME — "ash"
+   DARK THEME - "ash"
    Single override block; flips paper/ink/card/rule. Oxblood accent
    stays. Dark mode is a tonal inversion, not a separate aesthetic.
    ================================================================ */
@@ -1032,6 +1042,11 @@
   --accent-soft:  #3a201a;
   --accent-ink:   #e8a496;
 
+  --teal:         #3aa0ad;
+  --teal-2:       #5cbcc8;
+  --teal-soft:    #1a3a40;
+  --teal-ink:     #a4d6dd;
+
   --ink-blue:     #6a82a8;
   --ochre:        #c89a4a;
   --moss:         #6a9a6a;
@@ -1053,7 +1068,7 @@
   --color-success:                var(--moss);
   --color-warning:                var(--ochre);
   --color-error:                  var(--accent);
-  --color-info:                   var(--ink-blue);
+  --color-info:                   var(--teal);
   --color-secondary:              var(--ink-blue);
   --color-tertiary:               var(--ink-2);
   --color-copper:                 var(--accent);
@@ -1061,6 +1076,16 @@
   --shadow-elevation-1: 0 1px 3px 0 rgba(0, 0, 0, 0.45);
   --shadow-elevation-2: 0 4px 16px -2px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
   --shadow-elevation-3: 0 12px 32px -4px rgba(0, 0, 0, 0.58), 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* Icons: hold the primary stroke one tier brighter than the light-mode
+   default because --ink-3 (#a8a290) is too dim against near-black paper.
+   Active nav lifts to --ink (full cream) for emphasis. */
+[data-theme="dark"] .fa-duotone {
+  --fa-primary-color: var(--ink-2);
+}
+[data-theme="dark"] .nav-rail-item-active .fa-duotone {
+  --fa-primary-color: var(--ink);
 }
 
 [data-theme="dark"] body::before {
