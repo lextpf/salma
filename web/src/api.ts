@@ -84,7 +84,9 @@ export async function listFomods(): Promise<FomodEntry[]> {
 }
 
 export async function getFomod(name: string): Promise<FomodDetail> {
-  return fetchJson(`/api/mo2/fomods/${encodeURIComponent(name)}`)
+  return fetchJson(`/api/mo2/fomods/${encodeURIComponent(name)}`, {
+    signal: AbortSignal.timeout(8000),
+  })
 }
 
 async function fetchVoid(url: string, init?: RequestInit): Promise<void> {
