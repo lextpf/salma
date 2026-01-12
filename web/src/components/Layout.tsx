@@ -267,9 +267,9 @@ export default function Layout() {
       </aside>
 
       {/* ============================================================
-          MAIN — breadcrumb + page outlet
+          MAIN - breadcrumb + page outlet
           ============================================================ */}
-      <main className="flex-1 overflow-y-auto" style={{ background: 'var(--paper)' }}>
+      <main className="flex-1 overflow-hidden" style={{ background: 'var(--paper)' }}>
         <div
           className="content-shell mx-auto"
           style={{ maxWidth: 1180, width: '100%', padding: '28px 44px 48px' }}
@@ -332,7 +332,7 @@ function StatRow({
 }
 
 /* ================================================================
-   TopBar — breadcrumb + clock + Docs button
+   TopBar - breadcrumb + clock + Docs button
    ================================================================ */
 function TopBar({
   breadcrumb,
@@ -344,7 +344,7 @@ function TopBar({
   return (
     <div
       className="flex items-center justify-between"
-      style={{ marginBottom: 36, paddingBottom: 14 }}
+      style={{ marginBottom: 18, paddingBottom: 8 }}
     >
       <div
         className="flex items-center"
@@ -362,7 +362,7 @@ function TopBar({
           {' / '}
           {breadcrumb.section}
         </span>
-        <span style={{ color: 'var(--ink-5)' }}>—</span>
+        <span style={{ color: 'var(--ink-5)' }}>-</span>
         <span>{breadcrumb.title}</span>
       </div>
       <div className="flex items-center" style={{ gap: 18 }}>
