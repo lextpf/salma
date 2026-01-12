@@ -30,7 +30,7 @@ function ToolGroup({ n, label, children }: { n: string; label: string; children:
           whiteSpace: 'nowrap',
         }}
       >
-        {n} · {label}
+        {n} - {label}
       </span>
       <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>{children}</div>
     </div>
@@ -153,20 +153,6 @@ export default function ActionButtonGroup({
             <span>{testRunning ? 'Tests running...' : 'Run tests'}</span>
           </button>
         </ToolGroup>
-
-        <div style={{ flex: 1 }} />
-
-        <span
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 10.5,
-            color: 'var(--ink-4)',
-            letterSpacing: '0.08em',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          <span style={{ color: 'var(--accent)' }}>⌘</span> + <span>U</span> to upload
-        </span>
       </div>
 
       {/* Status messages line */}
@@ -204,7 +190,7 @@ export default function ActionButtonGroup({
               }}
             >
               <span className="dot-status dot-status-warn dot-status-pulse" />
-              // tail salma.log →
+              // tail salma.log -&gt;
             </Link>
           )}
           {testRunning && (
@@ -220,7 +206,7 @@ export default function ActionButtonGroup({
               }}
             >
               <span className="dot-status dot-status-warn dot-status-pulse" />
-              // tail test.log →
+              // tail test.log -&gt;
             </Link>
           )}
           {pluginActionError && (
