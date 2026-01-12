@@ -75,6 +75,8 @@ export default function FomodBrowserPage() {
     f.name.toLowerCase().includes(search.toLowerCase())
   )
 
+  const isEmpty = !loading && filtered.length === 0
+
   return (
     <div className="page-fill">
       {/* Header */}
@@ -99,7 +101,7 @@ export default function FomodBrowserPage() {
           >
             02.
           </span>
-          <span>§ Parsed FOMOD library</span>
+          <span>Sec. Parsed FOMOD library</span>
         </p>
 
         <div className="flex items-end reveal reveal-delay-2" style={{ gap: 20, flexWrap: 'wrap' }}>
@@ -185,7 +187,7 @@ export default function FomodBrowserPage() {
           title="Browse FOMODs"
           corner="01"
           bodyPadding="none"
-          className="atelier-section-fill reveal reveal-delay-4"
+          className={`reveal reveal-delay-4${(isEmpty || loading) ? '' : ' atelier-section-fill'}`}
           meta={
             <div style={{ position: 'relative', minWidth: 240 }}>
               <i
@@ -240,9 +242,12 @@ export default function FomodBrowserPage() {
             </div>
           }
         >
-          <div className="scroll-pane" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+          <div
+            className="scroll-pane"
+            style={loading ? { overflow: 'visible' } : isEmpty ? { overflow: 'auto' } : { flex: 1, minHeight: 0, overflow: 'auto' }}
+          >
             {loading ? (
-              <div style={{ padding: 24 }}>
+              <div>
                 {[0, 1, 2, 3].map(i => (
                   <div
                     key={i}
@@ -250,13 +255,13 @@ export default function FomodBrowserPage() {
                     style={{
                       gridTemplateColumns: '32px 1fr 110px 90px 100px 28px 24px',
                       gap: 16,
-                      padding: '14px 0',
-                      borderBottom: '1px solid var(--rule-soft)',
+                      padding: '14px 28px',
+                      borderBottom: i === 3 ? 'none' : '1px solid var(--rule-soft)',
                       alignItems: 'center',
                     }}
                   >
                     <div className="skeleton-line" style={{ width: 28, height: 28, borderRadius: 'var(--radius-sm)' }} />
-                    <div className="skeleton-line" style={{ height: 12 }} />
+                    <div className="skeleton-line" style={{ height: 14, width: ['78%', '62%', '85%', '54%'][i] }} />
                     <div className="skeleton-line" style={{ width: 80, height: 10 }} />
                     <div className="skeleton-line" style={{ width: 60, height: 10 }} />
                     <div className="skeleton-line" style={{ width: 80, height: 10 }} />
