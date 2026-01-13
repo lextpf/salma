@@ -106,6 +106,23 @@ public:
      */
     static constexpr size_t kMaxCacheEntries = 100000;
 
+    /**
+     * @brief Pre-compute conditional and step-visibility overrides for inference.
+     *
+     * Step visibility uses a STEP-UNIQUE evidence rule: a step is forced
+     * visible only if at least one of its plugins' atoms targets a dest in
+     * the target tree that no other step's plugins also target. This keeps
+     * mutually-exclusive conditional steps that share dest paths as Unknown
+     * so the simulator can decide visibility from accumulated flags.
+     *
+     * Public for testability. Not part of the C-API surface.
+     */
+    static InferenceOverrides compute_overrides(const FomodInstaller& installer,
+                                                const ExpandedAtoms& atoms,
+                                                const AtomIndex& atom_index,
+                                                const TargetTree& target,
+                                                const std::unordered_set<std::string>& excluded);
+
 private:
     /** Bundled pipeline state for infer_selections. */
     struct InferenceContext
@@ -154,12 +171,6 @@ private:
                               const std::filesystem::path& mod_path,
                               const std::string& archive_path,
                               const std::unordered_set<std::string>& excluded);
-
-    static InferenceOverrides compute_overrides(const FomodInstaller& installer,
-                                                const ExpandedAtoms& atoms,
-                                                const AtomIndex& atom_index,
-                                                const TargetTree& target,
-                                                const std::unordered_set<std::string>& excluded);
 
     /**
      * Instance-scoped hash cache for contested archive entries.
