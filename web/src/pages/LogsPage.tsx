@@ -389,7 +389,7 @@ export default function LogsPage() {
 
               {/* Stat dots */}
               <span style={{ width: 1, height: 14, background: 'var(--rule)', margin: '0 4px' }} />
-              <Stat color="var(--accent)" value={logStats.errors} label={source === 'test' ? 'failed' : 'errors'} />
+              <Stat color="var(--danger)" value={logStats.errors} label={source === 'test' ? 'failed' : 'errors'} />
               <Stat color="var(--ochre)"  value={logStats.warnings} label="warn" />
               {source === 'test' && (
                 <Stat color="var(--moss)" value={logStats.passes} label="pass" />

@@ -39,9 +39,9 @@ export function computeReadinessStyles(readiness: number | null): ReadinessStyle
   const isWarningReadiness = !isCriticalReadiness && clampedReadiness <= 33;
   const isPerfectReadiness = clampedReadiness === 100;
 
-  // Single-tone Atelier ring: oxblood (critical/error), ochre (warning), moss (perfect/ok), ink-3 default.
+  // Single-tone Atelier ring: --danger (oxblood, critical/error), ochre (warning), moss (perfect/ok), ink-3 default.
   const ringPrimary = isCriticalReadiness
-    ? 'var(--accent)'
+    ? 'var(--danger)'
     : isWarningReadiness
       ? 'var(--ochre)'
       : isPerfectReadiness
@@ -65,10 +65,10 @@ export function computeReadinessStyles(readiness: number | null): ReadinessStyle
   const readinessGlowColor = isCriticalReadiness
     ? 'rgba(138, 42, 31, 0.20)'
     : isWarningReadiness
-      ? 'rgba(166, 122, 42, 0.20)'
+      ? 'rgba(138, 112, 50, 0.20)'
       : 'rgba(61, 122, 61, 0.20)';
 
-  const trackColor = 'var(--readiness-ring-track, rgba(154, 146, 127, 0.30))';
+  const trackColor = 'var(--readiness-ring-track, rgba(125, 133, 147, 0.30))';
   const ringBackground = isPerfectReadiness
     ? `conic-gradient(${ringPrimary} 0deg, ${ringPrimary} 360deg)`
     : `conic-gradient(${ringPrimary} 0deg, ${ringPrimary} ${ringDeg}deg, ${trackColor} ${ringDeg}deg 360deg)`;

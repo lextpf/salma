@@ -124,19 +124,19 @@ export default function FomodStepCard({ step, index }: FomodStepCardProps) {
                   padding: '12px 16px',
                 }}
               >
-                <p className="ui-label" style={{ marginBottom: 8, fontSize: 9.5 }}>
+                <p className="ui-label" style={{ marginBottom: 8, fontSize: 11 }}>
                   {groupName}
                 </p>
                 {selectedPlugin ? (
                   <p
                     className="flex items-start"
-                    style={{ gap: 8, fontSize: 13, color: 'var(--ink)' }}
+                    style={{ gap: 8, fontSize: 14.5, color: 'var(--ink)' }}
                   >
                     <span className="dot-status dot-status-on" style={{ marginTop: 6 }} />
                     <span>{selectedPlugin.name || 'Unknown'}</span>
                   </p>
                 ) : (
-                  <ul className="flex flex-col" style={{ gap: 4, fontSize: 13 }}>
+                  <ul className="flex flex-col" style={{ gap: 4, fontSize: 14.5 }}>
                     {plugins.slice(0, 8).map((plugin, pi) => (
                       <li
                         key={pi}

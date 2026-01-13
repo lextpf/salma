@@ -40,7 +40,7 @@ function MetaChip({ label, value }: { label: string; value: string }) {
     <span className="flex items-center" style={{ gap: 6 }}>
       <span
         className="ui-label"
-        style={{ fontSize: 9.5, letterSpacing: '0.18em' }}
+        style={{ fontSize: 11, letterSpacing: '0.18em' }}
       >
         {label}
       </span>
@@ -48,7 +48,7 @@ function MetaChip({ label, value }: { label: string; value: string }) {
         className="tabular-nums"
         style={{
           fontFamily: 'var(--font-mono)',
-          fontSize: 11.5,
+          fontSize: 13,
           color: 'var(--ink-2)',
           letterSpacing: '0.04em',
         }}
@@ -155,21 +155,21 @@ export default function FomodDetailPage() {
       {/* Back link */}
       <Link
         to="/fomods"
-        className="flex items-center"
+        className="flex items-center serif-link-arrow serif-link-arrow-back"
         style={{
           gap: 8,
           fontFamily: 'var(--font-mono)',
-          fontSize: 10.5,
+          fontSize: 12,
           letterSpacing: '0.12em',
           textTransform: 'uppercase',
-          color: 'var(--ink-3)',
-          textDecoration: 'none',
           marginBottom: 16,
           width: 'fit-content',
           flexShrink: 0,
         }}
       >
-        <i className="fa-duotone fa-solid fa-arrow-left-long" style={{ fontSize: 11 }} />
+        <span className="arrow" aria-hidden="true">
+          <i className="fa-duotone fa-solid fa-arrow-left-long" style={{ fontSize: 13 }} />
+        </span>
         // back to library
       </Link>
 
