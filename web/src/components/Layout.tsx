@@ -98,6 +98,7 @@ export default function Layout() {
   const mo2On      = backendUp === true && status?.configured === true && status?.pluginInstalled === true
   const serverOn   = backendUp === true
   const dllLoaded  = status?.pluginInstalled === true
+  const pluginPurged = backendUp === true && status?.pluginInstalled === false
 
   const engineState: EngineState =
     installRunning ? 'installing' :
@@ -222,9 +223,9 @@ export default function Layout() {
           <div className="ui-label" style={{ marginBottom: 10, fontSize: 9.5 }}>
             System
           </div>
-          <StatRow label="mo2"    value={mo2On     ? 'connected' : (backendUp === false ? 'offline' : 'checking')} on={mo2On} />
-          <StatRow label="server" value={serverOn  ? ':5000'     : 'down'}                                          on={serverOn} />
-          <StatRow label="dll"    value={dllLoaded ? 'loaded'    : 'missing'}                                       on={dllLoaded} />
+          <StatRow label="mo2"    value={mo2On     ? 'connected' : pluginPurged ? 'purged' : (backendUp === false ? 'offline' : 'checking')} on={mo2On}     purged={pluginPurged} />
+          <StatRow label="server" value={serverOn  ? ':5000'     : 'down'}                                                                  on={serverOn} />
+          <StatRow label="dll"    value={dllLoaded ? 'loaded'    : pluginPurged ? 'purged' : 'missing'}                                     on={dllLoaded} purged={pluginPurged} />
           <StatRow label="session" value={formatElapsed(now.getTime() - sessionStartMs)}                            on neutral />
           <StatRow label="engine"  value={engine.value} on dotColor={engine.color} pulse={engine.pulse} />
         </div>
@@ -292,6 +293,7 @@ function StatRow({
   neutral,
   dotColor,
   pulse,
+  purged,
 }: {
   label: string
   value: string
@@ -299,20 +301,24 @@ function StatRow({
   neutral?: boolean
   dotColor?: string
   pulse?: boolean
+  purged?: boolean
 }) {
   const baseClass = neutral
     ? 'dot-status'
-    : on
-      ? 'dot-status dot-status-on'
-      : 'dot-status dot-status-off'
+    : purged
+      ? 'dot-status dot-status-error'
+      : on
+        ? 'dot-status dot-status-on'
+        : 'dot-status dot-status-off'
   const customDot = dotColor
     ? {
         background: dotColor,
         boxShadow: `0 0 0 3px ${
-          dotColor === 'var(--moss)'     ? 'rgba(61, 122, 61, 0.12)' :
-          dotColor === 'var(--ochre)'    ? 'rgba(166, 122, 42, 0.12)' :
-          dotColor === 'var(--ink-blue)' ? 'rgba(42, 58, 90, 0.14)' :
-          dotColor === 'var(--accent)'   ? 'rgba(138, 42, 31, 0.14)' :
+          dotColor === 'var(--moss)'     ? 'var(--glow-success)' :
+          dotColor === 'var(--ochre)'    ? 'var(--glow-warning)' :
+          dotColor === 'var(--ink-blue)' ? 'var(--glow-secondary-soft)' :
+          dotColor === 'var(--accent)'   ? 'var(--glow-info)' :
+          dotColor === 'var(--danger)'   ? 'var(--glow-error)' :
           'transparent'
         }`,
       }
@@ -320,7 +326,7 @@ function StatRow({
   return (
     <div className="stat-row">
       <span style={{ letterSpacing: '0.04em' }}>{label}</span>
-      <span className="stat-row-value">
+      <span className="stat-row-value" style={purged ? { color: 'var(--danger)' } : undefined}>
         <span>{value}</span>
         <span
           className={`${baseClass}${pulse ? ' dot-status-pulse' : ''}`}
