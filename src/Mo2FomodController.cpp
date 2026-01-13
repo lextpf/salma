@@ -282,8 +282,8 @@ static ModResult process_single_mod(const fs::path& mod_folder,
 
         if (result.empty())
         {
-            logger.log(infer_status(
-                index, mod_name, "NOT FOMOD", std::format("({:.1f}s): no FOMOD data", elapsed_s)));
+            logger.log(
+                infer_status(index, mod_name, "NOT FOMOD", std::format("({:.1f}s)", elapsed_s)));
             return ModResult::NoFomod;
         }
 
@@ -341,11 +341,7 @@ static ModResult process_single_mod(const fs::path& mod_folder,
             return ModResult::Error;
         }
 
-        logger.log(infer_status(
-            index,
-            mod_name,
-            "INFERRED",
-            std::format("({:.1f}s): {} steps saved", elapsed_s, parsed["steps"].size())));
+        logger.log(infer_status(index, mod_name, "INFERRED", std::format("({:.1f}s)", elapsed_s)));
         return ModResult::Inferred;
     }
     catch (const std::exception& ex)
