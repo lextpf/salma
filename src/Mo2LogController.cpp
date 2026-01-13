@@ -11,6 +11,8 @@
 #include <format>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -33,6 +35,63 @@ static bool contains_keyword(const std::string& line, std::string_view word)
         pos += word.size();
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Read [start, file_size) from log_path, drop any trailing partial line
+// (bytes after the last '\n'), and parse complete lines from the kept
+// region. Returns {lines, consumed_bytes} where consumed_bytes is the
+// length of the kept region (so the caller can compute nextOffset =
+// start + consumed_bytes). The unconsumed tail stays in the file and
+// will be picked up by the next fetch once the writer flushes a newline.
+//
+// Without this trimming, std::getline returns the trailing partial line
+// as if it were complete and the client receives a chopped-off last
+// entry like "2026-04-27 11" with nextOffset already past the bytes,
+// so the truncation persists across all subsequent fetches.
+// ---------------------------------------------------------------------------
+static std::pair<std::vector<std::string>, int64_t> read_complete_lines(const fs::path& log_path,
+                                                                        int64_t start,
+                                                                        int64_t file_size)
+{
+    std::vector<std::string> lines;
+    if (start >= file_size)
+        return {std::move(lines), 0};
+
+    std::ifstream ifs(log_path, std::ios::binary);
+    if (!ifs)
+        return {std::move(lines), 0};
+    ifs.seekg(start);
+
+    auto to_read = static_cast<size_t>(file_size - start);
+    std::string buf;
+    buf.resize(to_read);
+    ifs.read(buf.data(), static_cast<std::streamsize>(to_read));
+    auto got = static_cast<size_t>(ifs.gcount());
+    buf.resize(got);
+
+    // Drop any bytes after the final '\n' in the read window.
+    auto last_nl = buf.rfind('\n');
+    if (last_nl == std::string::npos)
+        return {std::move(lines), 0};
+
+    size_t consumed = last_nl + 1;
+
+    // Parse complete lines (each terminated by '\n' inside [0, consumed)).
+    size_t line_begin = 0;
+    for (size_t i = 0; i < consumed; ++i)
+    {
+        if (buf[i] == '\n')
+        {
+            size_t line_end = i;
+            if (line_end > line_begin && buf[line_end - 1] == '\r')
+                --line_end;
+            lines.emplace_back(buf, line_begin, line_end - line_begin);
+            line_begin = i + 1;
+        }
+    }
+
+    return {std::move(lines), static_cast<int64_t>(consumed)};
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +147,29 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
 
     auto file_size = static_cast<int64_t>(fs::file_size(log_path));
 
+    auto count_and_emit = [](const std::vector<std::string>& lines, int64_t next_offset)
+    {
+        json lines_arr = json::array();
+        int errors = 0, warnings = 0, passes = 0;
+        for (const auto& l : lines)
+        {
+            if (contains_keyword(l, "ERROR") || contains_keyword(l, "CRITICAL") ||
+                contains_keyword(l, "FATAL") || contains_keyword(l, "FAIL"))
+                errors++;
+            else if (contains_keyword(l, "WARNING") || contains_keyword(l, "WARN"))
+                warnings++;
+            else if (contains_keyword(l, "PASS") || contains_keyword(l, "INFERRED"))
+                passes++;
+            lines_arr.push_back(l);
+        }
+        return json_response(200,
+                             {{"lines", std::move(lines_arr)},
+                              {"errors", errors},
+                              {"warnings", warnings},
+                              {"passes", passes},
+                              {"nextOffset", next_offset}});
+    };
+
     // Incremental mode: seek to offset, read only new lines
     if (offset >= 0)
     {
@@ -106,65 +188,20 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
         // No new data
         if (offset == file_size)
         {
-            return json_response(200,
-                                 {{"lines", json::array()},
-                                  {"errors", 0},
-                                  {"warnings", 0},
-                                  {"passes", 0},
-                                  {"nextOffset", file_size}});
+            return count_and_emit({}, file_size);
         }
 
-        std::ifstream ifs(log_path, std::ios::binary);
-        ifs.seekg(offset);
-        if (!ifs)
-        {
-            return json_response(200,
-                                 {{"lines", json::array()},
-                                  {"errors", 0},
-                                  {"warnings", 0},
-                                  {"passes", 0},
-                                  {"nextOffset", 0},
-                                  {"reset", true}});
-        }
-        std::deque<std::string> lines_deque;
-        std::string line;
-        while (std::getline(ifs, line))
-        {
-            // Strip trailing \r from Windows line endings
-            if (!line.empty() && line.back() == '\r')
-                line.pop_back();
-            lines_deque.push_back(std::move(line));
-        }
+        auto [new_lines, consumed] = read_complete_lines(log_path, offset, file_size);
 
         // Apply max_lines limit: keep only the last max_lines entries
         // (max_lines == 0 means "all" - no trimming, consistent with full mode)
-        if (max_lines > 0 && static_cast<int>(lines_deque.size()) > max_lines)
+        if (max_lines > 0 && static_cast<int>(new_lines.size()) > max_lines)
         {
-            lines_deque.erase(
-                lines_deque.begin(),
-                lines_deque.begin() + (static_cast<int>(lines_deque.size()) - max_lines));
+            new_lines.erase(new_lines.begin(),
+                            new_lines.begin() + (static_cast<int>(new_lines.size()) - max_lines));
         }
 
-        json lines_arr = json::array();
-        int errors = 0, warnings = 0, passes = 0;
-        for (auto& l : lines_deque)
-        {
-            if (contains_keyword(l, "ERROR") || contains_keyword(l, "CRITICAL") ||
-                contains_keyword(l, "FATAL") || contains_keyword(l, "FAIL"))
-                errors++;
-            else if (contains_keyword(l, "WARNING") || contains_keyword(l, "WARN"))
-                warnings++;
-            else if (contains_keyword(l, "PASS") || contains_keyword(l, "INFERRED"))
-                passes++;
-            lines_arr.push_back(std::move(l));
-        }
-
-        return json_response(200,
-                             {{"lines", lines_arr},
-                              {"errors", errors},
-                              {"warnings", warnings},
-                              {"passes", passes},
-                              {"nextOffset", file_size}});
+        return count_and_emit(new_lines, offset + consumed);
     }
 
     // Full mode: reverse-seek from EOF to find the last N newlines,
@@ -202,31 +239,8 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
         }
     }
 
-    ifs.clear();
-    ifs.seekg(read_start);
-    json lines_arr = json::array();
-    int errors = 0, warnings = 0, passes = 0;
-    std::string line;
-    while (std::getline(ifs, line))
-    {
-        if (!line.empty() && line.back() == '\r')
-            line.pop_back();
-        if (contains_keyword(line, "ERROR") || contains_keyword(line, "CRITICAL") ||
-            contains_keyword(line, "FATAL") || contains_keyword(line, "FAIL"))
-            errors++;
-        else if (contains_keyword(line, "WARNING") || contains_keyword(line, "WARN"))
-            warnings++;
-        else if (contains_keyword(line, "PASS") || contains_keyword(line, "INFERRED"))
-            passes++;
-        lines_arr.push_back(std::move(line));
-    }
-
-    return json_response(200,
-                         {{"lines", lines_arr},
-                          {"errors", errors},
-                          {"warnings", warnings},
-                          {"passes", passes},
-                          {"nextOffset", file_size}});
+    auto [lines, consumed] = read_complete_lines(log_path, read_start, file_size);
+    return count_and_emit(lines, read_start + consumed);
 }
 
 // ---------------------------------------------------------------------------
