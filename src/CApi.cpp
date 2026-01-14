@@ -24,7 +24,7 @@ extern "C"
 {
     MO2_API void setLogCallback(Mo2LogCallback callback)
     {
-        // Callback registration is mutex-guarded inside Logger.
+        // Callback registration uses an atomic store inside Logger; no mutex.
         // Setting nullptr re-enables file logging (logs/salma.log).
         mo2core::Logger::instance().set_callback(callback);
     }
