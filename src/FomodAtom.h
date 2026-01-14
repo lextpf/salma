@@ -37,28 +37,29 @@ namespace mo2core
  */
 struct FomodAtom
 {
-    std::string source_path;  ///< Normalized archive-relative source entry path
-    std::string dest_path;    ///< Normalized mod-relative destination path
-    int priority = 0;         ///< Overwrite priority; higher values win conflicts
-    int document_order = 0;   ///< XML document order tiebreaker (higher wins among equal priority)
-    uint64_t content_hash = 0;  ///< FNV-1a hash of archive bytes (0 = not yet computed)
-    uint64_t file_size = 0;     ///< File size in bytes (0 = unknown)
+    std::string source_path; /**< Normalized archive-relative source entry path */
+    std::string dest_path;   /**< Normalized mod-relative destination path */
+    int priority = 0;        /**< Overwrite priority; higher values win conflicts */
+    int document_order = 0; /**< XML document order tiebreaker (higher wins among equal priority) */
+    uint64_t content_hash = 0; /**< FNV-1a hash of archive bytes (0 = not yet computed) */
+    uint64_t file_size = 0;    /**< File size in bytes (0 = unknown) */
 
     /** @brief Where this atom originated in the FOMOD XML. */
     enum class Origin
     {
-        Required,    ///< From `<requiredInstallFiles>` -- always included
-        Plugin,      ///< From a `<plugin>/<files>` block -- included when the plugin is selected
-        Conditional  ///< From `<conditionalFileInstalls>` -- included when the pattern condition is
-                     /** < met */
+        Required,   /**< From `<requiredInstallFiles>` -- always included */
+        Plugin,     /**< From a `<plugin>/<files>` block -- included when the plugin is selected */
+        Conditional /**< From `<conditionalFileInstalls>` -- included when the pattern condition is
+                       met */
     };
-    Origin origin = Origin::Required;  ///< Which FOMOD section produced this atom
-    int plugin_index = -1;  ///< Flat plugin index across all steps/groups (-1 if not from a plugin)
+    Origin origin = Origin::Required; /**< Which FOMOD section produced this atom */
+    int plugin_index =
+        -1; /**< Flat plugin index across all steps/groups (-1 if not from a plugin) */
     int conditional_index =
-        -1;  ///< Index into `FomodInstaller::conditional_patterns` (-1 if not conditional)
+        -1; /**< Index into `FomodInstaller::conditional_patterns` (-1 if not conditional) */
 
-    bool always_install = false;     ///< Inherited from `FomodFileEntry::always_install`
-    bool install_if_usable = false;  ///< Inherited from `FomodFileEntry::install_if_usable`
+    bool always_install = false;    /**< Inherited from `FomodFileEntry::always_install` */
+    bool install_if_usable = false; /**< Inherited from `FomodFileEntry::install_if_usable` */
 };
 
 /**
@@ -71,8 +72,8 @@ struct FomodAtom
  */
 struct TargetFile
 {
-    uint64_t size = 0;
-    uint64_t hash = 0;  // FNV-1a (0 = not computed)
+    uint64_t size = 0; /**< Uncompressed size in bytes (0 = not yet known) */
+    uint64_t hash = 0; /**< FNV-1a content hash (0 = not computed) */
 };
 
 /** @brief Maps a lowercased destination path to every atom that targets it. */
