@@ -32,6 +32,24 @@ namespace mo2server
  * blocking on `thread::join()`. Work functions that perform long-running
  * loops should check the token periodically.
  *
+ * ## Lifecycle
+ *
+ * ```mermaid
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
+ * stateDiagram-v2
+ *     [*] --> idle
+ *     idle --> running: try_start() returns true
+ *     idle --> idle: try_start() returns false (already running)
+ *     running --> idle: work() returns - result_ set
+ *     running --> idle: work() throws - last_error_ set
+ *     running --> cancelling: request_cancel()
+ *     cancelling --> idle: work() observes token & exits
+ * ```
+ *
  * @warning The destructor blocks until the background thread completes.
  * Detaching is unsafe because the lambda captures `this`.
  */
@@ -83,6 +101,8 @@ public:
      * Returns `false` if a job is already running (concurrent start rejected).
      * The work function is called on a new thread; its return value is stored
      * as the result. Exceptions are caught and stored as an error string.
+     * Work is invoked exactly once per `try_start`; the thread exits when
+     * `work` returns or throws.
      *
      * @param work Callable returning `TResult`. Invoked on the background thread.
      * @return `true` if the job was started, `false` if one is already running.
@@ -170,7 +190,15 @@ public:
      */
     [[nodiscard]] bool is_cancel_requested() const { return cancel_requested_.load(); }
 
-    /** Return a reference to the cancellation token for passing to work functions. */
+    /**
+     * @brief Return a reference to the cancellation token for passing to work functions.
+     *
+     * The returned reference is valid for the lifetime of `*this`.
+     * Capturing it in a worker lambda is safe even across multiple
+     * `try_start()` cycles - the underlying atomic is reset to `false`
+     * by `try_start()`, so the token reflects the cancellation state
+     * of whatever job is currently running.
+     */
     [[nodiscard]] const std::atomic<bool>& cancel_token() const { return cancel_requested_; }
 
     /**
@@ -182,6 +210,9 @@ public:
      *
      * @param fn Callable with signature `auto(bool has_result, const TResult* result, const
      * std::string& error)`. The pointer is null when `has_result` is false.
+     * @note The callback runs while the internal mutex is held; it must
+     *       not call back into this BackgroundJob (e.g. `try_start`,
+     *       `request_cancel`) - that would deadlock.
      */
     template <typename Fn>
     auto read_result(Fn&& fn) const
