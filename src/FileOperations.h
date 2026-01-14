@@ -157,7 +157,7 @@ public:
                                         const std::filesystem::path& dst);
 
 private:
-    std::vector<FileOperation> ops_;  ///< Queued operations awaiting execute()
+    std::vector<FileOperation> ops_; /**< Queued operations awaiting execute() */
 };
 
 }  // namespace mo2core
