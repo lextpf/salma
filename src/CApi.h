@@ -183,12 +183,16 @@ extern "C"
      * options were selected in each step.
      *
      * Returns an empty string if the archive has no FOMOD installer or
-     * if inference fails entirely.
+     * if inference fails entirely. Null `archivePath` or `modPath` is a
+     * usage error and returns the literal string
+     * `"archivePath and modPath must not be null"` (not empty) - callers
+     * that gate on empty-string-as-failure should also handle this case.
      *
-     * @param archivePath Null-terminated UTF-8 path to the archive.
+     * @param archivePath Null-terminated UTF-8 path to the archive. Must not be `nullptr`.
      * @param modPath Null-terminated UTF-8 path to the installed mod
-     *        directory to compare against.
-     * @return Heap-allocated JSON selections string. Empty string on failure.
+     *        directory to compare against. Must not be `nullptr`.
+     * @return Heap-allocated JSON selections string. Empty string on
+     *         pipeline failure; error-message string on null input.
      *         The caller **must** call freeResult() to release the returned pointer.
      * @note All C++ exceptions are caught internally and returned as an
      *       empty string -- callers will never see a C++ exception propagate.
