@@ -7,6 +7,17 @@
 #include <unordered_set>
 #include <vector>
 
+/**
+ * @file FomodCSPOptions.h
+ * @brief Free functions that enumerate solver-relevant plugin options
+ *        for a given (step, group, flag-state, cap) tuple.
+ *
+ * Used by the CSP solver to materialize the candidate option set for
+ * each group during backtracking, with caching keyed on the tuple
+ * defined here so that repeated visits to the same (group, flag
+ * signature) pair do not recompute the option list.
+ */
+
 namespace mo2core
 {
 
