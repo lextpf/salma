@@ -19,10 +19,10 @@ static constexpr int MAX_DEPENDENCY_DEPTH = 32;
 enum class ExternalConditionOverride : uint8_t
 {
     Unknown =
-        0,  ///< External state cannot be determined; File/Plugin/Fomod conditions conservatively
-            /** < return false, infrastructure conditions (Game/Fomm/Fose) return true. */
-    ForceFalse = 1,  ///< Override forces external dependency to evaluate as unmet (false).
-    ForceTrue = 2,   ///< Override forces external dependency to evaluate as met (true).
+        0, /**< External state cannot be determined; File/Plugin/Fomod conditions conservatively
+              return false, infrastructure conditions (Game/Fomm/Fose) return true. */
+    ForceFalse = 1, /**< Override forces external dependency to evaluate as unmet (false). */
+    ForceTrue = 2,  /**< Override forces external dependency to evaluate as met (true). */
 };
 
 // ---------------------------------------------------------------------------
