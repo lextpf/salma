@@ -60,21 +60,21 @@ namespace mo2core
 /** @brief Logical operator for combining child conditions. */
 enum class FomodConditionOp
 {
-    And,  ///< All child conditions must be true (logical conjunction)
-    Or    ///< At least one child condition must be true (logical disjunction)
+    And, /**< All child conditions must be true (logical conjunction) */
+    Or   /**< At least one child condition must be true (logical disjunction) */
 };
 
 /** @brief Discriminator for the predicate a leaf condition tests. */
 enum class FomodConditionType
 {
-    Flag,      ///< `<flagDependency>` -- tests a user-set condition flag
-    File,      ///< `<fileDependency>` -- tests whether a file is Active/Inactive/Missing
-    Game,      ///< `<gameDependency>` -- tests the game version
-    Plugin,    ///< `<pluginDependency>` -- tests whether a game plugin (.esp/.esm) is active
-    Fomod,     ///< `<fomodDependency>` -- tests whether a named FOMOD package is installed
-    Fomm,      ///< `<fommDependency>` -- tests the FOMM version
-    Fose,      ///< `<foseDependency>` -- tests the script extender (FOSE/SKSE/etc.) version
-    Composite  ///< `<dependencies>` -- composite node combining children with And/Or
+    Flag,     /**< `<flagDependency>` -- tests a user-set condition flag */
+    File,     /**< `<fileDependency>` -- tests whether a file is Active/Inactive/Missing */
+    Game,     /**< `<gameDependency>` -- tests the game version */
+    Plugin,   /**< `<pluginDependency>` -- tests whether a game plugin (.esp/.esm) is active */
+    Fomod,    /**< `<fomodDependency>` -- tests whether a named FOMOD package is installed */
+    Fomm,     /**< `<fommDependency>` -- tests the FOMM version */
+    Fose,     /**< `<foseDependency>` -- tests the script extender (FOSE/SKSE/etc.) version */
+    Composite /**< `<dependencies>` -- composite node combining children with And/Or */
 };
 
 /**
@@ -84,6 +84,12 @@ enum class FomodConditionType
  * Leaf nodes use one set of fields depending on `type` (e.g. `flag_name` +
  * `flag_value` for `Flag`). Composite nodes ignore leaf fields and evaluate
  * `children` combined with `op`.
+ *
+ * Specifically: when `type != Composite`, the leaf fields (`flag_name`,
+ * `flag_value`, `file_path`, `version`, `plugin_name`, `fomod_name`) are
+ * populated according to the discriminator and `op` / `children` are
+ * ignored. When `type == Composite`, only `op` and `children` are
+ * meaningful and the leaf fields are ignored.
  */
 struct FomodCondition
 {
@@ -113,19 +119,20 @@ struct FomodCondition
  */
 struct FomodFileEntry
 {
-    std::string source;       ///< Archive-relative source path (normalized, with archive prefix)
-    std::string destination;  ///< Mod-relative destination path (normalized)
-    int priority = 0;         ///< Overwrite priority; higher values win conflicts (default 0)
-    bool is_folder = false;   ///< True if this entry came from a `<folder>` element
-    bool always_install = false;     ///< XML `alwaysInstall` attribute
-    bool install_if_usable = false;  ///< XML `installIfUsable` attribute
+    std::string source;      /**< Archive-relative source path (normalized, with archive prefix) */
+    std::string destination; /**< Mod-relative destination path (normalized) */
+    int priority = 0;        /**< Overwrite priority; higher values win conflicts (default 0) */
+    bool is_folder = false;  /**< True if this entry came from a `<folder>` element */
+    bool always_install = false;    /**< XML `alwaysInstall` attribute */
+    bool install_if_usable = false; /**< XML `installIfUsable` attribute */
 };
 
 /** @brief A condition that, when met, overrides a plugin's declared type. */
 struct FomodTypePattern
 {
-    FomodCondition condition;                       ///< Condition that triggers this override
-    PluginType result_type = PluginType::Optional;  ///< Plugin type to apply when condition is met
+    FomodCondition condition; /**< Condition that triggers this override */
+    PluginType result_type =
+        PluginType::Optional; /**< Plugin type to apply when condition is met */
 };
 
 /**
@@ -138,16 +145,16 @@ struct FomodTypePattern
  */
 struct FomodPlugin
 {
-    std::string name;  ///< Display name from the `name` attribute
+    std::string name; /**< Display name from the `name` attribute */
     PluginType type =
-        PluginType::Optional;  ///< Base selection type (may be overridden by type_patterns)
+        PluginType::Optional; /**< Base selection type (may be overridden by type_patterns) */
     std::vector<FomodTypePattern>
-        type_patterns;  ///< Conditional type overrides from `<dependencyType>/<patterns>`
-    std::vector<FomodFileEntry> files;  ///< Files installed when this plugin is selected
+        type_patterns; /**< Conditional type overrides from `<dependencyType>/<patterns>` */
+    std::vector<FomodFileEntry> files; /**< Files installed when this plugin is selected */
     std::vector<std::pair<std::string, std::string>>
-        condition_flags;  ///< Flag name/value pairs set when selected
+        condition_flags; /**< Flag name/value pairs set when selected */
     std::optional<FomodCondition>
-        dependencies;  ///< Optional prerequisite conditions for this plugin
+        dependencies; /**< Optional prerequisite conditions for this plugin */
 };
 
 /**
@@ -156,11 +163,11 @@ struct FomodPlugin
  */
 enum class FomodGroupType
 {
-    SelectExactlyOne,  ///< User must select exactly one plugin in the group
-    SelectAtMostOne,   ///< User may select zero or one plugin (radio + none)
-    SelectAtLeastOne,  ///< User must select one or more plugins (at least one required)
-    SelectAll,         ///< All plugins are force-selected; user cannot deselect any
-    SelectAny          ///< User may select any combination, including none (checkboxes)
+    SelectExactlyOne, /**< User must select exactly one plugin in the group */
+    SelectAtMostOne,  /**< User may select zero or one plugin (radio + none) */
+    SelectAtLeastOne, /**< User must select one or more plugins (at least one required) */
+    SelectAll,        /**< All plugins are force-selected; user cannot deselect any */
+    SelectAny         /**< User may select any combination, including none (checkboxes) */
 };
 
 /** FomodConditionOp enum map specialization. */
@@ -189,26 +196,26 @@ inline constexpr auto enum_map<FomodGroupType> = EnumStringMap<FomodGroupType, 5
 /** @brief A named group of plugins sharing a selection cardinality constraint. */
 struct FomodGroup
 {
-    std::string name;  ///< Display name from the `name` attribute
+    std::string name; /**< Display name from the `name` attribute */
     FomodGroupType type =
-        FomodGroupType::SelectAny;     ///< Selection cardinality constraint for this group
-    std::vector<FomodPlugin> plugins;  ///< Selectable options within this group
+        FomodGroupType::SelectAny;    /**< Selection cardinality constraint for this group */
+    std::vector<FomodPlugin> plugins; /**< Selectable options within this group */
 };
 
 /** @brief One wizard page presented to the user, optionally gated by a visibility condition. */
 struct FomodStep
 {
-    std::string name;                       ///< Display name from the `name` attribute
-    int ordinal = 0;                        ///< Zero-based position in the wizard sequence
-    std::optional<FomodCondition> visible;  ///< Visibility condition; step is shown only when met
-    std::vector<FomodGroup> groups;         ///< Option groups presented on this wizard page
+    std::string name;                      /**< Display name from the `name` attribute */
+    int ordinal = 0;                       /**< Zero-based position in the wizard sequence */
+    std::optional<FomodCondition> visible; /**< Visibility condition; step is shown only when met */
+    std::vector<FomodGroup> groups;        /**< Option groups presented on this wizard page */
 };
 
 /** @brief Files installed when a condition is met, from `<conditionalFileInstalls>`. */
 struct FomodConditionalPattern
 {
-    FomodCondition condition;           ///< Condition evaluated after all wizard steps complete
-    std::vector<FomodFileEntry> files;  ///< Files installed when the condition is met
+    FomodCondition condition;          /**< Condition evaluated after all wizard steps complete */
+    std::vector<FomodFileEntry> files; /**< Files installed when the condition is met */
 };
 
 /**
@@ -222,13 +229,13 @@ struct FomodConditionalPattern
 struct FomodInstaller
 {
     std::optional<FomodCondition>
-        module_dependencies;  ///< Global prerequisites from `<moduleDependencies>`
+        module_dependencies; /**< Global prerequisites from `<moduleDependencies>` */
     std::vector<FomodFileEntry>
-        required_files;  ///< Unconditionally installed files from `<requiredInstallFiles>`
-    std::vector<FomodStep> steps;  ///< Ordered wizard pages from `<installSteps>`
+        required_files; /**< Unconditionally installed files from `<requiredInstallFiles>` */
+    std::vector<FomodStep> steps; /**< Ordered wizard pages from `<installSteps>` */
     std::vector<FomodConditionalPattern>
-        conditional_patterns;  ///< Post-wizard conditional installs from
-                               /** < `<conditionalFileInstalls>` */
+        conditional_patterns; /**< Post-wizard conditional installs from `<conditionalFileInstalls>`
+                               */
 };
 
 /**
