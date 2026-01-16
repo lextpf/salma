@@ -25,13 +25,12 @@ namespace mo2core
  */
 struct PropagationResult
 {
-    // Per-group: remaining candidate selections after propagation.
-    // [step][group][plugin] = usable
-    std::vector<std::vector<std::vector<bool>>> narrowed_domains;
-    // Groups fully resolved by propagation (step_idx, group_idx).
-    std::vector<std::tuple<int, int>> resolved_groups;
-    // Whether all groups were resolved (no CSP needed).
-    bool fully_resolved = false;
+    std::vector<std::vector<std::vector<bool>>>
+        narrowed_domains; /**< Per-group remaining candidate selections after propagation.
+                             [step][group][plugin] = usable */
+    std::vector<std::tuple<int, int>>
+        resolved_groups;         /**< Groups fully resolved by propagation (step_idx, group_idx). */
+    bool fully_resolved = false; /**< Whether all groups were resolved (no CSP needed). */
 };
 
 /**
@@ -54,7 +53,13 @@ struct PropagationResult
  * All steps are treated as visible because original step visibility at
  * install time cannot be determined during inference.
  *
- * The propagator runs a fixpoint iteration loop:
+ * The propagator iterates a domain-narrowing operator \f$\mathcal{T}\f$
+ * until fixpoint:
+ *
+ * \f[ D^{(k+1)} = \mathcal{T}(D^{(k)}), \quad k < 16 \f]
+ *
+ * terminating at the smallest \f$k \le 16\f$ with
+ * \f$D^{(k)} = D^{(k-1)}\f$.
  *
  * ```mermaid
  * flowchart TD
