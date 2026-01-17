@@ -53,6 +53,21 @@ namespace mo2core
  * candidates exist, a `moduleName` from the JSON config disambiguates.
  * As a final fallback, the entire archive root is copied flat.
  *
+ * ## :material-shield-check: moduleName Sanitization
+ *
+ * When a JSON config provides `moduleName` for non-FOMOD disambiguation,
+ * the value is rejected (cleared and logged as a warning, not thrown)
+ * if it contains:
+ *
+ * - Path separators (`/` or `\`)
+ * - Parent-directory segments (`..`)
+ * - A stem matching a Windows reserved device name (case-insensitive):
+ *   CON, PRN, AUX, NUL, COM1-9, LPT1-9. The check ignores extension,
+ *   so `con.txt` is rejected just like `con`.
+ *
+ * A rejected `moduleName` falls through to the "ambiguous folder"
+ * fatal path if multiple candidates exist.
+ *
  * ## :material-code-tags: Usage Example
  *
  * ```cpp
