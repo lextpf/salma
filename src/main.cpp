@@ -265,7 +265,8 @@ int main()
 
     // stream_threshold controls when Crow starts streaming request bodies instead
     // of buffering them in memory. It does NOT enforce a hard body-size limit.
-    // The actual upload-size cap is enforced per-handler (see handle_upload).
+    // The actual upload-size cap is enforced per-handler (see handle_upload's
+    // kMaxUploadBytes in InstallationController.cpp - same 512 MiB value, by design).
     static constexpr size_t kStreamThreshold = 512ULL * 1024 * 1024;
 
     logger.log("[server] Server starting on port 5000");
