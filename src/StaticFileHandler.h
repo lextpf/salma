@@ -43,12 +43,13 @@ namespace mo2server
  * ## :material-alert-circle-outline: Edge Cases
  *
  * - If the static root directory is missing or unreadable, the
- *   `weakly_canonical()` call may throw (resulting in a 500), or
- *   if it succeeds the SPA fallback serves `index.html`, which
- *   will itself 404 if the root is truly absent.
+ *   `weakly_canonical()` call returns 404 (filesystem errors are
+ *   caught), or if canonicalization succeeds the SPA fallback
+ *   serves `index.html`, which will itself 404 if the root is
+ *   truly absent.
  * - If `weakly_canonical()` throws (e.g. broken symlink, I/O error),
- *   the exception propagates uncaught. Crow's internal handler will
- *   return a 500 response.
+ *   the exception is caught and the request returns 404. No
+ *   filesystem exceptions propagate to Crow's internal handler.
  *
  * ## :material-code-tags: Usage Example
  *
@@ -78,18 +79,18 @@ public:
      * Returns the requested file with the appropriate Content-Type
      * header. If the path does not exist or is a directory, returns
      * `index.html` (SPA fallback). Returns 403 on path traversal
-     * attempts and 404 if index.html itself is missing.
+     * attempts and 404 if index.html itself is missing or if
+     * `weakly_canonical()` fails (e.g. broken symlink, I/O error).
      *
      * @param path Relative path within the static directory.
-     * @return Crow response with file contents or error status.
-     * @throw std::filesystem::filesystem_error if `weakly_canonical()`
-     *        fails (e.g. broken symlink, I/O error). Crow's internal
-     *        handler converts uncaught exceptions to a 500 response.
+     * @return Crow response with file contents or error status (403, 404).
+     *         No exceptions propagate to callers - filesystem errors
+     *         from `weakly_canonical()` are caught and converted to 404.
      */
     crow::response serve(const std::string& path);
 
 private:
-    std::string static_dir_;  ///< Root directory for static assets
+    std::string static_dir_; /**< Root directory for static assets */
     std::string GetContentType(const std::string& extension);
 };
 
