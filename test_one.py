@@ -1,4 +1,4 @@
-"""Single-mod round-trip test: scan → install → compare."""
+"""Single-mod round-trip test: scan -> install -> compare."""
 
 import argparse
 import shutil

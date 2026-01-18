@@ -821,7 +821,7 @@
   /* ============================================================
      UPLOAD DROPZONE - the "Click or drag to install" file-upload
      surface. Three states resolve through nested selectors:
-       default → hover → dragging
+       default -> hover -> dragging
      The inner `.upload-dropzone-card` reuses `.empty-state-card`
      for its dashed border and base layout, then layers state-driven
      bg / border-color shifts. The icon-ring follows along.
