@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { listFomods, deleteFomod, isFetchUnavailableError } from '../api'
-import FomodListItem from '../components/FomodListItem'
-import Section from '../components/Section'
-import type { FomodEntry } from '../types'
+import { listFomods, deleteFomod, isFetchUnavailableError } from './api'
+import FomodListItem from './components/FomodListItem'
+import Section from './components/Section'
+import type { FomodEntry } from './types'
 
 const RETRY_DELAY_MS = 2000
 
