@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { getMo2Status, getConfig } from '../api'
-import type { Mo2Status, AppConfig } from '../types'
+import { getMo2Status, getConfig } from './api'
+import type { Mo2Status, AppConfig } from './types'
 
 const RETRY_DELAY_MS = 2000
 
