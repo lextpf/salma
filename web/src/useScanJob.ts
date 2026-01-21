@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { scanFomods, getFomodScanStatus, isFetchUnavailableError } from '../api'
+import { scanFomods, getFomodScanStatus, isFetchUnavailableError } from './api'
 import { usePolling } from './usePolling'
 
 const RETRY_DELAY_MS = 2000
