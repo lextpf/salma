@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { highlightLog, type HighlightSegment } from '../utils/logHighlight'
+import { highlightLog, type HighlightSegment } from '../logHighlight'
 
 // Tab-leader pattern: a run of 4+ dots between whitespace boundaries. The
 // backend (test.py / mo2-salma.py) pads label-to-status with literal dots so
