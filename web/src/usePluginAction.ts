@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react'
-import { deployPlugin, purgePlugin, getPluginActionStatus, isFetchUnavailableError } from '../api'
+import { deployPlugin, purgePlugin, getPluginActionStatus, isFetchUnavailableError } from './api'
 import { usePolling } from './usePolling'
 
 export interface PluginActionState {
