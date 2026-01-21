@@ -1,8 +1,8 @@
 import type { InstallationJob } from '../types'
 import Section from './Section'
 import InstallationQueue from './InstallationQueue'
-import { useCollapsedQueue } from '../hooks/useCollapsedQueue'
-import { useViewportShort } from '../hooks/useViewportShort'
+import { useCollapsedQueue } from '../useCollapsedQueue'
+import { useViewportShort } from '../useViewportShort'
 
 interface InstallationQueueShellProps {
   jobs: InstallationJob[]
