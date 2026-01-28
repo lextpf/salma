@@ -13,18 +13,24 @@ import sys; sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import argparse
 import json
 
-from scripts.common import find_dll, load_dll
+from scripts.common import call_owned_string, find_dll, load_dll
 
 
 def scan(archive: Path, mod_path: Path, dll=None) -> str:
-    """Infer FOMOD selections. Returns JSON string."""
+    """Infer FOMOD selections. Returns JSON string.
+
+    Goes through ``call_owned_string`` so the C-side ``_strdup`` buffer is
+    freed; the previous direct call with ``restype = c_char_p`` leaked
+    every result pointer.
+    """
     if dll is None:
         dll = load_dll(find_dll())
-    result = dll.inferFomodSelections(
+    return call_owned_string(
+        dll,
+        dll.inferFomodSelections,
         str(archive).encode("utf-8"),
         str(mod_path).encode("utf-8"),
     )
-    return result.decode("utf-8") if result else ""
 
 
 def main():
