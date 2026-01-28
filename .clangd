@@ -1,0 +1,17 @@
+CompileFlags:
+  Add:
+    - --target=x86_64-pc-windows-msvc
+    - -std=c++23
+    - -I../src
+    - -I../build/vcpkg_installed/x64-windows-static-md/include
+    - -DWIN32
+    - -D_WINDOWS
+    - -D_WIN32_WINNT=0x0A00
+    - -DMO2_CORE_EXPORTS
+    - -DLIBARCHIVE_STATIC
+    - -DASIO_NO_DEPRECATED
+    - -DASIO_STANDALONE
+    - -DBIT7Z_AUTO_FORMAT
+    - -DBIT7Z_DETECT_FROM_EXTENSION
+    - -DBIT7Z_AUTO_PREFIX_LONG_PATHS
+    - -DBIT7Z_PATH_SANITIZATION
