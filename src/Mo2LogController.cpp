@@ -2,6 +2,7 @@
 #include "Mo2Helpers.h"
 
 #include "Logger.h"
+#include "Utils.h"
 
 #include <cctype>
 #include <charconv>
@@ -249,7 +250,9 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
 
 crow::response Mo2Controller::get_logs(const crow::request& req)
 {
-    return read_log_file(fs::current_path() / "logs" / "salma.log", req);
+    // Read from the same location Logger writes to, anchored against the
+    // module rather than re-derived through cwd.
+    return read_log_file(mo2core::Logger::instance().log_path(), req);
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +261,8 @@ crow::response Mo2Controller::get_logs(const crow::request& req)
 
 crow::response Mo2Controller::get_test_logs(const crow::request& req)
 {
-    return read_log_file(fs::current_path() / "test.log", req);
+    // test.log lives next to test.py, which itself lives next to the exe.
+    return read_log_file(mo2core::executable_directory() / "test.log", req);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +288,7 @@ crow::response Mo2Controller::clear_logs()
 
 crow::response Mo2Controller::clear_test_logs()
 {
-    auto log_path = fs::current_path() / "test.log";
+    auto log_path = mo2core::executable_directory() / "test.log";
 
     try
     {
