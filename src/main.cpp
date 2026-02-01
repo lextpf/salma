@@ -29,48 +29,15 @@
 #include "Logger.h"
 #include "Mo2Controller.h"
 #include "StaticFileHandler.h"
+#include "Utils.h"
 
 #include <crow/logging.h>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <string>
-#include <string_view>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 namespace fs = std::filesystem;
-
-namespace
-{
-
-// Resolve the directory containing the running executable.
-// Falls back to cwd if the platform lookup fails.
-fs::path executable_directory()
-{
-#ifdef _WIN32
-    std::wstring buf(MAX_PATH, L'\0');
-    DWORD len = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
-    constexpr int kMaxRetries = 5;
-    int retries = 0;
-    while (len >= buf.size() && retries < kMaxRetries)
-    {
-        buf.resize(buf.size() * 2);
-        len = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
-        ++retries;
-    }
-    if (len > 0 && retries < kMaxRetries)
-    {
-        buf.resize(len);
-        return fs::path(buf).parent_path();
-    }
-#endif
-    return fs::current_path();
-}
-
-}  // namespace
 
 /**
  * @brief Bridges Crow's ILogHandler into salma's Logger so all HTTP-server
@@ -187,7 +154,7 @@ int main()
     // dashboard works regardless of where the user launches mo2-server.exe from.
     // Try <exe>/web/dist first (release layout), fall back to <exe>/../web/dist
     // (in-tree dev layout where the exe lives in build/bin/Release).
-    auto exe_dir = executable_directory();
+    auto exe_dir = mo2core::executable_directory();
     auto static_dir = (exe_dir / "web" / "dist").string();
     if (!fs::exists(static_dir))
     {
