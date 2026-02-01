@@ -2,6 +2,7 @@
 #include "Mo2Helpers.h"
 
 #include "Logger.h"
+#include "Utils.h"
 
 #include <filesystem>
 #include <format>
@@ -83,10 +84,11 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
         return json_response(400, {{"error", "Path traversal not allowed in test arguments"}});
     }
 
-    auto py_path = fs::current_path() / "test.py";
+    auto exe_dir = mo2core::executable_directory();
+    auto py_path = exe_dir / "test.py";
     if (!fs::exists(py_path))
-        return json_response(
-            404, {{"error", std::format("test.py not found in {}", fs::current_path().string())}});
+        return json_response(404,
+                             {{"error", std::format("test.py not found in {}", exe_dir.string())}});
 
     // Build command line - test.py handles its own logging to test.log
     std::string cmd = std::format("python \"{}\" {}", py_path.string(), args);
@@ -102,7 +104,7 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
                              FALSE,
                              CREATE_NO_WINDOW,
                              nullptr,
-                             fs::current_path().string().c_str(),
+                             exe_dir.string().c_str(),
                              &si,
                              &pi);
 
