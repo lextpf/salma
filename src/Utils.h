@@ -312,6 +312,38 @@ MO2_API bool is_safe_destination(const std::string& dest);
  */
 MO2_API bool is_inside(const std::filesystem::path& parent, const std::filesystem::path& child);
 
+/**
+ * @brief Directory of the host executable (`GetModuleFileNameW(nullptr, ...)`).
+ *
+ * Use this for resources tied to a specific executable, such as
+ * `salma.json` next to `mo2-server.exe` or the dashboard's `web/dist`
+ * tree. Do **not** use it for resources that should follow the calling
+ * binary inside MO2 (use module_directory() for those).
+ *
+ * Falls back to `std::filesystem::current_path()` if the Win32 lookup
+ * fails or the platform is not Windows.
+ *
+ * @return Absolute path to the directory containing the running executable.
+ */
+MO2_API std::filesystem::path executable_directory();
+
+/**
+ * @brief Directory of the module containing @p anchor.
+ *
+ * On Windows, resolves to the directory of the DLL or EXE the address
+ * lives in - regardless of the host process's working directory or the
+ * host EXE's location. Use this for resources owned by the binary the
+ * code itself is in (logs, a bundled `7z.dll` next to `mo2-salma.dll`).
+ *
+ * Falls back to `std::filesystem::current_path()` if the lookup fails
+ * or the platform is not Windows.
+ *
+ * @param anchor Address inside the module to query (a function pointer
+ *               to any symbol defined in that module is sufficient).
+ * @return Absolute path to the module's containing directory.
+ */
+MO2_API std::filesystem::path module_directory(const void* anchor);
+
 /** @brief Typed error propagation alias (@c std::expected with a string error). */
 template <typename T>
 using Result = std::expected<T, std::string>;
