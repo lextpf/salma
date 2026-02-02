@@ -15,20 +15,24 @@ echo                           SALMA DEPLOY SCRIPT
 echo ============================================================================
 echo.
 
-:: MO2 plugins folder (override with SALMA_DEPLOY_PATH env var)
-if defined SALMA_DEPLOY_PATH (
-    set "DEPLOY_PATH=%SALMA_DEPLOY_PATH%"
-) else (
-    set "DEPLOY_PATH=D:\Nolvus\Instance\MO2\plugins"
+:: MO2 plugins folder. Required - run scripts\setup-env.bat once to configure.
+if not defined SALMA_DEPLOY_PATH (
+    echo ERROR: SALMA_DEPLOY_PATH is not set.
+    echo Run scripts\setup-env.bat once to configure paths,
+    echo or set the variable manually for this shell.
+    exit /b 1
 )
+set "DEPLOY_PATH=%SALMA_DEPLOY_PATH%"
 
 REM ============================================================================
 REM STEP 1: Verify Build
 REM ============================================================================
+REM Resolve paths relative to this script (%~dp0), not the calling shell's cwd,
+REM so the dashboard can invoke deploy.bat from any working directory.
 echo [1/3] Verifying build...
 echo ----------------------------------------------------------------------------
-set "DLL_SOURCE=build\bin\Release\mo2-salma.dll"
-if exist "mo2-salma.dll" set "DLL_SOURCE=mo2-salma.dll"
+set "DLL_SOURCE=%~dp0build\bin\Release\mo2-salma.dll"
+if exist "%~dp0mo2-salma.dll" set "DLL_SOURCE=%~dp0mo2-salma.dll"
 if not exist "%DLL_SOURCE%" (
     echo ERROR: %DLL_SOURCE% not found
     echo Run build.bat first
@@ -59,7 +63,9 @@ REM STEP 3: Copy Python Plugin
 REM ============================================================================
 echo [3/3] Copying Python plugin...
 echo ----------------------------------------------------------------------------
-copy /Y "scripts\mo2-salma.py" "%DEPLOY_PATH%\mo2-salma.py"
+set "PY_SOURCE=%~dp0scripts\mo2-salma.py"
+if exist "%~dp0mo2-salma.py" set "PY_SOURCE=%~dp0mo2-salma.py"
+copy /Y "%PY_SOURCE%" "%DEPLOY_PATH%\mo2-salma.py"
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Failed to copy Python plugin
     exit /b %ERRORLEVEL%
