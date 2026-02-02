@@ -16,19 +16,21 @@ echo                           SALMA PURGE SCRIPT
 echo ============================================================================
 echo.
 
-:: MO2 plugins folder (override with SALMA_DEPLOY_PATH env var)
-if defined SALMA_DEPLOY_PATH (
-    set "DEPLOY_PATH=%SALMA_DEPLOY_PATH%"
-) else (
-    set "DEPLOY_PATH=D:\Nolvus\Instance\MO2\plugins"
+:: MO2 plugins/mods folders. Required - run scripts\setup-env.bat once to configure.
+if not defined SALMA_DEPLOY_PATH (
+    echo ERROR: SALMA_DEPLOY_PATH is not set.
+    echo Run scripts\setup-env.bat once to configure paths,
+    echo or set the variable manually for this shell.
+    exit /b 1
 )
-
-:: MO2 mods folder (override with SALMA_MODS_PATH env var)
-if defined SALMA_MODS_PATH (
-    set "MODS_PATH=%SALMA_MODS_PATH%"
-) else (
-    set "MODS_PATH=D:\Nolvus\Instance\MODS\mods"
+if not defined SALMA_MODS_PATH (
+    echo ERROR: SALMA_MODS_PATH is not set.
+    echo Run scripts\setup-env.bat once to configure paths,
+    echo or set the variable manually for this shell.
+    exit /b 1
 )
+set "DEPLOY_PATH=%SALMA_DEPLOY_PATH%"
+set "MODS_PATH=%SALMA_MODS_PATH%"
 
 echo Plugins: %DEPLOY_PATH%
 echo Mods:    %MODS_PATH%
@@ -78,7 +80,9 @@ if exist "%MODS_PATH%\Salma FOMODs Output" (
 REM ============================================================================
 REM Remove log file
 REM ============================================================================
-set "LOG_DIR=%DEPLOY_PATH%\..\logs"
+REM The MO2 plugin writes to <MO2 plugins>/logs/mo_salma.log (anchored to
+REM the .py file), so purge looks under DEPLOY_PATH, not its parent.
+set "LOG_DIR=%DEPLOY_PATH%\logs"
 echo [4/4] Removing mo_salma.log...
 if exist "%LOG_DIR%\mo_salma.log" (
     del /Q "%LOG_DIR%\mo_salma.log"
