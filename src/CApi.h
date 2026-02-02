@@ -111,9 +111,19 @@ namespace CApi
  * versa, before invoking any other entry point.
  *
  * Format is `MAJOR.MINOR.PATCH`. A different MAJOR is incompatible.
+ *
+ * 1.0.0 - initial public ABI.
+ * 1.1.0 - added @ref resolveModArchive.
  */
-#define MO2_SALMA_API_VERSION "1.0.0"
+#define MO2_SALMA_API_VERSION "1.1.0"
 #define MO2_SALMA_API_MAJOR "1"
+
+// Compile-time guard: bumping MO2_SALMA_API_VERSION without keeping
+// MO2_SALMA_API_MAJOR's first segment in sync would silently break the
+// callers' major-only ABI check.
+static_assert(MO2_SALMA_API_VERSION[0] == MO2_SALMA_API_MAJOR[0] && MO2_SALMA_API_MAJOR[1] == '\0',
+              "MO2_SALMA_API_MAJOR must equal the leading digit of "
+              "MO2_SALMA_API_VERSION");
 
 /**
  * @brief Signature for the log callback function.
@@ -242,6 +252,38 @@ extern "C"
      * @param result Pointer previously returned by an API function, or `nullptr` (no-op).
      */
     MO2_API void freeResult(const char* result);
+
+    /**
+     * @brief Resolve a mod's source archive path using the same fallback
+     *        chain as the dashboard's FOMOD scan.
+     * @ingroup CApi
+     * @since 1.1.0
+     *
+     * Centralizes the resolution rules so the local dashboard and the MO2
+     * Python plugin agree on which archive a mod folder maps to. The
+     * fallback chain is documented on
+     * @ref mo2core::resolve_mod_archive (`SALMA_DOWNLOADS_PATH`,
+     * `<mod_folder>`, `<mods_dir>/..`, then two `downloads/` sibling
+     * lookups). Previously the Python plugin had a much shallower chain,
+     * so a mod whose archive lived in `<mods_dir>/../downloads` would
+     * succeed in the server scan but fail in the plugin.
+     *
+     * @param installationFile Null-terminated UTF-8 value from
+     *        `[General] installationFile` in the mod's `meta.ini`.
+     *        Must not be `nullptr`.
+     * @param modFolder Null-terminated UTF-8 absolute path to the mod
+     *        folder. Must not be `nullptr`.
+     * @param modsDir Null-terminated UTF-8 absolute path to the parent
+     *        mods directory (e.g. `<MO2 instance>/mods`). May be empty.
+     * @return Heap-allocated absolute path on hit, or empty string on
+     *         miss. The caller **must** call freeResult() to release the
+     *         returned pointer.
+     * @note All C++ exceptions are caught internally and surfaced as an
+     *       empty result; callers will never see a C++ exception propagate.
+     */
+    MO2_API const char* resolveModArchive(const char* installationFile,
+                                          const char* modFolder,
+                                          const char* modsDir);
 
 }  // extern "C"
 
