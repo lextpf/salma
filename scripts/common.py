@@ -8,6 +8,7 @@ import ctypes
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,10 +17,29 @@ from pathlib import Path
 # Configuration
 # ---------------------------------------------------------------------------
 
-MODS_PATH = Path(os.environ.get(
-    "SALMA_MODS_PATH", r"D:\Nolvus\Instance\MODS\mods"))
-DEPLOY_PATH = Path(os.environ.get(
-    "SALMA_DEPLOY_PATH", r"D:\Nolvus\Instance\MO2\plugins"))
+def _required_env(name: str) -> Path:
+    """Read a required env var as a Path; raise with setup guidance if unset."""
+    val = os.environ.get(name)
+    if not val:
+        raise RuntimeError(
+            f"Required env var {name} is not set. "
+            f"Run scripts\\setup-env.bat once to configure your MO2 paths, "
+            f"or set the variable manually for this shell."
+        )
+    return Path(val)
+
+
+# Reading the env vars at import time is intentional: callers (test.py,
+# scripts/scan.py, scripts/install.py) pass these around as constants.
+# To keep error messages helpful when somebody runs the harness without
+# having configured the environment, we let _required_env raise the
+# RuntimeError at module-import time. The CLI prints it and exits cleanly.
+try:
+    MODS_PATH = _required_env("SALMA_MODS_PATH")
+    DEPLOY_PATH = _required_env("SALMA_DEPLOY_PATH")
+except RuntimeError as exc:
+    print(f"[setup] {exc}", file=sys.stderr)
+    raise SystemExit(2)
 DOWNLOADS_PATH_ENV = os.environ.get("SALMA_DOWNLOADS_PATH", "")
 
 IGNORED_FILES = {"meta.ini", "mo_salma.log", "salma-install.log", "mujointfix.log"}
@@ -105,6 +125,13 @@ def load_dll(dll_path: Path):
 
     lib.inferFomodSelections.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
     lib.inferFomodSelections.restype = ctypes.c_void_p
+
+    # resolveModArchive was added in salma DLL 1.1.0. Configure it only when
+    # the DLL exports it so test scripts can still load older builds.
+    if hasattr(lib, "resolveModArchive"):
+        lib.resolveModArchive.argtypes = [
+            ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+        lib.resolveModArchive.restype = ctypes.c_void_p
 
     _check_api_version(lib)
 
