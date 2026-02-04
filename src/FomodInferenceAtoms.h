@@ -17,14 +17,16 @@ namespace mo2core
 {
 
 /**
- * @brief Reject destination paths that would escape the mod directory.
+ * @brief Inference-side wrapper for path-traversal validation.
  *
- * Delegates to is_safe_destination() in Utils. Paths containing ".." segments
- * or leading slashes are considered unsafe.
+ * Thin forwarder to `mo2core::is_safe_destination` so call sites in
+ * the inference pipeline read symmetrically with the FomodService
+ * pipeline. Both paths share the same rule set.
  *
  * @param dest  Normalized mod-relative destination path to validate.
- * @return true if the path is safe to use as an install destination, false otherwise.
+ * @return `true` if the path is safe to use as an install destination.
  * @throw Does not throw.
+ * @see mo2core::is_safe_destination (Utils.h) for the canonical rules.
  */
 bool is_safe_dest(const std::string& dest);
 
@@ -119,17 +121,11 @@ std::unordered_set<std::string> compute_excluded_dests(const AtomIndex& atom_ind
  *
  * @param installed_files  Map from mod-relative path to file size in bytes,
  *                         representing the current state of the target directory.
- * @param atom_index       The full atom index (currently unused in construction
- *                         but available for future contested-file detection).
- * @param excluded         Set of excluded destination paths (currently unused
- *                         in construction but available for future filtering).
  * @return A TargetTree mapping each installed file's relative path to its
  *         TargetFile metadata.
  * @throw std::bad_alloc if memory allocation for the tree fails.
  */
-TargetTree build_target_tree(const std::unordered_map<std::string, uint64_t>& installed_files,
-                             const AtomIndex& atom_index,
-                             const std::unordered_set<std::string>& excluded);
+TargetTree build_target_tree(const std::unordered_map<std::string, uint64_t>& installed_files);
 
 /**
  * @brief Convert a SolverResult into a JSON response describing the inferred

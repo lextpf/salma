@@ -258,9 +258,7 @@ std::unordered_set<std::string> compute_excluded_dests(const AtomIndex& atom_ind
 // Build target tree from installed files
 // ---------------------------------------------------------------------------
 
-TargetTree build_target_tree(const std::unordered_map<std::string, uint64_t>& installed_files,
-                             const AtomIndex& atom_index,
-                             const std::unordered_set<std::string>& excluded)
+TargetTree build_target_tree(const std::unordered_map<std::string, uint64_t>& installed_files)
 {
     TargetTree target;
     for (const auto& [rel_path, file_size] : installed_files)
