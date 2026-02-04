@@ -12,6 +12,24 @@ namespace fs = std::filesystem;
 namespace mo2core
 {
 
+namespace
+{
+
+// Re-entrancy guard for the user-supplied log callback. A callback that
+// itself calls Logger::log* would otherwise recurse until the stack
+// overflows. Per-thread because callbacks may run on any caller's thread.
+thread_local bool g_in_callback = false;
+
+struct CallbackReentryGuard
+{
+    CallbackReentryGuard() { g_in_callback = true; }
+    ~CallbackReentryGuard() { g_in_callback = false; }
+    CallbackReentryGuard(const CallbackReentryGuard&) = delete;
+    CallbackReentryGuard& operator=(const CallbackReentryGuard&) = delete;
+};
+
+}  // namespace
+
 Logger& Logger::instance()
 {
     static Logger inst;
@@ -91,13 +109,21 @@ void Logger::log(const std::string& message)
     std::cout << message << '\n';
     if (cb_snapshot)
     {
-        try
+        if (g_in_callback)
         {
-            cb_snapshot(message.c_str());
+            std::cerr << "[Logger] Re-entrant callback dropped: " << message << '\n';
         }
-        catch (...)
+        else
         {
-            std::cerr << "[Logger] Callback threw for: " << message << '\n';
+            CallbackReentryGuard guard;
+            try
+            {
+                cb_snapshot(message.c_str());
+            }
+            catch (...)
+            {
+                std::cerr << "[Logger] Callback threw for: " << message << '\n';
+            }
         }
     }
 }
@@ -116,13 +142,21 @@ void Logger::log_error(const std::string& message)
     std::cerr << message << '\n';
     if (cb_snapshot)
     {
-        try
+        if (g_in_callback)
         {
-            cb_snapshot(message.c_str());
+            std::cerr << "[Logger] Re-entrant callback dropped: " << message << '\n';
         }
-        catch (...)
+        else
         {
-            std::cerr << "[Logger] Callback threw for: " << message << '\n';
+            CallbackReentryGuard guard;
+            try
+            {
+                cb_snapshot(message.c_str());
+            }
+            catch (...)
+            {
+                std::cerr << "[Logger] Callback threw for: " << message << '\n';
+            }
         }
     }
 }
@@ -141,13 +175,21 @@ void Logger::log_warning(const std::string& message)
     std::cout << message << '\n';
     if (cb_snapshot)
     {
-        try
+        if (g_in_callback)
         {
-            cb_snapshot(message.c_str());
+            std::cerr << "[Logger] Re-entrant callback dropped: " << message << '\n';
         }
-        catch (...)
+        else
         {
-            std::cerr << "[Logger] Callback threw for: " << message << '\n';
+            CallbackReentryGuard guard;
+            try
+            {
+                cb_snapshot(message.c_str());
+            }
+            catch (...)
+            {
+                std::cerr << "[Logger] Callback threw for: " << message << '\n';
+            }
         }
     }
 }

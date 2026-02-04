@@ -86,9 +86,15 @@ using LogCallback = void (*)(const char*);
  * The callback pointer is snapshotted under `mutex_`, but the
  * callback itself is invoked **outside** the lock, so calling
  * Logger methods from within a callback will not deadlock.
- * However, this is discouraged because it can cause infinite
- * recursion if the callback triggers another log message that
- * in turn invokes the callback again.
+ *
+ * Self-recursion (a callback that triggers another `Logger::log*`
+ * call on the same thread) is detected via a `thread_local` flag.
+ * The inner call writes a single `[Logger] Re-entrant callback
+ * dropped: ...` line to `stderr` and skips the callback dispatch
+ * entirely, so the file write and console output still happen but
+ * the callback is not invoked recursively. This protects the
+ * process from stack-overflow without forcing every callback
+ * implementer to add their own guard.
  *
  * ## :material-autorenew: Log Rotation
  *
@@ -108,7 +114,13 @@ using LogCallback = void (*)(const char*);
  *     [*] --> active: open salma.log
  *     active --> rotating: bytes_written_ >= 10 MiB
  *     rotating --> active: rename salma.log -> salma.log.1, shift .1->.2 .2->.3, delete old .3
+ *     rotating --> active: rename failed (errno logged); reopen current salma.log in append mode
  * ```
+ *
+ * If a rotation step fails (rename / remove returns an error code),
+ * the current `salma.log` is reopened in append mode without
+ * rotation so that subsequent writes continue to land in the file.
+ * The failure itself is logged to `stderr`.
  *
  * @see CApi::setLogCallback
  */
@@ -186,20 +198,36 @@ public:
      * while the Logger still held an open handle.
      *
      * @return `true` if the file was successfully truncated and reopened.
+     *         Returns `false` if either step fails. On failure, the
+     *         persistent handle is still reopened in append mode so that
+     *         subsequent log writes continue to land in the file (callers
+     *         do not need to recreate the Logger).
      */
     bool clear_log();
 
     /**
      * @brief Return the path to the active log file.
+     * @throw Does not throw.
      */
     std::string log_path() const;
 
     /**
      * @brief Return the path to the active log directory.
      *
-     * Always anchored next to the module that owns Logger (the mo2-salma
-     * library). Use this so consumers do not re-derive the path through
-     * `current_path()` and end up disagreeing with what Logger writes.
+     * The directory is resolved once at construction by passing
+     * `&Logger::instance` into `mo2core::module_directory(...)`. That
+     * lookup walks back from the address of a Logger member to the
+     * containing module (the `mo2-salma` DLL on Windows), so the
+     * `logs/` directory always sits next to the binary that owns this
+     * code -- regardless of the host process's working directory or
+     * the host EXE's location. Consumers that derive paths from
+     * `current_path()` will disagree with what Logger writes; use this
+     * accessor instead.
+     *
+     * Falls back to `current_path()` only if the platform lookup fails
+     * (e.g. non-Windows builds).
+     *
+     * @throw Does not throw.
      */
     std::string log_directory() const;
 
