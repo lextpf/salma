@@ -1036,6 +1036,14 @@ static void backtrack(SolverState& state,
         {
             if (stack.size() > kMaxBacktrackDepth)
             {
+                if (stats.max_depth_aborts == 0)
+                {
+                    Logger::instance().log_warning(
+                        std::format("[solver] kMaxBacktrackDepth ({}) exceeded; abandoning "
+                                    "branch (logged once per solve)",
+                                    kMaxBacktrackDepth));
+                }
+                stats.max_depth_aborts++;
                 unwind_frame(f);
                 stack.pop_back();
                 continue;
@@ -1607,12 +1615,13 @@ SolverResult solve_fomod_csp(const FomodInstaller& installer,
 
     logger.log(
         std::format("[solver] Pruning summary: extra_only={}, lower_bound={}, memo={}, "
-                    "invisible_skip={}, node_limit={}",
+                    "invisible_skip={}, node_limit={}, max_depth_aborts={}",
                     stats.pruned_extra_only,
                     stats.pruned_lower_bound,
                     stats.pruned_memo,
                     stats.skipped_invisible,
-                    stats.pruned_node_limit));
+                    stats.pruned_node_limit,
+                    stats.max_depth_aborts));
 
     logger.log(
         std::format("[solver] Domain reduction summary: dropped_extra_only_options={}, "
