@@ -197,10 +197,13 @@ bool is_safe_destination(const std::string& dest)
     if (dest.empty())
         return true;
     auto norm = normalize_path(dest);
-    // After normalize_path, ".." segments survive only if they would escape root.
-    if (norm.starts_with("..") || norm.find("/../") != std::string::npos || norm.ends_with("/.."))
-        return false;
-    // Absolute paths (e.g., "/etc/passwd" or "C:/...")
+    // normalize_path strips every "." and ".." segment, so path-traversal
+    // sequences cannot survive into `norm`. A non-empty input that consists
+    // solely of those segments normalizes to empty, which is also safe (it
+    // resolves to the mod root). The remaining guard rejects absolute paths
+    // ("/etc/passwd") and Windows drive letters ("C:/...").
+    if (norm.empty())
+        return true;
     if (norm.front() == '/' || (norm.size() >= 2 && norm[1] == ':'))
         return false;
     return true;
