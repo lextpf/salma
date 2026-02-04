@@ -251,10 +251,15 @@ static void inject_choice_metadata(json& parsed,
 }
 
 // Per-mod inference result for the scan job.
+//
+// `ArchiveSkip` is split so the caller does not need to re-parse meta.ini
+// to distinguish "the mod folder has no installationFile entry" from
+// "an entry is set but the archive is gone."
 enum class ModResult
 {
     ExistingSkip,
-    ArchiveSkip,
+    ArchiveSkipNoValue,  // meta.ini absent or has no [General] installationFile entry
+    ArchiveSkipMissing,  // meta.ini named an archive but the file was not found
     Inferred,
     NoFomod,
     Error
@@ -284,14 +289,14 @@ static ModResult process_single_mod(const fs::path& mod_folder,
     if (archive_value.empty())
     {
         logger.log(infer_status(index, mod_name, "SKIP", "(no archive)"));
-        return ModResult::ArchiveSkip;
+        return ModResult::ArchiveSkipNoValue;
     }
 
     fs::path archive_path = mo2core::resolve_mod_archive(archive_value, mod_folder, mods_dir);
     if (archive_path.empty() || !fs::exists(archive_path))
     {
         logger.log(infer_status(index, mod_name, "SKIP", "(archive missing)"));
-        return ModResult::ArchiveSkip;
+        return ModResult::ArchiveSkipMissing;
     }
 
     logger.log(
@@ -472,18 +477,12 @@ static json run_fomod_scan_job(const fs::path& mods_dir,
             case ModResult::ExistingSkip:
                 ++skipped_existing;
                 break;
-            case ModResult::ArchiveSkip:
-            {
-                // Distinguish between "no archive" and "archive missing" based on
-                // whether meta.ini had an installationFile entry at all.
-                const std::string archive_value =
-                    read_installation_file(mod_folders[i] / "meta.ini");
-                if (archive_value.empty())
-                    ++no_archive;
-                else
-                    ++archive_missing;
+            case ModResult::ArchiveSkipNoValue:
+                ++no_archive;
                 break;
-            }
+            case ModResult::ArchiveSkipMissing:
+                ++archive_missing;
+                break;
             case ModResult::Inferred:
                 ++scanned;
                 ++inferred;
