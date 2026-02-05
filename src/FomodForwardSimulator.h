@@ -17,6 +17,7 @@ struct InferenceOverrides;
 /**
  * @struct SimulatedTree
  * @brief The file tree produced by a simulated FOMOD installation.
+ * @author Alex (https://github.com/lextpf)
  *
  * Maps each lowercased destination path to the single winning FomodAtom
  * after priority and document-order conflict resolution. Used by the CSP
@@ -42,10 +43,10 @@ struct SimulatedTree
  * a `context` and/or `overrides` are provided; otherwise they are skipped.
  *
  * @pre @p selections is a 3-D boolean grid indexed as
- *      `selections[step_index][group_index][plugin_index]`. Dimensions must
- *      match or exceed the installer's step/group/plugin counts; out-of-bounds
- *      indices are treated as false (deselected). An empty vector is valid and
- *      means no plugins are explicitly selected.
+ *      `selections[step_index][group_index][plugin_index]`. Dimensions need
+ *      not match the installer's counts; missing or short axes are treated
+ *      as `false` (deselected). An empty outer vector is valid and means no
+ *      plugins are explicitly selected.
  * @throw std::bad_alloc if the SimulatedTree or internal flag map allocation fails.
  */
 MO2_API SimulatedTree simulate(const FomodInstaller& installer,
@@ -60,10 +61,10 @@ MO2_API SimulatedTree simulate(const FomodInstaller& installer,
  * but the underlying hash-map capacity is preserved across calls.
  *
  * @pre @p selections is a 3-D boolean grid indexed as
- *      `selections[step_index][group_index][plugin_index]`. Dimensions must
- *      match or exceed the installer's step/group/plugin counts; out-of-bounds
- *      indices are treated as false (deselected). An empty vector is valid and
- *      means no plugins are explicitly selected.
+ *      `selections[step_index][group_index][plugin_index]`. Dimensions need
+ *      not match the installer's counts; missing or short axes are treated
+ *      as `false` (deselected). An empty outer vector is valid and means no
+ *      plugins are explicitly selected.
  * @post @p tree.files is cleared and repopulated with the simulation result.
  * @throw std::bad_alloc if internal flag map or tree insertion allocation fails.
  */
