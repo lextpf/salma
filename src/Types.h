@@ -45,7 +45,7 @@ enum class PluginType
     Recommended,  /**< Pre-selected but user can deselect */
     Optional,     /**< Not pre-selected, user can select */
     NotUsable,    /**< Greyed out, cannot be selected */
-    CouldBeUsable /**< Selectable but not recommended */
+    CouldBeUsable /**< Selectable but the FOMOD installer warns the user before applying */
 };
 
 /**
@@ -61,13 +61,16 @@ enum class PluginType
  */
 struct FileOperation
 {
-    FileOpType type;    /**< File or folder */
-    std::string source; /**< Absolute source path in the extracted archive (OS-native separators) */
-    std::string
-        destination;  /**< Absolute destination path in the mod directory (OS-native separators) */
-    int priority = 0; /**< FOMOD priority attribute (MO2 default: 0) */
-    int document_order = 0; /**< Enqueue counter (incremented per FomodService node), used as
-                               priority tiebreaker. Not strictly XML byte-position. */
+    FileOpType type;         /**< File or folder */
+    std::string source;      /**< Source path under the extracted archive root. Most callers build
+                                  these via `fs::path::string()` (OS-native separators); some
+                                  FOMOD code paths produce forward-slash strings that downstream
+                                  copy code accepts unchanged. */
+    std::string destination; /**< Destination path under the mod directory. Same convention as
+                                  `source`: typically OS-native, occasionally forward-slash. */
+    int priority = 0;        /**< FOMOD priority attribute (MO2 default: 0) */
+    int document_order = 0;  /**< Enqueue counter (incremented per FomodService node), used as
+                                priority tiebreaker. Not strictly XML byte-position. */
 };
 
 /**
