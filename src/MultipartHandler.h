@@ -72,6 +72,7 @@ namespace mo2server
 /**
  * @struct UploadedFile
  * @brief Metadata for a saved multipart file upload.
+ * @author Alex (https://github.com/lextpf)
  * @ingroup MultipartHandler
  */
 struct UploadedFile
