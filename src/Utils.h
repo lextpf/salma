@@ -113,21 +113,50 @@ inline constexpr auto enum_map<PluginType> = EnumStringMap<PluginType, 5>{
 };
 
 /**
- * @brief Lowercase a string (safe for MSVC plain char via unsigned char cast).
+ * @brief Lowercase a string.
+ *
+ * Each character is cast to `unsigned char` before being passed to
+ * `std::tolower`. The cast is required because `std::tolower(int)`
+ * is undefined for negative values when `char` is signed (the MSVC
+ * default), and high-bit bytes from UTF-8 paths would otherwise
+ * trigger that UB.
+ *
  * @param s  Input string.
- * @return A new string with all characters converted to lowercase.
+ * @return A new string with each ASCII character converted to its
+ *         lowercase form. Bytes outside the ASCII range are left
+ *         unchanged (this is a byte-level lowercaser, not a Unicode
+ *         case-folder).
+ * @throw Does not throw.
  */
 MO2_API std::string to_lower(const std::string& s);
 
 /**
- * @brief Normalize an archive/mod path: lowercase, backslash-to-forward-slash,
- *   strip leading "./" and "/", strip trailing "/", collapse "//",
- *   and remove "." and ".." path components.
+ * @brief Normalize an archive/mod path.
+ *
+ * The pipeline is applied in this order:
+ *
+ * ```mermaid
+ * flowchart LR
+ *     A[Raw path] --> B[lowercase]
+ *     B --> C[backslash -> forward slash]
+ *     C --> D[strip leading './' and '/']
+ *     D --> E[strip trailing '/']
+ *     E --> F[collapse '//' -> '/']
+ *     F --> G[drop '.' and '..' segments]
+ *     G --> H[Normalized path]
+ * ```
+ *
+ * The `.` / `..` removal is a syntactic strip, not a filesystem
+ * resolution: there is no canonicalization against an actual
+ * directory. Two callers that pass `a/b/../c` and `a/c` always get
+ * the same normalized output regardless of whether `a/b` exists.
+ *
  * @param p  Raw path string (e.g. from an archive entry or FOMOD node).
  * @return Cleaned path string.
  * @post Output is lowercase, uses forward slashes only, has no
  *   leading/trailing slashes, no repeated `/`, and no `.` or `..`
  *   path segments.
+ * @throw Does not throw.
  */
 MO2_API std::string normalize_path(const std::string& p);
 
@@ -323,6 +352,19 @@ MO2_API bool is_inside(const std::filesystem::path& parent, const std::filesyste
  * Falls back to `std::filesystem::current_path()` if the Win32 lookup
  * fails or the platform is not Windows.
  *
+ * ## Decision rule: executable vs. module directory
+ *
+ * - Resource follows the running EXE (config files, dashboard
+ *   assets) -> `executable_directory()`.
+ * - Resource follows the binary that owns the calling code
+ *   (`mo2-salma.dll`'s logs, the bundled `7z.dll` it loads) ->
+ *   `module_directory(&YourSymbol)`.
+ *
+ * Inside the MO2 plugin path the host EXE is `ModOrganizer.exe`, so
+ * `executable_directory()` would point at MO2's install root rather
+ * than at the salma plugin folder. That is why every salma-owned
+ * resource resolves through `module_directory()`.
+ *
  * @return Absolute path to the directory containing the running executable.
  */
 MO2_API std::filesystem::path executable_directory();
@@ -341,6 +383,7 @@ MO2_API std::filesystem::path executable_directory();
  * @param anchor Address inside the module to query (a function pointer
  *               to any symbol defined in that module is sufficient).
  * @return Absolute path to the module's containing directory.
+ * @see executable_directory() for the decision rule between the two.
  */
 MO2_API std::filesystem::path module_directory(const void* anchor);
 
