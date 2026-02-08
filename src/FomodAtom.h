@@ -30,10 +30,23 @@ namespace mo2core
  *
  * ## :material-sort-variant: Conflict Resolution
  *
- * When multiple atoms target the same destination path, the winner is chosen
- * by highest `priority` first, then highest `document_order` as a tiebreaker.
- * `content_hash` and `file_size` allow skipping redundant extractions when
- * the winning atom is byte-identical to an already-installed file.
+ * When multiple atoms target the same destination path, the winner is
+ * the atom that maximizes `(priority, document_order)` in
+ * lexicographic order:
+ *
+ * \f[
+ *   \mathit{winner} = \arg\max_{a \in A_d}
+ *     \big( a.\text{priority},\, a.\text{document\_order} \big)
+ * \f]
+ *
+ * where \f$A_d\f$ is the set of atoms targeting destination \f$d\f$.
+ * Ties on both keys are not expected because `document_order` is a
+ * monotonic enqueue counter assigned by FomodService, but if they
+ * occur the implementation keeps the first-seen atom.
+ *
+ * `content_hash` and `file_size` allow skipping redundant extractions
+ * when the winning atom is byte-identical to an already-installed
+ * file.
  */
 struct FomodAtom
 {
