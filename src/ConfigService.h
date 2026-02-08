@@ -48,8 +48,15 @@ public:
     /**
      * Load configuration from salma.json. Missing file is not an error
      * (defaults are used). Parse errors are logged and silently ignored --
-     * the method never throws. Loaded paths are NOT validated here; use
-     * is_mo2_mods_path_valid() to surface configuration errors.
+     * the method never throws.
+     *
+     * Loaded paths are not rejected here, but a stale path that no
+     * longer points at an existing directory is logged as a warning so
+     * the operator can spot the drift in the log. Use
+     * is_mo2_mods_path_valid() at the call site to gate behavior on
+     * the path being usable.
+     *
+     * @throw Does not throw.
      */
     void load();
 
@@ -60,6 +67,7 @@ public:
      *
      * @return `true` if the config was written and renamed atomically,
      *         `false` on any I/O failure (disk full, permissions, etc.).
+     * @throw Does not throw.
      */
     bool save();
 
@@ -90,6 +98,7 @@ public:
      * @param path Absolute path to the MO2 mods directory.
      * @return `true` if both the memory and disk update succeeded;
      *         `false` if save() failed (memory state is unchanged).
+     * @throw Does not throw.
      */
     bool apply_mo2_mods_path(const std::string& path);
 
@@ -98,8 +107,16 @@ public:
      *        directory.
      *
      * Used to surface stale configuration: a config file may reference a
-     * path that has since been moved or deleted. Returns false when no
-     * path is configured.
+     * path that has since been moved or deleted.
+     *
+     * Returns `false` in all of these cases:
+     * - No path is configured (empty string).
+     * - The path is configured but does not exist.
+     * - The path exists but is not a directory.
+     * - `fs::is_directory` produced an `error_code` (e.g. permission
+     *   denied during the stat call).
+     *
+     * @throw Does not throw.
      */
     bool is_mo2_mods_path_valid() const;
 
