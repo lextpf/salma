@@ -119,6 +119,7 @@ public:
      *
      * @param src Source file path (must exist, or the call is a no-op).
      * @param dst Destination file path.
+     * @throw Does not throw.
      */
     static void copy_file(const std::filesystem::path& src, const std::filesystem::path& dst);
 
@@ -133,6 +134,7 @@ public:
      *
      * @param src Source directory (must exist, or the call is a no-op).
      * @param dst Destination directory.
+     * @throw Does not throw.
      */
     static void copy_folder(const std::filesystem::path& src, const std::filesystem::path& dst);
 
@@ -152,6 +154,7 @@ public:
      *
      * @param src Source directory whose contents are copied (must exist).
      * @param dst Destination directory.
+     * @throw Does not throw.
      */
     static void copy_directory_contents(const std::filesystem::path& src,
                                         const std::filesystem::path& dst);
