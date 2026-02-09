@@ -14,6 +14,7 @@ namespace mo2server
 /**
  * @struct InstallJobResult
  * @brief Result payload stored by the background installation job.
+ * @author Alex (https://github.com/lextpf)
  *
  * Separate from mo2core::InstallResult because the background job also
  * tracks mod_name (derived from the upload filename or user input),
@@ -75,12 +76,22 @@ struct InstallJobResult
  * - If no `fomodJson` is provided in the upload and a `.json` file
  *   exists adjacent to the archive (same stem), it is used
  *   automatically by InstallationService.
- * - Temp files created during upload (archive and JSON) are cleaned
- *   up after a **successful** installation. If installation throws,
- *   the error path does not delete the temp files -- they remain on
- *   disk until the OS cleans the temp directory.
+ * - Temp files created during upload (archive and any caller-supplied
+ *   FOMOD JSON written to a temp path) are cleaned up by the
+ *   background job after the install completes (success or failure).
+ *   If the job fails to start (409) or `parse_and_validate_upload`
+ *   throws, the controller deletes any already-saved temp files
+ *   before returning, so the temp directory does not accumulate
+ *   orphans.
  *
- * @see MultipartHandler, InstallationService
+ * ## Async Lifecycle
+ *
+ * Both `handle_upload` and `handle_install` enqueue work on
+ * `BackgroundJob<InstallJobResult> job_` and return 200 with
+ * `{ "started": true, ... }` before the install runs. Clients poll
+ * `handle_status` to observe completion.
+ *
+ * @see MultipartHandler, InstallationService, BackgroundJob
  */
 class InstallationController
 {
@@ -94,11 +105,22 @@ public:
      * Expects a multipart form with a `file` part (the archive) and
      * optional `modName`, `modPath`, and `fomodJson` text parts.
      * Saves the file to a temp path, writes the FOMOD JSON if
-     * provided, and runs InstallationService::install_mod().
+     * provided, and runs InstallationService::install_mod() on a
+     * background thread (`job_`).
      *
      * Enforces a hard upload-size cap of **512 MiB**: requests with a
      * body larger than this return HTTP 413 before any multipart
      * parsing or temp-file write.
+     *
+     * ### `modName` resolution
+     *
+     * The `modName` field returned in the 200 response and used for
+     * existing-FOMOD-JSON lookup is determined as:
+     *
+     * 1. Multipart `modName` field, if non-empty.
+     * 2. Otherwise, the upload filename's stem (`fs::path::stem`)
+     *    with a leading `<digits>[-_]` prefix stripped (so a Nexus
+     *    download named `12345-MyMod-v1.7z` becomes `MyMod-v1`).
      *
      * @param req The Crow HTTP request.
      * @return JSON response with install result or error. May return
@@ -123,13 +145,21 @@ public:
     crow::response handle_install(const crow::request& req);
 
     /**
-     * @brief Check the status of an installation job (stub).
+     * @brief Read the running/completed state of the active install job.
      *
-     * Currently always returns `{"status": "completed"}`. No real job
-     * tracking is implemented - all installs run synchronously.
+     * Reads `BackgroundJob<InstallJobResult>` state under its mutex and
+     * returns a JSON status payload. Always returns 200 -- there is no
+     * "job not found" error because the controller only tracks one slot.
      *
-     * @param job_id The job identifier (unused).
-     * @return JSON response with `"completed"` status.
+     * @param job_id Soft-contract: the only meaningful value is `"current"`.
+     *        Any other value is accepted (still returns 200) but a warning
+     *        is logged to make stale-poller bugs visible.
+     * @return 200 with `{ "running": bool, "success"?: bool, "modPath"?: ...,
+     *         "modName"?: ..., "error"?: ... }`. Optional fields are present
+     *         only after the job has completed (see the class shape table).
+     * @note Does not throw. The body is read inside `read_result`'s
+     *       mutex-held callback so `running` and the result fields are
+     *       observed atomically.
      */
     crow::response handle_status(const std::string& job_id);
 
