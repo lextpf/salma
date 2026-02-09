@@ -18,6 +18,7 @@ namespace mo2core
 /**
  * @struct PropagationResult
  * @brief Output of the constraint propagation pre-pass.
+ * @author Alex (https://github.com/lextpf)
  *
  * Contains narrowed plugin domains and a list of groups that were fully
  * resolved without backtracking. When `fully_resolved` is true the CSP
@@ -40,15 +41,12 @@ struct PropagationResult
  * Walks the installer steps in document order and narrows each group's
  * plugin domain using three strategies:
  *
- * 1. **Plugin type constraints** - `Required` and `NotUsable` plugins are
- *    pinned; `SelectAll`
- * groups are resolved immediately.
- * 2. **File evidence** - plugins whose files are entirely absent from the
- *    target tree are
- * eliminated; unique file matches pin a plugin.
+ * 1. **Plugin type constraints** - `Required` and `NotUsable` plugins
+ *    are pinned; `SelectAll` groups are resolved immediately.
+ * 2. **File evidence** - plugins whose files are entirely absent from
+ *    the target tree are eliminated; unique file matches pin a plugin.
  * 3. **Cardinality** - after elimination, groups with only one valid
- *    combination under their
- * `FomodGroupType` are resolved.
+ *    combination under their `FomodGroupType` are resolved.
  *
  * All steps are treated as visible because original step visibility at
  * install time cannot be determined during inference.
@@ -59,7 +57,28 @@ struct PropagationResult
  * \f[ D^{(k+1)} = \mathcal{T}(D^{(k)}), \quad k < 16 \f]
  *
  * terminating at the smallest \f$k \le 16\f$ with
- * \f$D^{(k)} = D^{(k-1)}\f$.
+ * \f$D^{(k)} = D^{(k-1)}\f$ (see `MAX_ITERATIONS` in
+ * `FomodPropagator.cpp`).
+ *
+ * The operator \f$\mathcal{T}\f$ is the composition of the three
+ * narrowing rules listed above:
+ *
+ * \f[ \mathcal{T} = \mathcal{C} \circ \mathcal{F} \circ \mathcal{P} \f]
+ *
+ * where, applied to each group's domain:
+ * - \f$\mathcal{P}\f$ pins `Required` plugins, eliminates `NotUsable`
+ *   plugins, and resolves `SelectAll` groups (plugin-type rule);
+ * - \f$\mathcal{F}\f$ eliminates plugins whose files are entirely
+ *   absent from the target tree and pins plugins that uniquely
+ *   produce a target file (file-evidence rule);
+ * - \f$\mathcal{C}\f$ resolves a group whose remaining plugin set
+ *   admits exactly one valid combination under the group's
+ *   `FomodGroupType` (cardinality rule).
+ *
+ * Each \f$\mathcal{T}\f$ application is monotone: a plugin removed
+ * from a domain is never re-added. The fixpoint therefore always
+ * exists; the iteration cap is a guard against malformed installers,
+ * not against non-termination.
  *
  * ```mermaid
  * flowchart TD
