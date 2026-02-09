@@ -33,12 +33,23 @@ inline crow::response json_response(int code, const nlohmann::json& j)
 }
 
 /**
- * @brief Percent-decode a URL-encoded string (%XX sequences).
+ * @brief Decode an `application/x-www-form-urlencoded` string.
  *
- * Also converts `+` to space. Null bytes (`%00`) are silently dropped.
+ * Implements the HTML form-encoding superset of RFC 3986 percent
+ * decoding:
+ *
+ * - `%XX` sequences are decoded to bytes (case-insensitive hex).
+ * - `+` is converted to space (form-encoding only; **not** part of
+ *   strict RFC 3986). Callers decoding RFC 3986 path components
+ *   should pre-filter `+` characters or use a strict decoder.
+ * - Null bytes (`%00`) are silently dropped to avoid embedded-NUL
+ *   surprises in C-string consumers downstream.
+ * - Malformed `%XX` (not enough chars or non-hex digits) is left in
+ *   place verbatim.
  *
  * @param src URL-encoded input string.
  * @return Decoded string.
+ * @throw Does not throw.
  */
 inline std::string url_decode(const std::string& src)
 {
