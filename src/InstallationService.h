@@ -101,6 +101,28 @@ namespace mo2core
  * beyond the fatal cases above. Multiple candidates without a
  * disambiguating `moduleName` are fatal (see above).
  *
+ * ## :material-broom: Temp Directory Cleanup
+ *
+ * `install_mod` creates a unique temp directory under
+ * `fs::temp_directory_path()` (e.g. `fomod-<8-hex>/`) for the
+ * extracted archive. The cleanup is symmetric across both exit paths:
+ *
+ * - On success, the temp directory is removed via `fs::remove_all`
+ *   inside the success branch. Removal failures are logged as
+ *   warnings but do not turn a successful install into a failure.
+ * - On any thrown exception, a `catch(...)` block runs `remove_all`
+ *   before re-throwing, so a partially-extracted archive does not
+ *   leak into the OS temp directory. Cleanup failures inside the
+ *   error path are also logged as warnings.
+ *
+ * The mod destination directory itself (`mod_path`) is **not**
+ * cleaned up on failure -- once `fs::create_directories(mod_path)`
+ * has run, partial files may already have been copied there by the
+ * FOMOD pipeline. Callers that need transactional installs should
+ * either install into a staging directory and atomically rename, or
+ * accept that a failed install can leave half-installed content in
+ * `mod_path` for the user (or MO2) to clean up.
+ *
  * ## :material-help: Thread Safety
  *
  * Instances are **not** thread-safe. The C API creates a fresh
