@@ -112,10 +112,12 @@ graph LR
 
 ### Inference Engine
 
-salma's inference service compares an archive's FOMOD options against an already-installed mod to determine which selections were originally chosen:
+salma's inference service compares an archive's FOMOD options against an already-installed mod to determine which selections were originally chosen. Naively walking every permutation of steps, groups, and flags is intractable on large installers, so the pipeline is a layered solver:
 
-- 🌳 Walks every permutation of FOMOD steps and flags
-- 🎯 Matches expected file output against the installed file tree
+- ⚡ **Tier-1 shortcut** - reads cached fomod-plus JSON directly from `meta.ini` when present and skips the rest of the pipeline. Hits on a large fraction of mods produced by an MO2 user who already ran the wizard once.
+- 🧮 **Constraint propagator** - a deterministic pre-pass that narrows each group's plugin domain using plugin-type rules (`Required` / `NotUsable` / `SelectAll`), file-evidence elimination, and cardinality. Groups that resolve to a single combination skip the solver entirely.
+- 🧠 **5-phase CSP solver** - greedy -> iterative local search -> independent-component decomposition -> residual repair (m=0, e=0) -> mismatch-focused search -> global fallback with widening `SelectAny` caps (narrow -> medium -> full). Each phase short-circuits on an exact reproduction.
+- 🪞 **Forward simulator** - executes a candidate selection against the IR (without writing to disk) and scores the simulated file tree against the target with a five-key lex order: `(missing, extra, size_mismatch, hash_mismatch, -reproduced)`.
 - 📋 Returns a JSON configuration that reproduces the original install
 - 🧪 Powers the round-trip test suite for validation
 
@@ -133,14 +135,24 @@ salma's inference service compares an archive's FOMOD options against an already
 | 7z      | bit7z (native 7-Zip SDK wrapper)                    |
 | ZIP     | libarchive                                          |
 | RAR     | libarchive                                          |
-| TAR.*   | libarchive (bzip2, lz4, lzma, zstd)                |
+| TAR.*   | libarchive (bzip2, lz4, lzma, zstd)                 |
 
 ### Additional Capabilities
 
 - 🌐 **REST API** - Full programmatic access for custom installers and automation
 - 🎨 **Web UI** - React SPA with dark/light theme, served directly by the Crow backend
-- 📝 **Logging** - Unified thread-safe logger with subsystem tags (`[archive]` `[install]` `[fomod]` `[infer]` `[server]`)
+- 📝 **Logging** - Unified thread-safe logger with subsystem tags; 10 MiB rotation, up to 3 archived files
 - 🧪 **Round-Trip Testing** - Infer selections, reinstall, and diff against the original mod
+
+### Limits
+
+The deliberate guardrails are:
+
+- 📦 **256 MiB per-archive-entry cap** (`kMaxEntrySize` in `ArchiveService.cpp`) - guards against zip / 7z decompression bombs during in-memory reads.
+- 📤 **512 MiB upload cap** (`kMaxUploadBytes` in `InstallationController::handle_upload`) - oversized multipart uploads return HTTP 413 before any temp-file write.
+- 🛡️ **Path-traversal rejection** in `ArchiveService::extract_with_libarchive` and `extract_filtered` - any entry whose canonical destination falls outside the extraction root is dropped before write.
+- 🚫 **Shell-metachar sanitization** in `Mo2Controller::deploy_plugin` / `purge_plugin` - blocks `& | > < ^ % ! ( ) " ; ' \`` in paths before they flow into a `cmd.exe` child process.
+- ✅ **Whitelist regex on `run_tests` args** - `^[a-zA-Z0-9 _\-\.]*$`; quotes and path separators are excluded, and the literal `..` substring is rejected even within the whitelist.
 
 ## Technology Stack
 
@@ -168,7 +180,8 @@ salma's inference service compares an archive's FOMOD options against an already
 - **Windows 10/11** (64-bit)
 - **Visual Studio 2022** (MSVC v143, C++23)
 - **CMake 3.20+**
-- **vcpkg** with the toolchain at a known path
+- **vcpkg** - set `VCPKG_ROOT`; the default CMake preset reads it directly. The build uses the **`x64-windows-static-md`** triplet;
+the manifest in `vcpkg.json` pins versions, so the first configure may take several minutes while vcpkg builds the cache.
 - **Node.js** (for building the React frontend)
 - **Python 3** (for MO2 plugin and documentation post-processing)
 - **clang-format** (optional, for code formatting - CI enforces it)
@@ -191,6 +204,33 @@ cd salma
 Output:
 - DLL: `build/bin/Release/mo2-salma.dll`
 - Server: `build/bin/Release/mo2-server.exe`
+- Tests: `build/bin/Release/salma_tests.exe`
+
+For a faster iteration loop, configure once and then scope the build to a single target:
+
+```powershell
+cmake --preset default                                     # configure (reads VCPKG_ROOT)
+cmake --build build --config Release --target mo2-core     # DLL only
+cmake --build build --config Release --target mo2-server   # EXE only
+cmake --build build --config Release --target salma_tests  # unit-test binary only
+```
+
+`build.bat` runs `clang-format`, then configure, then a full Release build, and finally the optional doc pipeline (skipped silently if `doxide` and `mkdocs` are missing).
+
+### Frontend development
+
+The React SPA in `web/` builds into `web/dist/` and is served by `mo2-server.exe`. For interactive development use Vite's dev server, which proxies `/api/*` requests through to the C++ backend:
+
+```powershell
+cd web
+npm install    # one-time
+npm run dev    # Vite dev server on :3000, proxies /api -> :5000
+npm run build  # outputs to web/dist/, served by Crow at :5000
+npm run lint   # eslint, max-warnings=0
+```
+
+> [!IMPORTANT]
+> Start `mo2-server.exe` on `:5000` **before** `npm run dev`. Vite's proxy assumes the backend is already up; if it isn't, every `/api/*` request the SPA makes will fail with a proxy error and the UI will look broken.
 
 ### Deploying to MO2
 
@@ -198,6 +238,51 @@ Output:
 # Copy DLL + Python plugin to your MO2 instance
 .\deploy.bat
 ```
+
+`deploy.bat` resolves the target as `<mods_path>/../../MO2/plugins/`, with `SALMA_DEPLOY_PATH` overriding the computed location. `purge.bat` removes them again.
+
+## Configuration & Environment
+
+salma reads a small set of environment variables at runtime. None are required for a default Quick Start build, but they unlock specific deployment / dev workflows.
+
+| Variable               | Purpose                                                                         | Read by                              |
+|------------------------|---------------------------------------------------------------------------------|--------------------------------------|
+| `VCPKG_ROOT`           | vcpkg toolchain path used by the default CMake preset.                          | `CMakePresets.json`                  |
+| `SALMA_BIND_ADDR`      | Override the default loopback bind. Non-loopback values log a security warning. | `main.cpp`                           |
+| `SALMA_MODS_PATH`      | MO2 mods directory. Used by the deploy fallback chain and the round-trip tests. | `Mo2Helpers.cpp`, `test.py`          |
+| `SALMA_DEPLOY_PATH`    | Override the `<MO2 instance>/MO2/plugins` deploy target used by `deploy.bat`.   | `Mo2Helpers.cpp`, `deploy.bat`       |
+| `SALMA_DOWNLOADS_PATH` | Lookup root for `resolve_mod_archive` when `installationFile` is relative.      | `FomodArchiveResolver.cpp`           |
+
+The mods/deploy/downloads trio above is **required** for the round-trip integration tests; see [Testing](#testing). A persistent setup helper exists for them:
+
+```powershell
+.\scripts\setup-env.bat   # sets the three SALMA_* vars via setx (persists across shells)
+```
+
+The runtime-configurable settings (currently just the MO2 mods directory) are persisted to `salma.json` next to `mo2-server.exe` by `ConfigService`. The dashboard's `PUT /api/config` endpoint writes it via a write-then-rename so a partial write cannot corrupt the file. The FOMOD output directory is **derived** from the mods path as `<mo2ModsPath>/Salma FOMODs Output/fomods/` and is not separately configurable.
+
+## Testing
+
+There are two test layers; treat them as separate workflows.
+
+### C++ unit tests
+
+```powershell
+.\test.bat
+```
+
+Builds the `salma_tests` target and runs `salma_tests.exe`. Sources live under `tests/`. The build is the standard CMake target, so `cmake --build build --config Release --target salma_tests` and running the binary directly work too.
+
+### Round-trip integration tests (Python)
+
+```powershell
+python test.py                       # walks every mod under SALMA_MODS_PATH
+python test_one.py <archive> <mod>   # single-mod variant for debugging
+```
+
+`test.py` enumerates every mod folder under `SALMA_MODS_PATH`, infers FOMOD selections through the DLL, reinstalls the result into a temporary directory, and diffs the produced file tree against the original install. Output goes to `test.log` and `logs/salma.log`.
+
+Round-trip tests require the **three `SALMA_*` env vars** listed in [Configuration & Environment](#configuration--environment). Run `scripts\setup-env.bat` once to set them via `setx` (persists across shells); the test scripts no longer fall back to a hardcoded path and exit with a setup hint if any required variable is unset.
 
 ## Architecture
 
@@ -259,7 +344,7 @@ graph LR
 
 - **🌐 `mo2-server.exe` - the HTTP shell.** Built from the `mo2-server` CMake target. Links the same `mo2-core` library that the DLL exports, **plus** the Crow HTTP framework on top. Exposes the install / infer / scan / status / log endpoints under `/api/*` and serves the React SPA from `web/dist/` at `/`. Listens on `:5000`. **Use this when** you want a graphical interface or programmatic REST access.
 
-- **⚛️ React SPA (`web/dist/`) - the browser front-end.** Built with Vite from `web/src/`. Pure HTML/CSS/JS - knows nothing about C++. Talks to `mo2-server.exe` over `fetch('/api/...')`. **Use this when** you want to drive an installation interactively, browse FOMOD JSON files, or watch logs in real time.
+- **⚛️ `web/dist/` - the browser front-end.** Built with Vite from `web/src/`. Pure HTML/CSS/JS - knows nothing about C++. Talks to `mo2-server.exe` over `fetch('/api/...')`. **Use this when** you want to drive an installation interactively, browse FOMOD JSON files, or watch logs in real time.
 
 > [!NOTE]
 > The DLL and the EXE are different binaries built from the same source tree. They share `mo2-core` so that improving FOMOD inference once benefits both the MO2 plugin and the web UI - there is no duplicated logic to keep in sync.
@@ -327,7 +412,7 @@ salma/
 |   |-- InstallationService.h/cpp      # Main orchestrator
 |   |-- InstallationController.h/cpp   # REST endpoint handlers
 |   |-- Mo2Controller.h/cpp            # MO2 dashboard controller (shared state)
-|   |-- Mo2{Config,Fomod,Log,Plugin,Test}Controller.cpp # Per-subsystem endpoints
+|   |-- Mo2...Controller.cpp           # Per-subsystem endpoints
 |   |-- Mo2Helpers.h/cpp               # Shared helpers for MO2 controllers
 |   |-- ConfigService.h/cpp            # Configuration management
 |   |-- MultipartHandler.h/cpp         # Form data parsing
@@ -376,16 +461,6 @@ mkdocs build
 
 The site is output to `site/` and can be served locally with `mkdocs serve`.
 
-## Troubleshooting
-
-|                  Problem | Solution                                                                |
-|--------------------------|-------------------------------------------------------------------------|
-| vcpkg toolchain not found | Set `VCPKG_ROOT` or update the path in `CMakePresets.json`             |
-| Crow port already in use | Another process is on port 5000, kill it or change the port             |
-| DLL not found by plugin  | Run `deploy.bat` or manually copy `mo2-salma.dll` to MO2 plugins       |
-| FOMOD inference mismatch | Mod may have been manually edited post-install, check `.mohidden` files |
-| Vite proxy errors        | Ensure the Crow server is running on port 5000 before starting Vite     |
-
 ## Contributing
 
 Contributions are welcome! Please read the [Contributing Guidelines](CONTRIBUTING.md) before submitting pull requests.
@@ -405,6 +480,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
+- [MO](https://github.com/ModOrganizer2/modorganizer) - Mod Organizer for managing mod collections
 - [Crow](https://crowcpp.org/) - C++ HTTP framework
 - [React](https://react.dev/) - Frontend UI library
 - [libarchive](https://www.libarchive.org/) - Multi-format archive extraction
