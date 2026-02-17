@@ -71,15 +71,18 @@ static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
     const std::string archive_stem_lower = mo2core::to_lower(archive_stem);
     const std::string archive_base_lower = mo2core::to_lower(archive_base);
 
-    // Exact checks first.
+    // Exact checks first. The is_inside guards are defense-in-depth: mod_name
+    // is validated upstream by is_safe_mod_name and archive_stem/base derive
+    // from the uploaded filename, but the joins still take user-controlled
+    // input so we re-check containment on the resolved path.
     const fs::path exact_mod = fomod_output_dir / (mod_name + ".json");
-    if (fs::exists(exact_mod))
+    if (mo2core::is_inside(fomod_output_dir, exact_mod) && fs::exists(exact_mod))
         return exact_mod.string();
     const fs::path exact_archive = fomod_output_dir / (archive_stem + ".json");
-    if (fs::exists(exact_archive))
+    if (mo2core::is_inside(fomod_output_dir, exact_archive) && fs::exists(exact_archive))
         return exact_archive.string();
     const fs::path exact_archive_base = fomod_output_dir / (archive_base + ".json");
-    if (fs::exists(exact_archive_base))
+    if (mo2core::is_inside(fomod_output_dir, exact_archive_base) && fs::exists(exact_archive_base))
         return exact_archive_base.string();
 
     // Fuzzy: longest-stem-first where output stem is a prefix of mod/archive key.
@@ -193,6 +196,14 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
         static const std::regex kLeadingDigitsRegex("^\\d+[-_]");
         mod_name = std::regex_replace(mod_name, kLeadingDigitsRegex, "");
     }
+    if (!mo2core::is_safe_mod_name(mod_name))
+    {
+        logger.log_warning(std::format("[install] Rejecting unsafe modName: \"{}\"", mod_name));
+        error_out = json_response(
+            400,
+            {{"error", "modName contains path separators, traversal, or reserved characters"}});
+        return std::nullopt;
+    }
     ctx.mod_name = mod_name;
 
     // If no JSON was uploaded, try to resolve an existing one from Salma FOMOD output.
@@ -239,6 +250,14 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
             return std::nullopt;
         }
         mod_path = (fs::path(mods_dir) / mod_name).string();
+        if (!mo2core::is_inside(fs::path(mods_dir), fs::path(mod_path)))
+        {
+            // Defense-in-depth: should be unreachable given is_safe_mod_name
+            // above, but the invariant is cheap and worth asserting.
+            error_out = json_response(
+                400, {{"error", "Generated mod path escapes the configured MO2 mods directory"}});
+            return std::nullopt;
+        }
     }
     ctx.mod_path = mod_path;
 
