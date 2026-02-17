@@ -1,8 +1,10 @@
 #include "Utils.h"
 
 #include <algorithm>
+#include <cctype>
 #include <random>
 #include <ranges>
+#include <unordered_set>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -206,6 +208,50 @@ bool is_safe_destination(const std::string& dest)
         return true;
     if (norm.front() == '/' || (norm.size() >= 2 && norm[1] == ':'))
         return false;
+    return true;
+}
+
+bool is_safe_mod_name(const std::string& name)
+{
+    if (name.empty())
+        return false;
+
+    // Reject leading/trailing whitespace. Windows trims trailing whitespace
+    // in CreateFile, which would mask the input the user actually supplied.
+    auto is_ws = [](unsigned char c) { return std::isspace(c) != 0; };
+    if (is_ws(static_cast<unsigned char>(name.front())) ||
+        is_ws(static_cast<unsigned char>(name.back())))
+    {
+        return false;
+    }
+
+    // Reject path separators and absolute paths (drive letters, leading slash).
+    if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos)
+        return false;
+    if (std::filesystem::path(name).is_absolute())
+        return false;
+
+    // Reject "." and "..".
+    if (name == "." || name == "..")
+        return false;
+
+    // Reject trailing '.' (CreateFile strips it silently on Windows).
+    if (name.back() == '.')
+        return false;
+
+    // Reject Windows reserved device names. Compare against the lowercase
+    // stem (everything before the final '.') so "CON", "con", and "CON.txt"
+    // are all rejected. Mirrors the list in InstallationService.cpp.
+    static const std::unordered_set<std::string> kReservedNames = {
+        "con",  "prn",  "aux",  "nul",  "com1", "com2", "com3", "com4", "com5", "com6", "com7",
+        "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    };
+    auto stem = to_lower(name);
+    if (auto dot = stem.rfind('.'); dot != std::string::npos)
+        stem = stem.substr(0, dot);
+    if (kReservedNames.contains(stem))
+        return false;
+
     return true;
 }
 

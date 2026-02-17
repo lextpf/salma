@@ -331,6 +331,29 @@ MO2_API std::string resolve_file_destination(const std::string& source,
 MO2_API bool is_safe_destination(const std::string& dest);
 
 /**
+ * @brief Reject mod-name strings that are unsafe to use as a single directory
+ *   component under a mods root.
+ *
+ * Accepts only single-segment, non-empty, non-reserved names. Used by the
+ * upload endpoint to validate the @c modName form field before joining it
+ * with the configured mods directory.
+ *
+ * Rejection rules:
+ *   - empty or whitespace-only
+ *   - contains '/' or '\\' (path separators)
+ *   - parses as an absolute path (drive letter, leading separator)
+ *   - equals "." or ".."
+ *   - lowercase stem (before final '.') matches a Windows reserved device
+ *     name: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+ *   - has a trailing '.' or trailing whitespace character (Windows quirk:
+ *     CreateFile silently strips these, producing an unexpected path)
+ *
+ * @param name  Candidate mod name.
+ * @return @c true if @p name is a safe single-component directory name.
+ */
+MO2_API bool is_safe_mod_name(const std::string& name);
+
+/**
  * @brief Validate that @p child is strictly inside @p parent (no traversal).
  * @param parent  The directory that should contain the child.
  * @param child   The path to test.
