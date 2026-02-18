@@ -4,14 +4,63 @@ const BASE = ''
 
 const DEFAULT_TIMEOUT_MS = 30_000
 
+const CSRF_HEADER = 'X-Salma-Csrf'
+const CSRF_INVALID_ERROR = 'csrf token missing or invalid'
+
+let csrfTokenPromise: Promise<string> | null = null
+
+async function fetchCsrfToken(): Promise<string> {
+  const res = await fetch('/api/csrf-token')
+  if (!res.ok) {
+    throw new Error(`Failed to fetch CSRF token (${res.status})`)
+  }
+  const body = await res.json()
+  if (typeof body.token !== 'string' || body.token.length === 0) {
+    throw new Error('CSRF token endpoint returned invalid body')
+  }
+  return body.token
+}
+
+export async function getCsrfToken(): Promise<string> {
+  if (!csrfTokenPromise) {
+    csrfTokenPromise = fetchCsrfToken().catch((err) => {
+      csrfTokenPromise = null
+      throw err
+    })
+  }
+  return csrfTokenPromise
+}
+
+function clearCsrfToken(): void {
+  csrfTokenPromise = null
+}
+
+async function performRequest(url: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers as HeadersInit | undefined)
+  headers.set(CSRF_HEADER, await getCsrfToken())
+  const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
+  const signal = init?.signal
+    ? AbortSignal.any([init.signal, timeoutSignal])
+    : timeoutSignal
+  return fetch(`${BASE}${url}`, { ...init, headers, signal })
+}
+
+async function performRequestWithCsrfRetry(url: string, init?: RequestInit): Promise<Response> {
+  let res = await performRequest(url, init)
+  if (res.status === 403) {
+    const peek = await res.clone().json().catch(() => null)
+    if (peek?.error === CSRF_INVALID_ERROR) {
+      clearCsrfToken()
+      res = await performRequest(url, init)
+    }
+  }
+  return res
+}
+
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
-    const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
-    const signal = init?.signal
-      ? AbortSignal.any([init.signal, timeoutSignal])
-      : timeoutSignal
-    res = await fetch(`${BASE}${url}`, { ...init, signal })
+    res = await performRequestWithCsrfRetry(url, init)
   } catch (error) {
     if (error instanceof DOMException && error.name === 'TimeoutError') {
       throw new Error('Backend unavailable')
@@ -92,11 +141,7 @@ export async function getFomod(name: string): Promise<FomodDetail> {
 async function fetchVoid(url: string, init?: RequestInit): Promise<void> {
   let res: Response
   try {
-    const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS)
-    const signal = init?.signal
-      ? AbortSignal.any([init.signal, timeoutSignal])
-      : timeoutSignal
-    res = await fetch(`${BASE}${url}`, { ...init, signal })
+    res = await performRequestWithCsrfRetry(url, init)
   } catch (error) {
     if (error instanceof DOMException && error.name === 'TimeoutError') {
       throw new Error('Backend unavailable')
