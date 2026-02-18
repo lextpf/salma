@@ -2,7 +2,7 @@ import { memo } from 'react'
 import { highlightLog, type HighlightSegment } from '../logHighlight'
 
 // Tab-leader pattern: a run of 4+ dots between whitespace boundaries. The
-// backend (test.py / mo2-salma.py) pads label-to-status with literal dots so
+// backend (test_all.py / mo2-salma.py) pads label-to-status with literal dots so
 // fixed-width terminal output aligns SKIP/PASS columns. In the HTML viewer
 // the container is narrower, so the literal dots overflow and wrap. We pull
 // the dots out of the text and render a flex-grow CSS leader instead so the
