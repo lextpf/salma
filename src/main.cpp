@@ -22,12 +22,13 @@
  *      License:      MIT
  */
 #include <crow.h>
-#include <crow/middlewares/cors.h>
 
 #include "ConfigService.h"
 #include "InstallationController.h"
 #include "Logger.h"
 #include "Mo2Controller.h"
+#include "SecurityContext.h"
+#include "SecurityMiddleware.h"
 #include "StaticFileHandler.h"
 #include "Utils.h"
 
@@ -35,6 +36,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <nlohmann/json.hpp>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -134,18 +136,26 @@ int main()
 
     mo2server::ConfigService::instance().load();
 
-    crow::App<crow::CORSHandler> app;
+    // Touch the SecurityContext singleton up-front so the CSRF token is
+    // generated and the Origin allowlist is parsed before the first
+    // request can race against a still-uninitialized state.
+    auto& security = mo2core::SecurityContext::instance();
+    {
+        std::string joined;
+        for (const auto& origin : security.allowed_origins())
+        {
+            if (!joined.empty())
+            {
+                joined += ", ";
+            }
+            joined += origin;
+        }
+        logger.log("[server] CSRF token generated (64 hex chars)");
+        logger.log(std::format("[server] Allowed origins: {}", joined));
+    }
 
-    // CORS: permissive policy for local development.
-    // The Vite dev proxy targets localhost:5000; without CORS the
-    // browser blocks cross-origin requests from localhost:5173.
-    // Note: origin("*") is incompatible with allow_credentials() per the CORS spec;
-    // browsers reject that combination. Credentials are not needed for this local tool.
-    auto& cors = app.get_middleware<crow::CORSHandler>();
-    cors.global()
-        .origin("*")
-        .methods("GET"_method, "POST"_method, "PUT"_method, "DELETE"_method, "OPTIONS"_method)
-        .headers("Content-Type", "Authorization");
+    // CORS + CSRF policy is enforced by SecurityMiddleware. See SecurityMiddleware.h.
+    crow::App<mo2server::SecurityMiddleware> app;
 
     mo2server::InstallationController controller;
     mo2server::Mo2Controller mo2_controller;
@@ -182,6 +192,21 @@ int main()
     CROW_ROUTE(app, "/api/installation/status/<string>")
         .methods(crow::HTTPMethod::GET)([&controller](const std::string& job_id)
                                         { return controller.handle_status(job_id); });
+
+    // CSRF token endpoint. SecurityMiddleware gates state-changing requests
+    // by an X-Salma-Csrf header that must match this token. The token is
+    // readable only from allowlisted origins (CORS), so cross-origin
+    // attackers cannot fetch it to forge requests.
+    CROW_ROUTE(app, "/api/csrf-token")
+        .methods(crow::HTTPMethod::GET)(
+            [&security]()
+            {
+                nlohmann::json body = {{"token", security.csrf_token()}};
+                crow::response res(200, body.dump());
+                res.set_header("Content-Type", "application/json");
+                res.set_header("Cache-Control", "no-store");
+                return res;
+            });
 
     // MO2 integration routes
     CROW_ROUTE(app, "/api/config")
