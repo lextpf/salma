@@ -29,7 +29,7 @@ def _required_env(name: str) -> Path:
     return Path(val)
 
 
-# Reading the env vars at import time is intentional: callers (test.py,
+# Reading the env vars at import time is intentional: callers (test_all.py,
 # scripts/scan.py, scripts/install.py) pass these around as constants.
 # To keep error messages helpful when somebody runs the harness without
 # having configured the environment, we let _required_env raise the
@@ -99,7 +99,7 @@ def load_dll(dll_path: Path):
     are declared as ``c_void_p`` so we get the raw heap pointer back from
     ctypes; callers must pass each return value through ``call_owned_string``
     (or remember to call ``lib.freeResult(addr)``) so the ``_strdup`` buffer
-    is not leaked. Across the integration suite (test.py runs hundreds of
+    is not leaked. Across the integration suite (test_all.py runs hundreds of
     mods) the previous c_char_p declaration leaked tens of MB per run.
     """
     lib = ctypes.CDLL(str(dll_path))
