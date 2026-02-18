@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { getInstallStatus } from './api'
+import { getCsrfToken, getInstallStatus } from './api'
 import type { InstallationJob } from './types'
 
 export function useInstallation(pluginInstalled: boolean): {
@@ -42,6 +42,11 @@ export function useInstallation(pluginInstalled: boolean): {
 
       if (cancelledRef.current) return
 
+      // Fetch CSRF token before opening the XHR. Done synchronously here
+      // (not inside the Promise constructor) so the token cache lookup is
+      // awaited and any failure surfaces as the caller's catch.
+      const csrfToken = await getCsrfToken()
+
       const result = await new Promise<Record<string, string>>((resolve, reject) => {
         const xhr = new XMLHttpRequest()
         xhrRef.current = xhr
@@ -81,6 +86,7 @@ export function useInstallation(pluginInstalled: boolean): {
         xhr.addEventListener('abort', () => { xhrRef.current = null; reject(new Error('Upload aborted')) })
 
         xhr.open('POST', '/api/installation/upload')
+        xhr.setRequestHeader('X-Salma-Csrf', csrfToken)
         xhr.send(formData)
       })
 
