@@ -21,7 +21,7 @@ Environment variables (run scripts\\setup-env.bat once to configure):
   SALMA_DOWNLOADS_PATH - downloads dir for resolving relative archive paths
 
 Usage:
-  python test.py [--no-full] [--limit N] [--separator NAME]
+  python test_all.py [--no-full] [--limit N] [--separator NAME]
 
   --no-full         Skip byte-for-byte content compare (faster, less strict)
   --limit N         Max mods to actually test, skips don't count (0 = all, default: all)
