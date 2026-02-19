@@ -1,5 +1,6 @@
 #include "FomodPropagator.h"
 #include "FomodDependencyEvaluator.h"
+#include "InferenceDiagnostics.h"
 #include "Logger.h"
 
 #include <algorithm>
@@ -9,6 +10,43 @@
 
 namespace mo2core
 {
+
+namespace
+{
+
+// Set the plugin reason only if it has not already been set to a more
+// specific code. Treats IMPLICIT_DEFAULT (0) as "unset".
+void record_plugin_reason(
+    PropagationResult& result, int s, int g, int p, ReasonCode code, nlohmann::json detail = {})
+{
+    if (s < 0 || s >= static_cast<int>(result.plugin_reasons.size()))
+    {
+        return;
+    }
+    auto& step_reasons = result.plugin_reasons[s];
+    if (g < 0 || g >= static_cast<int>(step_reasons.size()))
+    {
+        return;
+    }
+    auto& group_reasons = step_reasons[g];
+    if (p < 0 || p >= static_cast<int>(group_reasons.size()))
+    {
+        return;
+    }
+    if (group_reasons[p] != static_cast<int>(ReasonCode::IMPLICIT_DEFAULT))
+    {
+        return;  // first reason wins
+    }
+    group_reasons[p] = static_cast<int>(code);
+    if (s < static_cast<int>(result.plugin_reason_details.size()) &&
+        g < static_cast<int>(result.plugin_reason_details[s].size()) &&
+        p < static_cast<int>(result.plugin_reason_details[s][g].size()))
+    {
+        result.plugin_reason_details[s][g][p] = std::move(detail);
+    }
+}
+
+}  // namespace
 
 PropagationResult propagate(const FomodInstaller& installer,
                             const ExpandedAtoms& atoms,
@@ -23,12 +61,23 @@ PropagationResult propagate(const FomodInstaller& installer,
 
     // Initialize narrowed_domains: [step][group][plugin] = true
     result.narrowed_domains.resize(installer.steps.size());
+    result.plugin_reasons.resize(installer.steps.size());
+    result.plugin_reason_details.resize(installer.steps.size());
+    result.resolved_by.resize(installer.steps.size());
     for (size_t si = 0; si < installer.steps.size(); ++si)
     {
         result.narrowed_domains[si].resize(installer.steps[si].groups.size());
+        result.plugin_reasons[si].resize(installer.steps[si].groups.size());
+        result.plugin_reason_details[si].resize(installer.steps[si].groups.size());
+        result.resolved_by[si].resize(installer.steps[si].groups.size());
         for (size_t gi = 0; gi < installer.steps[si].groups.size(); ++gi)
-            result.narrowed_domains[si][gi].assign(installer.steps[si].groups[gi].plugins.size(),
-                                                   true);
+        {
+            size_t pcount = installer.steps[si].groups[gi].plugins.size();
+            result.narrowed_domains[si][gi].assign(pcount, true);
+            result.plugin_reasons[si][gi].assign(pcount,
+                                                 static_cast<int>(ReasonCode::IMPLICIT_DEFAULT));
+            result.plugin_reason_details[si][gi].assign(pcount, nlohmann::json{});
+        }
     }
 
     // Track which groups are resolved (only mark once).
@@ -95,7 +144,20 @@ PropagationResult propagate(const FomodInstaller& installer,
                         {
                             domain[pi] = false;
                             changed = true;
+                            record_plugin_reason(result,
+                                                 static_cast<int>(si),
+                                                 static_cast<int>(gi),
+                                                 pi,
+                                                 ReasonCode::FORCED_NOT_USABLE);
                         }
+                    }
+                    else if (eff == PluginType::Required)
+                    {
+                        record_plugin_reason(result,
+                                             static_cast<int>(si),
+                                             static_cast<int>(gi),
+                                             pi,
+                                             ReasonCode::FORCED_REQUIRED);
                     }
                 }
 
@@ -140,6 +202,7 @@ PropagationResult propagate(const FomodInstaller& installer,
                         // Find dests unique to this plugin within the group.
                         bool has_any_unique = false;
                         bool all_unique_miss = true;
+                        std::vector<std::string> unique_target_hits;
                         for (const auto& d : plugin_dests[pi])
                         {
                             auto it = dest_to_plugins_local.find(d);
@@ -149,7 +212,7 @@ PropagationResult propagate(const FomodInstaller& installer,
                                 if (target.count(d))
                                 {
                                     all_unique_miss = false;
-                                    break;
+                                    unique_target_hits.push_back(d);
                                 }
                             }
                         }
@@ -158,6 +221,33 @@ PropagationResult propagate(const FomodInstaller& installer,
                         {
                             domain[pi] = false;
                             changed = true;
+                            record_plugin_reason(result,
+                                                 static_cast<int>(si),
+                                                 static_cast<int>(gi),
+                                                 pi,
+                                                 ReasonCode::NO_FILE_EVIDENCE);
+                        }
+                        else if (!unique_target_hits.empty())
+                        {
+                            // Positive evidence: the plugin uniquely produces at
+                            // least one target file. Record up to 4 examples in
+                            // the reason detail to keep the JSON compact.
+                            nlohmann::json detail;
+                            nlohmann::json files = nlohmann::json::array();
+                            const size_t kMaxExamples = 4;
+                            for (size_t ix = 0; ix < unique_target_hits.size() && ix < kMaxExamples;
+                                 ++ix)
+                            {
+                                files.push_back(unique_target_hits[ix]);
+                            }
+                            detail["files"] = std::move(files);
+                            detail["count"] = static_cast<int>(unique_target_hits.size());
+                            record_plugin_reason(result,
+                                                 static_cast<int>(si),
+                                                 static_cast<int>(gi),
+                                                 pi,
+                                                 ReasonCode::UNIQUE_FILE_EVIDENCE,
+                                                 std::move(detail));
                         }
                     }
                 }
@@ -198,6 +288,69 @@ PropagationResult propagate(const FomodInstaller& installer,
                     result.resolved_groups.emplace_back(static_cast<int>(si), static_cast<int>(gi));
                     total_resolved++;
                     changed = true;
+
+                    // Attribute the resolution to a stable string for the
+                    // diagnostic chain. Prefer the most informative cause:
+                    // SelectAll (spec) > unique evidence > generic cardinality.
+                    std::string resolved_by_str;
+                    if (group.type == FomodGroupType::SelectAll)
+                    {
+                        resolved_by_str = "propagation.select_all";
+                    }
+                    else
+                    {
+                        bool saw_evidence = false;
+                        for (int pi = 0; pi < n; ++pi)
+                        {
+                            int code = result.plugin_reasons[si][gi][pi];
+                            if (code == static_cast<int>(ReasonCode::UNIQUE_FILE_EVIDENCE) ||
+                                code == static_cast<int>(ReasonCode::NO_FILE_EVIDENCE))
+                            {
+                                saw_evidence = true;
+                                break;
+                            }
+                        }
+                        resolved_by_str = saw_evidence ? "propagation.unique_evidence"
+                                                       : "propagation.cardinality";
+                    }
+                    result.resolved_by[si][gi] = resolved_by_str;
+
+                    // Emit per-plugin reasons explaining the kept selections.
+                    for (int pi = 0; pi < n; ++pi)
+                    {
+                        if (!domain[pi])
+                        {
+                            continue;
+                        }
+                        ReasonCode kept_reason = ReasonCode::IMPLICIT_DEFAULT;
+                        switch (group.type)
+                        {
+                            case FomodGroupType::SelectAll:
+                                kept_reason = ReasonCode::FORCED_SELECT_ALL;
+                                break;
+                            case FomodGroupType::SelectExactlyOne:
+                                if (usable_count == 1)
+                                    kept_reason = ReasonCode::FORCED_EXACTLY_ONE;
+                                break;
+                            case FomodGroupType::SelectAtLeastOne:
+                                if (usable_count == 1)
+                                    kept_reason = ReasonCode::FORCED_AT_LEAST_ONE;
+                                break;
+                            case FomodGroupType::SelectAtMostOne:
+                            case FomodGroupType::SelectAny:
+                                // usable_count == 0 path: deselected plugins
+                                // already carry FORCED_NOT_USABLE / NO_FILE_EVIDENCE.
+                                break;
+                        }
+                        if (kept_reason != ReasonCode::IMPLICIT_DEFAULT)
+                        {
+                            record_plugin_reason(result,
+                                                 static_cast<int>(si),
+                                                 static_cast<int>(gi),
+                                                 pi,
+                                                 kept_reason);
+                        }
+                    }
 
                     // Accumulate flags from selected plugins in a resolved group.
                     // When group_resolved is true, domain[pi]==true means the plugin
