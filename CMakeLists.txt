@@ -32,6 +32,7 @@ add_library(mo2-core SHARED
     src/FomodPropagator.cpp
     src/FomodInferenceAtoms.cpp
     src/FomodInferenceService.cpp
+    src/InferenceDiagnostics.cpp
     src/InstallationService.cpp
     src/CApi.cpp
 )
@@ -98,6 +99,7 @@ include(GoogleTest)
 add_executable(salma_tests
     tests/utils_test.cpp
     tests/fomod_inference_test.cpp
+    tests/inference_diagnostics_test.cpp
     tests/security_context_test.cpp
 )
 
