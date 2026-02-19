@@ -7,6 +7,7 @@
 #include "FomodIR.h"
 #include "FomodIRParser.h"
 #include "FomodPropagator.h"
+#include "InferenceDiagnostics.h"
 #include "Logger.h"
 #include "Utils.h"
 
@@ -667,7 +668,105 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
     if (!fomod_plus.is_null() && !fomod_plus.empty())
     {
         logger.log(std::format("[infer] Tier 1 hit: fomod-plus JSON ({}ms)", ms_since(t_step)));
-        return fomod_plus.dump(2);
+
+        // Wrap the cached JSON in schema v2: convert plugin strings to plugin
+        // objects (each with FOMOD_PLUS_CACHE reason and confidence 1.0) and
+        // add the run-level diagnostics block.
+        auto cache_confidence = serialize_confidence(
+            ConfidenceScore{1.0, "high", ConfidenceComponents{1.0, 1.0, 1.0, 1.0}});
+        auto cache_reason = nlohmann::json::array();
+        cache_reason.push_back(serialize_reason(
+            Reason{ReasonCode::FOMOD_PLUS_CACHE, "Cached selection from meta.ini", {}}));
+
+        auto convert_plugin = [&](const nlohmann::json& src, bool selected)
+        {
+            nlohmann::json p;
+            if (src.is_string())
+            {
+                p["name"] = src.get<std::string>();
+            }
+            else if (src.is_object() && src.contains("name"))
+            {
+                p["name"] = src["name"];
+            }
+            else
+            {
+                p["name"] = "";
+            }
+            p["selected"] = selected;
+            p["confidence"] = cache_confidence;
+            p["reasons"] = cache_reason;
+            return p;
+        };
+
+        nlohmann::json out;
+        out["schema_version"] = 2;
+
+        nlohmann::json out_steps = nlohmann::json::array();
+        int total_groups = 0;
+        if (fomod_plus.contains("steps") && fomod_plus["steps"].is_array())
+        {
+            for (const auto& src_step : fomod_plus["steps"])
+            {
+                nlohmann::json out_step;
+                out_step["name"] = src_step.value("name", "");
+                out_step["confidence"] = cache_confidence;
+                out_step["visible"] = true;
+                out_step["reasons"] = nlohmann::json::array();
+
+                nlohmann::json out_groups = nlohmann::json::array();
+                if (src_step.contains("groups") && src_step["groups"].is_array())
+                {
+                    for (const auto& src_group : src_step["groups"])
+                    {
+                        ++total_groups;
+                        nlohmann::json out_group;
+                        out_group["name"] = src_group.value("name", "");
+                        out_group["confidence"] = cache_confidence;
+                        out_group["resolved_by"] = "cache.fomod_plus";
+                        out_group["reasons"] = nlohmann::json::array();
+
+                        nlohmann::json sel_arr = nlohmann::json::array();
+                        nlohmann::json desel_arr = nlohmann::json::array();
+                        if (src_group.contains("plugins") && src_group["plugins"].is_array())
+                        {
+                            for (const auto& p : src_group["plugins"])
+                            {
+                                sel_arr.push_back(convert_plugin(p, true));
+                            }
+                        }
+                        if (src_group.contains("deselected") && src_group["deselected"].is_array())
+                        {
+                            for (const auto& p : src_group["deselected"])
+                            {
+                                desel_arr.push_back(convert_plugin(p, false));
+                            }
+                        }
+                        out_group["plugins"] = std::move(sel_arr);
+                        out_group["deselected"] = std::move(desel_arr);
+                        out_groups.push_back(std::move(out_group));
+                    }
+                }
+                out_step["groups"] = std::move(out_groups);
+                out_steps.push_back(std::move(out_step));
+            }
+        }
+        out["steps"] = std::move(out_steps);
+
+        RunDiagnostics run;
+        run.confidence = ConfidenceScore{1.0, "high", ConfidenceComponents{1.0, 1.0, 1.0, 1.0}};
+        run.exact_match = true;
+        run.phase_reached = "tier1_cache";
+        run.nodes_explored = 0;
+        run.groups.total = total_groups;
+        run.groups.resolved_by_propagation = total_groups;
+        run.groups.resolved_by_csp = 0;
+        run.timings.total_ms = ms_since(t_total);
+        run.cache.hit = true;
+        run.cache.source = "fomod-plus";
+        out["diagnostics"] = serialize_run_diagnostics(run);
+
+        return out.dump(2);
     }
     logger.log(std::format("[infer] Tier 1 miss: no fomod-plus data ({}ms)", ms_since(t_step)));
 
@@ -775,6 +874,11 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
                                ctx.installer.conditional_patterns.size(),
                                ms_since(t_step)));
 
+        // Diagnostics builder accumulates per-decision reasons through the
+        // remaining pipeline. Sized from the IR so per-step/group/plugin
+        // indices match the installer hierarchy.
+        InferenceDiagnosticsBuilder diag_builder(ctx.installer);
+
         // Step 5: Expand atoms
         logger.log("[infer] 5/9 Expanding file atoms");
         t_step = clock::now();
@@ -812,6 +916,27 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
         ctx.overrides =
             compute_overrides(ctx.installer, ctx.atoms, ctx.atom_index, ctx.target, ctx.excluded);
 
+        // Feed step-visibility overrides into the diagnostics chain so users
+        // can see which steps were forced visible vs. left ambiguous.
+        for (size_t si = 0; si < ctx.overrides.step_visible.size(); ++si)
+        {
+            switch (ctx.overrides.step_visible[si])
+            {
+                case ExternalConditionOverride::ForceTrue:
+                    diag_builder.set_step_visibility(
+                        static_cast<int>(si), true, ReasonCode::STEP_VISIBILITY_FORCED);
+                    break;
+                case ExternalConditionOverride::ForceFalse:
+                    diag_builder.set_step_visibility(
+                        static_cast<int>(si), false, ReasonCode::STEP_NOT_VISIBLE);
+                    break;
+                case ExternalConditionOverride::Unknown:
+                    diag_builder.set_step_visibility(
+                        static_cast<int>(si), true, ReasonCode::STEP_VISIBILITY_UNKNOWN);
+                    break;
+            }
+        }
+
         // Step 7c: Constraint propagation pre-pass
         t_step = clock::now();
         ctx.propagation = propagate(ctx.installer,
@@ -831,6 +956,8 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
             ctx.propagation.fully_resolved,
             ms_since(t_step)));
 
+        diag_builder.absorb_propagation(ctx.propagation);
+
         // Step 8: CSP solve (with propagation-narrowed domains)
         logger.log("[infer] 8/9 Solving (this may take a while)");
         t_step = clock::now();
@@ -848,15 +975,19 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
                                result.exact_match,
                                ctx.t_solve));
 
+        diag_builder.absorb_solver(result);
+
         // Step 9: Assemble JSON
         logger.log("[infer] 9/9 Assembling result");
         t_step = clock::now();
-        auto json_result = assemble_json(ctx.installer, result);
+        auto total_ms = ms_since(t_total);
+        diag_builder.set_run_timings(ctx.t_list, ctx.t_scan, ctx.t_solve, total_ms);
+        diag_builder.finalize(result, ctx.propagation, ctx.installer);
+        auto json_result = assemble_json(ctx.installer, result, diag_builder.diagnostics());
         auto result_str = json_result.dump(2);
         logger.log(std::format(
             "[infer] Step 9 assemble JSON: {} bytes ({}ms)", result_str.size(), ms_since(t_step)));
 
-        auto total_ms = ms_since(t_total);
         logger.log(std::format("[infer] DONE total={}ms | list={}ms scan={}ms solve={}ms",
                                total_ms,
                                ctx.t_list,
