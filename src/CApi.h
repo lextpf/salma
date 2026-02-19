@@ -119,8 +119,13 @@ namespace CApi
  *
  * 1.0.0 - initial public ABI.
  * 1.1.0 - added @ref resolveModArchive.
+ * 1.2.0 - inferFomodSelections JSON wire format becomes schema_version=2:
+ *         per-plugin objects (name + selected + confidence + reasons) and a
+ *         top-level diagnostics block. Old saved selection files in the
+ *         schema-v1 string-array form are still accepted by the install
+ *         consumer for backward compatibility.
  */
-#define MO2_SALMA_API_VERSION "1.1.0"
+#define MO2_SALMA_API_VERSION "1.2.0"
 #define MO2_SALMA_API_MAJOR "1"
 
 // Compile-time guard: bumping MO2_SALMA_API_VERSION without keeping
