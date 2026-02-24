@@ -96,7 +96,7 @@ struct FomodDependencyContext
 
 /**
  * @struct InstallResult
- * @brief Outcome of a mod installation attempt.
+ * @brief Outcome of a FOMOD install/replay attempt.
  * @author Alex (https://github.com/lextpf)
  * @ingroup Core
  */
