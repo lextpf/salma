@@ -8,7 +8,7 @@ namespace mo2core
 
 /**
  * @class ModStructureDetector
- * @brief Detects mod folder structure inside archives.
+ * @brief Detects candidate content roots inside archives.
  * @author Alex (https://github.com/lextpf)
  * @ingroup ModStructureDetector
  *
