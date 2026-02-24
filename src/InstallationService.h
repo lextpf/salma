@@ -10,14 +10,14 @@ namespace mo2core
 
 /**
  * @class InstallationService
- * @brief Main installation orchestrator for FOMOD and non-FOMOD mods.
+ * @brief FOMOD install/replay orchestrator with a simple non-FOMOD copy fallback.
  * @author Alex (https://github.com/lextpf)
  * @ingroup InstallationService
  *
  * Top-level entry point called by the C API. Handles the full lifecycle
- * of a mod installation: extract the archive to a temp directory, detect
- * whether a FOMOD installer is present, and delegate to either the FOMOD
- * pipeline or a simple file-copy fallback.
+ * of a FOMOD processing request: extract the archive to a temp directory,
+ * detect whether a FOMOD installer is present, and delegate to either the
+ * FOMOD pipeline or a simple file-copy fallback.
  *
  * ## :material-swap-horizontal: Install Flow
  *
@@ -48,7 +48,7 @@ namespace mo2core
  * ## :material-folder-search-outline: Non-FOMOD Detection
  *
  * When no `fomod/ModuleConfig.xml` is found, the service uses
- * ModStructureDetector to look for recognizable mod folders
+ * ModStructureDetector to look for recognizable content roots
  * (e.g. containing `meshes/`, `textures/`, `SKSE/`). If multiple
  * candidates exist, a `moduleName` from the JSON config disambiguates.
  * As a final fallback, the entire archive root is copied flat.
@@ -134,20 +134,20 @@ class MO2_API InstallationService
 {
 public:
     /**
-     * @brief Install a mod from an archive.
+     * @brief Process a FOMOD archive into a destination directory.
      *
      * Extracts the archive to a temporary directory, detects the
-     * install method (FOMOD or flat copy), performs the installation
-     * into @p mod_path, and cleans up.
+     * install method (FOMOD or flat copy), performs the FOMOD replay
+     * or fallback copy into @p mod_path, and cleans up.
      *
-     * @param archive_path Path to the mod archive.
+     * @param archive_path Path to the FOMOD-capable archive.
      * @param mod_path Destination mod directory (created if missing).
      * @param json_path Optional path to a FOMOD selections JSON file.
      *        If empty, the service looks for a `.json` file next to the
      *        archive. Without a JSON config, FOMOD installs process
      *        only required files and conditional patterns - optional
      *        steps are skipped because no selections exist.
-     * @return The mod path on success.
+     * @return The destination mod path on success.
      * @throw std::runtime_error if the archive is missing or
      *        installation fails fatally.
      */
