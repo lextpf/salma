@@ -170,12 +170,12 @@ extern "C"
     MO2_API void setLogCallback(Mo2LogCallback callback);
 
     /**
-     * @brief Install a mod archive using automatic FOMOD detection.
+     * @brief Process a FOMOD-capable archive using automatic FOMOD detection.
      * @ingroup CApi
      *
      * Extracts the archive into a temporary directory, detects whether
-     * a FOMOD installer is present, and runs the appropriate installation
-     * path.
+     * a FOMOD installer is present, and runs the appropriate FOMOD replay
+     * or fallback copy path.
      *
      * For FOMOD archives without a JSON config, only required files and
      * conditional patterns are installed - optional steps are skipped
@@ -193,7 +193,7 @@ extern "C"
     MO2_API const char* install(const char* archivePath, const char* modPath);
 
     /**
-     * @brief Install a mod archive using pre-scanned FOMOD selections.
+     * @brief Replay a FOMOD archive using pre-scanned FOMOD selections.
      * @ingroup CApi
      *
      * Same as install(), but reads FOMOD step/option choices from a JSON
