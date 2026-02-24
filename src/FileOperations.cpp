@@ -265,21 +265,21 @@ void FileOperations::move_directory_contents(const fs::path& src, const fs::path
             if (is_disk_full(rename_ec))
             {
                 g_disk_full.store(true, std::memory_order_relaxed);
-                Logger::instance().log_error(std::format(
-                    "[install] Move error (disk full) {} -> {}: {}",
-                    entry.path().string(),
-                    target.string(),
-                    rename_ec.message()));
+                Logger::instance().log_error(
+                    std::format("[install] Move error (disk full) {} -> {}: {}",
+                                entry.path().string(),
+                                target.string(),
+                                rename_ec.message()));
                 continue;
             }
             // Log which fallback path we are on so we can tell same-volume
             // rename failures (a real problem) from cross-volume moves
             // (expected, the copy fallback below handles them correctly).
-            Logger::instance().log_warning(std::format(
-                "[install] rename {} -> {} failed ({}); falling back to copy",
-                entry.path().string(),
-                target.string(),
-                rename_ec.message()));
+            Logger::instance().log_warning(
+                std::format("[install] rename {} -> {} failed ({}); falling back to copy",
+                            entry.path().string(),
+                            target.string(),
+                            rename_ec.message()));
             if (fs::is_directory(entry))
             {
                 copy_folder(entry.path(), target);
@@ -294,20 +294,18 @@ void FileOperations::move_directory_contents(const fs::path& src, const fs::path
             fs::remove_all(entry.path(), remove_ec);
             if (remove_ec)
             {
-                Logger::instance().log_warning(std::format(
-                    "[install] Move fallback could not remove source {}: {}",
-                    entry.path().string(),
-                    remove_ec.message()));
+                Logger::instance().log_warning(
+                    std::format("[install] Move fallback could not remove source {}: {}",
+                                entry.path().string(),
+                                remove_ec.message()));
             }
         }
     }
     catch (const fs::filesystem_error& ex)
     {
         note_disk_full_if_applicable(ex);
-        Logger::instance().log_error(
-            std::format("[install] Failed to iterate directory for move {}: {}",
-                        src.string(),
-                        ex.what()));
+        Logger::instance().log_error(std::format(
+            "[install] Failed to iterate directory for move {}: {}", src.string(), ex.what()));
     }
 }
 

@@ -14,7 +14,8 @@
  *
  *      A Crow HTTP server that hosts the React frontend and exposes
  *      REST endpoints for wizardless FOMOD processing, install replay,
- *      and inference, backed by libarchive, bit7z, and pugixml.
+ *      and inference,
+ * backed by libarchive, bit7z, and pugixml.
  *
  *    ----------------------------------------------------------------------
  *
