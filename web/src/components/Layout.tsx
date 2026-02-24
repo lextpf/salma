@@ -158,7 +158,7 @@ export default function Layout() {
               marginTop: 8,
             }}
           >
-            <span>mod installer</span>
+            <span>fomod engine</span>
             <span style={{ color: 'var(--ink-3)' }}>v1.1.0</span>
           </div>
         </div>
