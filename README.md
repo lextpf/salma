@@ -1,7 +1,7 @@
 <div align="center">
 
 # salma
-**Wizardless FOMOD installer with automatic selection inference**
+**Wizardless FOMOD installer, processor, and selection inference engine**
 
 🎀 [Features](#features) | 💃 [Quick Start](#quick-start) | 📘 [Documentation](#documentation) | 🤝 [Contributing](./CONTRIBUTING.md)
 
@@ -23,7 +23,9 @@
 ![Sponsor](https://img.shields.io/static/v1?label=sponsor&message=%E2%9D%A4&color=ff69b4&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NDAgNjQwIj48IS0tIUZvbnQgQXdlc29tZSBQcm8gdjcuMi4wIGJ5IEBmb250YXdlc29tZSAtIGh0dHBzOi8vZm9udGF3ZXNvbWUuY29tIExpY2Vuc2UgLSBodHRwczovL2ZvbnRhd2Vzb21lLmNvbS9saWNlbnNlIChDb21tZXJjaWFsIExpY2Vuc2UpIENvcHlyaWdodCAyMDI2IEZvbnRpY29ucywgSW5jLi0tPjxwYXRoIG9wYWNpdHk9IjEiIGZpbGw9IiNmZjY5YjRmZiIgZD0iTTMyIDQ4MEwzMiA1NDRDMzIgNTYxLjcgNDYuMyA1NzYgNjQgNTc2TDM4NC41IDU3NkM0MTMuNSA1NzYgNDQxLjggNTY2LjcgNDY1LjIgNTQ5LjVMNTkxLjggNDU2LjJDNjA5LjYgNDQzLjEgNjEzLjQgNDE4LjEgNjAwLjMgNDAwLjNDNTg3LjIgMzgyLjUgNTYyLjIgMzc4LjcgNTQ0LjQgMzkxLjhMNDI0LjYgNDgwTDMxMiA0ODBDMjk4LjcgNDgwIDI4OCA0NjkuMyAyODggNDU2QzI4OCA0NDIuNyAyOTguNyA0MzIgMzEyIDQzMkwzODQgNDMyQzQwMS43IDQzMiA0MTYgNDE3LjcgNDE2IDQwMEM0MTYgMzgyLjMgNDAxLjcgMzY4IDM4NCAzNjhMMjMxLjggMzY4QzE5Ny45IDM2OCAxNjUuMyAzODEuNSAxNDEuMyA0MDUuNUw5OC43IDQ0OEw2NCA0NDhDNDYuMyA0NDggMzIgNDYyLjMgMzIgNDgweiIvPjxwYXRoIGZpbGw9InJnYmEoMjU1LCAyNTUsIDI1NSwgMS4wMCkiIGQ9Ik0yNTAuOSA2NEMyNzQuOSA2NCAyOTcuNSA3NS41IDMxMS42IDk1TDMyMCAxMDYuN0wzMjguNCA5NUMzNDIuNSA3NS41IDM2NS4xIDY0IDM4OS4xIDY0QzQzMC41IDY0IDQ2NCA5Ny41IDQ2NCAxMzguOUw0NjQgMTQxLjNDNDY0IDIwNS43IDM4MiAyNzQuNyAzNDEuOCAzMDQuNkMzMjguOCAzMTQuMyAzMTEuMyAzMTQuMyAyOTguMyAzMDQuNkMyNTguMSAyNzQuNiAxNzYgMjA1LjcgMTc2LjEgMTQxLjNMMTc2LjEgMTM4LjlDMTc2IDk3LjUgMjA5LjUgNjQgMjUwLjkgNjR6Ii8+PC9zdmc+)
 </div>
 
-**A mod installer** built with **C++23** and powered by *Crow* and *React*. It pairs a **C DLL** that handles archive extraction and FOMOD processing with a **Crow HTTP server** and **React web interface** for interactive installations. salma integrates with **Mod Organizer 2** via a Python plugin, automatically **inferring FOMOD selections** by comparing archives against installed files - no wizard clicks required.
+**A FOMOD installer, processor, and inference engine** built with **C++23** and powered by *Crow* and *React*. It pairs a **C DLL** that handles archive extraction, FOMOD XML processing, install replay, and selection inference with a **Crow HTTP server** and **React web interface** for interactive FOMOD workflows. salma integrates with **Mod Organizer 2** via a Python plugin, automatically **inferring FOMOD selections** by comparing archives against installed files - no wizard clicks required.
+
+salma is intentionally scoped to FOMODs. It is useful for reproducing existing FOMOD choices and preparing future installs, and it can write the resulting file set to a mod directory, but it is **not** a general-purpose mod installer or a replacement for MO2's full installer pipeline. It does not attempt to process every mod format, scripted installer, or package layout that Mod Organizer 2 can handle.
 
 <div align="center">
 <br>
@@ -48,7 +50,7 @@
  *      #+#    #+# #+#     #+# #+#        #+#       #+# #+#     #+#    ⊹⠀⣠⣾⣿⣿⠃ ⠀⠈⢿⣿⣿⣦⡀
  *       ########  ###     ### ########## ###       ### ###     ###    ⠀⠈⠉⠹⡿⠁⠀⠀⠀⠀⠈⢻⡇⠉⠉
  *
- *                                 << M O D   I N S T A L L E R >>
+ *                              << F O M O D   E N G I N E >>
  *
  * ============================================================================================== */
 ```
@@ -57,7 +59,7 @@
 
 ### Interface
 
-salma ships with a **C DLL** for direct integration, a **REST API** for programmatic access, and a **React web UI** for interactive installations.
+salma ships with a **C DLL** for direct integration, a **REST API** for programmatic access, and a **React web UI** for interactive FOMOD processing and install replay.
 
 ```mermaid
 ---
@@ -108,7 +110,7 @@ graph LR
 - 📄 **XML Parser** - Parses `fomod/ModuleConfig.xml` for installation steps and options
 - 🧩 **Dependency Evaluator** - Resolves flag-based and file-based FOMOD dependencies
 - 📂 **File Operations** - Priority-sorted file copy, folder creation, and patching
-- 🔎 **Structure Detector** - Identifies mod folder layout (meshes/, textures/, SKSE/, etc.)
+- 🔎 **Structure Detector** - Identifies candidate content roots inside archives (meshes/, textures/, SKSE/, etc.)
 
 ### Inference Engine
 
@@ -130,6 +132,8 @@ salma's inference service compares an archive's FOMOD options against an already
 
 ### Archive Support
 
+These are archive container formats salma can read while processing FOMOD packages. Archive support does not mean salma implements every non-FOMOD installer path or mod-package convention supported by MO2.
+
 |  Format | Backend                                             |
 |---------|-----------------------------------------------------|
 | 7z      | bit7z (native 7-Zip SDK wrapper)                    |
@@ -139,10 +143,14 @@ salma's inference service compares an archive's FOMOD options against an already
 
 ### Additional Capabilities
 
-- 🌐 **REST API** - Full programmatic access for custom installers and automation
+- 🌐 **REST API** - Full programmatic access for custom FOMOD tooling and automation
 - 🎨 **Web UI** - React SPA with dark/light theme, served directly by the Crow backend
 - 📝 **Logging** - Unified thread-safe logger with subsystem tags; 10 MiB rotation, up to 3 archived files
-- 🧪 **Round-Trip Testing** - Infer selections, reinstall, and diff against the original mod
+- 🧪 **Round-Trip Testing** - Infer selections, replay a FOMOD install, and diff against the original mod
+
+### Scope
+
+salma focuses on FOMOD packages: parsing `fomod/ModuleConfig.xml`, evaluating dependencies, inferring selected options from an existing install, and replaying those choices for future installs. It has a simple non-FOMOD copy fallback for archives with a recognizable content root, but that fallback is not a claim of full mod-manager compatibility. MO2 remains the broader mod manager and supports installer formats, scripted flows, and package edge cases outside salma's intended scope.
 
 ### Limits
 
@@ -286,7 +294,7 @@ Round-trip tests require the **three `SALMA_*` env vars** listed in [Configurati
 
 ## Architecture
 
-salma ships **three deployment artifacts** that share **one core library**. The library (`mo2-core`) holds all the actual installation, FOMOD parsing, and inference logic. The artifacts are different *shells* around that library - one for MO2 (a DLL), one for HTTP (an EXE), and one for the browser (a React SPA served by the EXE). You can use any subset depending on how you want to drive salma.
+salma ships **three deployment artifacts** that share **one core library**. The library (`mo2-core`) holds the FOMOD parsing, inference, and install-replay logic. The artifacts are different *shells* around that library - one for MO2 (a DLL), one for HTTP (an EXE), and one for the browser (a React SPA served by the EXE). You can use any subset depending on how you want to drive salma.
 
 ```mermaid
 ---
@@ -340,7 +348,7 @@ graph LR
 
 ### The three artifacts
 
-- **📦 `mo2-salma.dll` - the headless library.** Built from the `mo2-core` CMake target. Has no HTTP, no UI, no Crow dependency. Mod Organizer 2 loads it through `mo2-salma.py` (a Python plugin) using `ctypes` and calls C-linkage exports like `install()`, `inferFomodSelections()`, and `installWithConfig()`. **Use this when** you want MO2 to install FOMOD-aware mods without the wizard.
+- **📦 `mo2-salma.dll` - the headless library.** Built from the `mo2-core` CMake target. Has no HTTP, no UI, no Crow dependency. Mod Organizer 2 loads it through `mo2-salma.py` (a Python plugin) using `ctypes` and calls C-linkage exports like `install()`, `inferFomodSelections()`, and `installWithConfig()`. **Use this when** you want MO2-adjacent FOMOD selection inference or replay without the wizard.
 
 - **🌐 `mo2-server.exe` - the HTTP shell.** Built from the `mo2-server` CMake target. Links the same `mo2-core` library that the DLL exports, **plus** the Crow HTTP framework on top. Exposes the install / infer / scan / status / log endpoints under `/api/*` and serves the React SPA from `web/dist/` at `/`. Listens on `:5000`. **Use this when** you want a graphical interface or programmatic REST access.
 
@@ -356,7 +364,7 @@ graph LR
 1. `deploy.bat` copies `mo2-salma.dll` and `mo2-salma.py` into `<MO2 instance>/plugins/`.
 2. MO2 starts and Python loads `mo2-salma.py`.
 3. The plugin loads the DLL via `ctypes.CDLL("mo2-salma.dll")`.
-4. When the user installs a mod, the plugin calls `install()` (or `inferFomodSelections()` for batch scans) directly into `mo2-core`.
+4. When the user processes a FOMOD archive, the plugin calls `install()` (or `inferFomodSelections()` for batch scans) directly into `mo2-core`.
 5. Results return as JSON or path strings; the plugin renders them in MO2's tools menu.
 
 **Path B - the standalone server with the web UI.**
@@ -374,13 +382,13 @@ Both paths converge in `mo2-core`. The DLL exposes it as a flat C ABI; the serve
 |                       File | Purpose                                          |
 |----------------------------|--------------------------------------------------|
 |                 `main.cpp` | Crow HTTP server entry point                     |
-|     `InstallationService`  | Main orchestrator for mod installation           |
+|     `InstallationService`  | FOMOD install/replay orchestrator                |
 |         `ArchiveService`   | Archive extraction (libarchive + bit7z)          |
-|           `FomodService`   | FOMOD XML parsing and installation logic         |
+|           `FomodService`   | FOMOD XML parsing and install replay             |
 |   `FomodInferenceService`  | Infers FOMOD selections from installed files     |
 | `FomodDependencyEvaluator` | Evaluates FOMOD flag and file dependencies       |
 |        `FileOperations`    | Priority-sorted file copy and patching           |
-|     `ModStructureDetector` | Detects mod folder layout                        |
+|     `ModStructureDetector` | Detects candidate archive content roots          |
 |                  `CApi`    | C-linkage DLL exports for ctypes                 |
 |                `Logger`    | Thread-safe logging with callback support        |
 |         `ConfigService`    | Configuration management                         |
@@ -401,9 +409,9 @@ salma/
 |   |-- Logger.h/cpp                    # Thread-safe logging
 |   |-- ArchiveService.h/cpp            # Archive extraction
 |   |-- FileOperations.h/cpp            # Queued file operations
-|   |-- ModStructureDetector.h/cpp      # Mod folder structure detection
+|   |-- ModStructureDetector.h/cpp      # Archive content-root detection
 |   |-- FomodArchiveResolver.h/cpp      # Resolves mod source archive paths
-|   |-- FomodService.h/cpp              # FOMOD installation logic
+|   |-- FomodService.h/cpp              # FOMOD processing and install replay
 |   |-- FomodDependencyEvaluator.h/cpp  # FOMOD dependency evaluation
 |   |-- FomodInferenceService.h/cpp     # Selection inference engine (orchestrator)
 |   |-- FomodIR.h                       # FOMOD IR types (header-only)
