@@ -1,3 +1,13 @@
+# clangd configuration for salma.
+#
+# Why this file exists
+# --------------------
+# CMakeLists.txt sets CMAKE_EXPORT_COMPILE_COMMANDS ON, but Visual Studio's
+# CMake generator silently ignores it - only the Ninja and Makefile
+# generators emit compile_commands.json. So if you configured with the
+# default `cmake -B build`, build/ has no compile DB, clangd has no per-file
+# flags, and most #includes look unresolved even though the project builds.
+
 CompileFlags:
   Add:
     - --target=x86_64-pc-windows-msvc
