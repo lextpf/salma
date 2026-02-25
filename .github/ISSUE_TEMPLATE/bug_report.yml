@@ -1,0 +1,79 @@
+name: Bug report
+description: Report incorrect or unexpected behaviour in salma.
+title: "[Bug] <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report. Please complete the
+        sections below so the maintainers can reproduce the issue and triage quickly.
+
+        **Before filing**, please:
+        - Search existing issues to avoid duplicates.
+        - Confirm you are on a recent salma release.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing what is wrong.
+      placeholder: FOMOD inference returns an empty selection for archive X.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Exact sequence that consistently trigger the bug.
+      placeholder: |
+        1. Start `mo2-server.exe`.
+        2. Upload `MyMod.7z` via the dashboard.
+        3. Observe a 500 response with the error below.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What actually happened? Paste any error message verbatim.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Paste any relevant sections of `*.log`.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: salma_version
+    attributes:
+      label: salma version
+      description: Run `getApiVersion()` via the C-API, or use the version banner in `mo2-server.exe`.
+      placeholder: "1.2.0"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I have removed personal information from logs and screenshots.
+          required: true
