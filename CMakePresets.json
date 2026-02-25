@@ -1,35 +1,130 @@
 {
   "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
   "configurePresets": [
     {
-      "name": "default",
+      "name": "base",
+      "hidden": true,
       "binaryDir": "${sourceDir}/build",
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
         "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
         "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets"
       }
     },
     {
+      "name": "default",
+      "displayName": "Release (local default)",
+      "description": "Release build with vcpkg, mirrors what CI and packaging consume.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
       "name": "debug",
-      "binaryDir": "${sourceDir}/build",
+      "displayName": "Debug",
+      "description": "Debug build with the same triplet, suitable for stepping through services and the FOMOD solver.",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "ci-release",
+      "displayName": "CI Release",
+      "description": "Same as default; named explicitly so CI workflows do not silently track local preset edits.",
+      "inherits": "default"
+    },
+    {
+      "name": "ci-debug",
+      "displayName": "CI Debug",
+      "description": "Same as debug; named explicitly for CI predictability.",
+      "inherits": "debug"
+    },
+    {
+      "name": "compile-db",
+      "displayName": "compile_commands.json (Ninja sidecar)",
+      "description": "Ninja-based configure whose only purpose is to emit a real compile_commands.json for clang-tidy/clangd. Shares vcpkg_installed/ with the default preset so vcpkg does not re-install. Never built directly; only configured.",
+      "binaryDir": "${sourceDir}/build-cdb",
+      "generator": "Ninja",
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
         "VCPKG_TARGET_TRIPLET": "x64-windows-static-md",
-        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets"
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/triplets",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/build/vcpkg_installed",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     }
   ],
   "buildPresets": [
     {
       "name": "default",
-      "configurePreset": "default"
+      "configurePreset": "default",
+      "displayName": "Build (Release)",
+      "configuration": "Release"
     },
     {
       "name": "debug",
-      "configurePreset": "debug"
+      "configurePreset": "debug",
+      "displayName": "Build (Debug)",
+      "configuration": "Debug"
+    },
+    {
+      "name": "tests-only",
+      "configurePreset": "default",
+      "displayName": "Build the salma_tests target only",
+      "configuration": "Release",
+      "targets": ["salma_tests"]
+    },
+    {
+      "name": "ci-release",
+      "configurePreset": "ci-release",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-tests",
+      "configurePreset": "ci-release",
+      "configuration": "Release",
+      "targets": ["salma_tests"]
+    },
+    {
+      "name": "ci-debug",
+      "configurePreset": "ci-debug",
+      "configuration": "Debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      }
+    },
+    {
+      "name": "ci",
+      "configurePreset": "ci-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false,
+        "jobs": 2
+      }
     }
   ]
 }
