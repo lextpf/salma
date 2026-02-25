@@ -1,0 +1,114 @@
+# ============================================================================
+# .gitattributes for salma
+# ============================================================================
+
+# Default: auto-detect text and normalize to LF on commit.
+* text=auto eol=lf
+
+# ----------------------------------------------------------------------------
+# C / C++ source
+# ----------------------------------------------------------------------------
+*.c                     text eol=lf diff=cpp
+*.cc                    text eol=lf diff=cpp
+*.cpp                   text eol=lf diff=cpp
+*.cxx                   text eol=lf diff=cpp
+*.h                     text eol=lf diff=cpp
+*.hh                    text eol=lf diff=cpp
+*.hpp                   text eol=lf diff=cpp
+*.hxx                   text eol=lf diff=cpp
+*.inl                   text eol=lf diff=cpp
+*.ipp                   text eol=lf diff=cpp
+*.tcc                   text eol=lf diff=cpp
+
+# ----------------------------------------------------------------------------
+# Build system
+# ----------------------------------------------------------------------------
+CMakeLists.txt          text eol=lf
+*.cmake                 text eol=lf
+*.cmake.in              text eol=lf
+CMakePresets.json       text eol=lf
+*.clang-format          text eol=lf
+*.clang-tidy            text eol=lf
+.clang-format           text eol=lf
+.clang-tidy             text eol=lf
+.clangd                 text eol=lf
+.editorconfig           text eol=lf
+*.json                  text eol=lf
+*.yml                   text eol=lf
+*.yaml                  text eol=lf
+*.toml                  text eol=lf
+*.ini                   text
+*.cfg                   text
+*.md                    text diff=markdown
+*.xml                   text
+*.txt                   text
+vcpkg.json              text eol=lf
+LICENSE                 text
+Doxyfile                text
+Doxyfile.in             text
+.gitattributes          text eol=lf
+.gitignore              text eol=lf
+
+# ----------------------------------------------------------------------------
+# Web / TypeScript
+# ----------------------------------------------------------------------------
+*.ts                    text
+*.tsx                   text
+*.js                    text
+*.jsx                   text
+*.mjs                   text
+*.cjs                   text
+*.css                   text
+*.scss                  text
+*.html                  text diff=html
+*.md                    text diff=markdown
+package.json            text eol=lf
+package-lock.json       text eol=lf -diff
+
+# ----------------------------------------------------------------------------
+# Python
+# ----------------------------------------------------------------------------
+*.py                    text diff=python
+*.pyi                   text diff=python
+
+# ----------------------------------------------------------------------------
+# Scripts
+# ----------------------------------------------------------------------------
+*.bat                   text eol=crlf
+*.cmd                   text eol=crlf
+*.ps1                   text eol=crlf
+*.sh                    text eol=lf
+
+# ---------------------------------------------------------------------------
+# Generated
+# ---------------------------------------------------------------------------
+docs/**                 linguist-generated=true -diff
+site/**                 linguist-generated=true -diff
+web/dist/**             linguist-generated=true -diff
+external/**             linguist-vendored=true
+triplets/**             linguist-vendored=true
+
+# ---------------------------------------------------------------------------
+# Archives
+# ---------------------------------------------------------------------------
+*.zip                   binary
+*.7z                    binary
+*.gz                    binary
+*.tar                   binary
+*.tgz                   binary
+*.bz2                   binary
+*.xz                    binary
+*.rar                   binary
+*.dll                   binary
+*.exe                   binary
+*.lib                   binary
+*.exp                   binary
+*.so                    binary
+*.dylib                 binary
+*.a                     binary
+*.o                     binary
+*.obj                   binary
+*.pdb                   binary
+*.ilk                   binary
+*.idb                   binary
+*.res                   binary
