@@ -4,6 +4,13 @@ project(salma VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Always emit compile_commands.json so clangd can find the right flags
+# without re-deriving them from CMakePresets. Note: the Visual Studio
+# generator silently ignores this setting; the `compile-db` preset uses
+# Ninja into build-cdb/ specifically to produce a real compile DB for
+# clang-tidy (see build.bat step 3).
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 enable_testing()
 
 # --- mo2-core (shared library) ---
@@ -144,16 +151,16 @@ add_custom_command(TARGET mo2-server POST_BUILD
 #   - MO2_PLUGIN: drops into <MO2 instance>/plugins/ (mo2-salma.py + salma/*)
 #   - DASHBOARD:  standalone server, web/dist, and helper scripts
 #
-# The C-API ABI version is the source of truth - it lives in src/CApi.h as
+# The C-API ABI version is the source of truth - it lives in src/CApi.hpp as
 # MO2_SALMA_API_VERSION. CMake reads it via regex so the bundle filename
 # always matches the ABI string the DLL reports at runtime.
-file(READ "${CMAKE_SOURCE_DIR}/src/CApi.h" _capi_h_content)
+file(READ "${CMAKE_SOURCE_DIR}/src/CApi.hpp" _capi_h_content)
 string(REGEX MATCH "MO2_SALMA_API_VERSION[ \t]+\"([0-9]+\\.[0-9]+\\.[0-9]+)\""
        _ver_match "${_capi_h_content}")
 set(SALMA_API_VERSION "${CMAKE_MATCH_1}")
 if(NOT SALMA_API_VERSION)
     message(FATAL_ERROR
-        "Failed to parse MO2_SALMA_API_VERSION from src/CApi.h - "
+        "Failed to parse MO2_SALMA_API_VERSION from src/CApi.hpp - "
         "the regex in CMakeLists.txt is out of sync with the header.")
 endif()
 file(WRITE "${CMAKE_BINARY_DIR}/VERSION" "${SALMA_API_VERSION}\n")
