@@ -1,0 +1,142 @@
+# salma clang-tidy configuration.
+
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -bugprone-unchecked-optional-access,
+  cert-*,
+  -cert-err58-cpp,
+  -cert-dcl21-cpp,
+  clang-analyzer-*,
+  concurrency-*,
+  cppcoreguidelines-avoid-goto,
+  cppcoreguidelines-init-variables,
+  cppcoreguidelines-interfaces-global-init,
+  cppcoreguidelines-narrowing-conversions,
+  cppcoreguidelines-prefer-member-initializer,
+  cppcoreguidelines-pro-type-cstyle-cast,
+  cppcoreguidelines-pro-type-member-init,
+  cppcoreguidelines-pro-type-static-cast-downcast,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-virtual-class-destructor,
+  misc-const-correctness,
+  misc-definitions-in-headers,
+  misc-misplaced-const,
+  misc-redundant-expression,
+  misc-static-assert,
+  misc-throw-by-value-catch-by-reference,
+  misc-unused-alias-decls,
+  misc-unused-parameters,
+  misc-unused-using-decls,
+  misc-use-anonymous-namespace,
+  misc-use-internal-linkage,
+  modernize-avoid-bind,
+  modernize-concat-nested-namespaces,
+  modernize-deprecated-headers,
+  modernize-loop-convert,
+  modernize-make-shared,
+  modernize-make-unique,
+  modernize-pass-by-value,
+  modernize-raw-string-literal,
+  modernize-redundant-void-arg,
+  modernize-replace-auto-ptr,
+  modernize-replace-random-shuffle,
+  modernize-return-braced-init-list,
+  modernize-shrink-to-fit,
+  modernize-unary-static-assert,
+  modernize-use-bool-literals,
+  modernize-use-default-member-init,
+  modernize-use-emplace,
+  modernize-use-equals-default,
+  modernize-use-equals-delete,
+  modernize-use-noexcept,
+  modernize-use-nullptr,
+  modernize-use-override,
+  modernize-use-starts-ends-with,
+  modernize-use-std-numbers,
+  modernize-use-transparent-functors,
+  modernize-use-using,
+  performance-*,
+  -performance-avoid-endl,
+  portability-*,
+  -portability-restrict-system-includes,
+  -portability-avoid-pragma-once,
+  readability-avoid-const-params-in-decls,
+  readability-braces-around-statements,
+  readability-const-return-type,
+  readability-container-contains,
+  readability-container-size-empty,
+  readability-delete-null-pointer,
+  readability-duplicate-include,
+  readability-implicit-bool-conversion,
+  readability-inconsistent-declaration-parameter-name,
+  readability-isolate-declaration,
+  readability-make-member-function-const,
+  readability-misleading-indentation,
+  readability-non-const-parameter,
+  readability-qualified-auto,
+  readability-redundant-control-flow,
+  readability-redundant-declaration,
+  readability-redundant-member-init,
+  readability-redundant-smartptr-get,
+  readability-redundant-string-cstr,
+  readability-redundant-string-init,
+  readability-simplify-boolean-expr,
+  readability-simplify-subscript-expr,
+  readability-static-accessed-through-instance,
+  readability-static-definition-in-anonymous-namespace,
+  readability-string-compare,
+  readability-uniqueptr-delete-release,
+  readability-use-anyofallof
+
+# Advisory mode: clang-tidy prints warnings but only returns non-zero on
+# actual tool errors (bad config, missing file). Build.bat surfaces those
+# but treats plain warnings as informational. Flip to '*' (or list specific
+# checks) once the codebase is brought clean against the enabled rules.
+WarningsAsErrors: ''
+
+# Never emit diagnostics for code in system headers. This is the clang-tidy
+# default but stated explicitly so it survives future tooling changes. Combined
+# with -isystem for vcpkg paths in build.bat, this keeps warnings from gtest,
+# crow, libarchive, bit7z, and the MSVC stdlib out of the output.
+SystemHeaders: false
+
+# Match clang-format's HeaderFilter so we only lint project headers. Third-party
+# headers under vcpkg_installed/, libarchive's archive.h, crow, gtest, etc. are
+# excluded.
+HeaderFilterRegex: '^.*[\\/]src[\\/][^\\/]+\.(hpp|cpp)$'
+
+# Project naming conventions, enforced separately because clang-tidy's
+# readability-identifier-naming is verbose to configure.
+# - Files:      PascalCase (handled by review)
+# - Types:      PascalCase
+# - Functions:  snake_case
+# - Variables:  snake_case
+# - Members:    snake_case with trailing underscore
+# - Globals:    g_ prefix
+# - Constants:  UPPER_SNAKE_CASE or constexpr kCamel
+CheckOptions:
+  - key: readability-identifier-length.MinimumVariableNameLength
+    value: 1
+  - key: readability-identifier-length.MinimumParameterNameLength
+    value: 1
+  - key: readability-implicit-bool-conversion.AllowIntegerConditions
+    value: true
+  - key: readability-implicit-bool-conversion.AllowPointerConditions
+    value: true
+  - key: misc-const-correctness.WarnPointersAsValues
+    value: false
+  - key: modernize-use-default-member-init.UseAssignment
+    value: true
+  - key: performance-for-range-copy.WarnOnAllAutoCopies
+    value: true
+  - key: performance-inefficient-vector-operation.EnableProto
+    value: false
+  - key: bugprone-argument-comment.StrictMode
+    value: false
+  - key: cppcoreguidelines-pro-type-member-init.IgnoreArrays
+    value: true
+  - key: misc-include-cleaner.IgnoreHeaders
+    value: 'crow.*;windows\.h;archive\.h;archive_entry\.h;bit7z/.*'
