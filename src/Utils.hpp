@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Export.h"
-#include "Types.h"
+#include "Export.hpp"
+#include "Types.hpp"
 
 #include <array>
 #include <expected>
