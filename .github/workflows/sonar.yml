@@ -24,7 +24,7 @@ jobs:
           vcpkgGitCommitId: "05442024c3fda64320bd25d2251cc9807b84fb6f"
 
       - name: Configure CMake
-        run: cmake --preset default
+        run: cmake --preset ci-release
 
       - name: Install Build Wrapper
         shell: powershell
