@@ -401,34 +401,34 @@ salma/
 |   +-- workflows/                      # build.yml, sonar.yml, test.yml
 |-- src/                                # C++ source code
 |   |-- main.cpp                        # Crow HTTP server entry point
-|   |-- CApi.h/cpp                      # C-linkage DLL API (ctypes)
-|   |-- Export.h                        # MO2_API export macro
-|   |-- Types.h                         # Shared type definitions
-|   |-- Utils.h/cpp                     # Shared string/path helpers
-|   |-- BackgroundJob.h                 # Async job runner
-|   |-- Logger.h/cpp                    # Thread-safe logging
-|   |-- ArchiveService.h/cpp            # Archive extraction
-|   |-- FileOperations.h/cpp            # Queued file operations
-|   |-- ModStructureDetector.h/cpp      # Archive content-root detection
-|   |-- FomodArchiveResolver.h/cpp      # Resolves mod source archive paths
-|   |-- FomodService.h/cpp              # FOMOD processing and install replay
-|   |-- FomodDependencyEvaluator.h/cpp  # FOMOD dependency evaluation
-|   |-- FomodInferenceService.h/cpp     # Selection inference engine (orchestrator)
-|   |-- FomodIR.h                       # FOMOD IR types (header-only)
-|   |-- FomodIRParser.h/cpp             # XML to IR parser
-|   |-- FomodCSP*.h/cpp                 # CSP solver, options, precompute, types
-|   |-- FomodPropagator.h/cpp           # Constraint propagator
-|   |-- FomodForwardSimulator.h/cpp     # Forward-simulates installs against the IR
-|   |-- FomodInferenceAtoms.h/cpp       # Atom-level inference helpers
-|   |-- FomodAtom.h                     # Atom type definitions
-|   |-- InstallationService.h/cpp       # Main orchestrator
-|   |-- InstallationController.h/cpp    # REST endpoint handlers
-|   |-- Mo2Controller.h/cpp             # MO2 dashboard controller (shared state)
+|   |-- CApi.hpp/cpp                    # C-linkage DLL API (ctypes)
+|   |-- Export.hpp                      # MO2_API export macro
+|   |-- Types.hpp                       # Shared type definitions
+|   |-- Utils.hpp/cpp                   # Shared string/path helpers
+|   |-- BackgroundJob.hpp               # Async job runner
+|   |-- Logger.hpp/cpp                  # Thread-safe logging
+|   |-- ArchiveService.hpp/cpp          # Archive extraction
+|   |-- FileOperations.hpp/cpp          # Queued file operations
+|   |-- ModStructureDetector.hpp/cpp    # Archive content-root detection
+|   |-- FomodArchiveResolver.hpp/cpp    # Resolves mod source archive paths
+|   |-- FomodService.hpp/cpp            # FOMOD processing and install replay
+|   |-- FomodDependencyEvaluator.hpp/cpp # FOMOD dependency evaluation
+|   |-- FomodInferenceService.hpp/cpp   # Selection inference engine (orchestrator)
+|   |-- FomodIR.hpp                     # FOMOD IR types (header-only)
+|   |-- FomodIRParser.hpp/cpp           # XML to IR parser
+|   |-- FomodCSP*.hpp/cpp               # CSP solver, options, precompute, types
+|   |-- FomodPropagator.hpp/cpp         # Constraint propagator
+|   |-- FomodForwardSimulator.hpp/cpp   # Forward-simulates installs against the IR
+|   |-- FomodInferenceAtoms.hpp/cpp     # Atom-level inference helpers
+|   |-- FomodAtom.hpp                   # Atom type definitions
+|   |-- InstallationService.hpp/cpp     # Main orchestrator
+|   |-- InstallationController.hpp/cpp  # REST endpoint handlers
+|   |-- Mo2Controller.hpp/cpp           # MO2 dashboard controller (shared state)
 |   |-- Mo2...Controller.cpp            # Per-subsystem endpoints
-|   |-- Mo2Helpers.h/cpp                # Shared helpers for MO2 controllers
-|   |-- ConfigService.h/cpp             # Configuration management
-|   |-- MultipartHandler.h/cpp          # Form data parsing
-|   +-- StaticFileHandler.h/cpp         # SPA serving
+|   |-- Mo2Helpers.hpp/cpp              # Shared helpers for MO2 controllers
+|   |-- ConfigService.hpp/cpp           # Configuration management
+|   |-- MultipartHandler.hpp/cpp        # Form data parsing
+|   +-- StaticFileHandler.hpp/cpp       # SPA serving
 |-- web/                                # React frontend
 |   |-- src/                            # TypeScript source
 |   |-- dist/                           # Built SPA (served by Crow)
