@@ -10,7 +10,7 @@ defines:
   MO2_API: ""
 
 files:
-  - "src/*.h"
+  - "src/*.hpp"
   - "src/*.cpp"
 
 groups:
