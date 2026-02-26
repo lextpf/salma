@@ -26,12 +26,10 @@ jobs:
           vcpkgGitCommitId: "05442024c3fda64320bd25d2251cc9807b84fb6f"
 
       - name: Configure CMake
-        run: cmake --preset default
+        run: cmake --preset ci-release
 
       - name: Build tests
-        run: cmake --build build --config Release --target salma_tests
+        run: cmake --build --preset ci-tests
 
       - name: Run tests
-        run: |
-          cd build
-          ctest -C Release --output-on-failure --no-tests=error
+        run: ctest --preset ci
