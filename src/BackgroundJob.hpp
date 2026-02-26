@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Logger.h"
+#include "Logger.hpp"
 
 #include <atomic>
 #include <chrono>
