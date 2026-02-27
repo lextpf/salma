@@ -1,11 +1,11 @@
 #pragma once
 
-#include "Export.h"
-#include "FomodAtom.h"
-#include "FomodCSPSolver.h"
-#include "FomodDependencyEvaluator.h"
-#include "FomodIR.h"
-#include "Types.h"
+#include "Export.hpp"
+#include "FomodAtom.hpp"
+#include "FomodCSPSolver.hpp"
+#include "FomodDependencyEvaluator.hpp"
+#include "FomodIR.hpp"
+#include "Types.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -50,7 +50,7 @@ struct PropagationResult
      * Indexed `[step][group][plugin]`. Default value is `IMPLICIT_DEFAULT`
      * (0); each rule firing overwrites with a more specific code.
      *
-     * Stored as `int` to avoid pulling the full `InferenceDiagnostics.h`
+     * Stored as `int` to avoid pulling the full `InferenceDiagnostics.hpp`
      * into this header; consumers `static_cast` to `ReasonCode`.
      */
     std::vector<std::vector<std::vector<int>>> plugin_reasons;
