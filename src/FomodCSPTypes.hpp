@@ -1,11 +1,11 @@
 #pragma once
 
-#include "FomodAtom.h"
-#include "FomodCSPSolver.h"
-#include "FomodDependencyEvaluator.h"
-#include "FomodIR.h"
-#include "FomodPropagator.h"
-#include "Types.h"
+#include "FomodAtom.hpp"
+#include "FomodCSPSolver.hpp"
+#include "FomodDependencyEvaluator.hpp"
+#include "FomodIR.hpp"
+#include "FomodPropagator.hpp"
+#include "Types.hpp"
 
 #include <chrono>
 #include <cstdint>
