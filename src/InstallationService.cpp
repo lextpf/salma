@@ -1,11 +1,11 @@
-#include "InstallationService.h"
-#include "ArchiveService.h"
-#include "FileOperations.h"
-#include "FomodIRParser.h"
-#include "FomodService.h"
-#include "Logger.h"
-#include "ModStructureDetector.h"
-#include "Utils.h"
+#include "InstallationService.hpp"
+#include "ArchiveService.hpp"
+#include "FileOperations.hpp"
+#include "FomodIRParser.hpp"
+#include "FomodService.hpp"
+#include "Logger.hpp"
+#include "ModStructureDetector.hpp"
+#include "Utils.hpp"
 
 #include <nlohmann/json.hpp>
 #include <pugixml.hpp>

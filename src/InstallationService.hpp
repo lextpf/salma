@@ -2,8 +2,8 @@
 
 #include <filesystem>
 #include <string>
-#include "Export.h"
-#include "Types.h"
+#include "Export.hpp"
+#include "Types.hpp"
 
 namespace mo2core
 {
