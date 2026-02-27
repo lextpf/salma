@@ -1,12 +1,12 @@
-#include "FomodCSPSolver.h"
-#include "FomodCSPOptions.h"
-#include "FomodCSPPrecompute.h"
-#include "FomodCSPSolverInternal.h"
-#include "FomodCSPTypes.h"
-#include "FomodDependencyEvaluator.h"
-#include "FomodForwardSimulator.h"
-#include "FomodPropagator.h"
-#include "Logger.h"
+#include "FomodCSPSolver.hpp"
+#include "FomodCSPOptions.hpp"
+#include "FomodCSPPrecompute.hpp"
+#include "FomodCSPSolverInternal.hpp"
+#include "FomodCSPTypes.hpp"
+#include "FomodDependencyEvaluator.hpp"
+#include "FomodForwardSimulator.hpp"
+#include "FomodPropagator.hpp"
+#include "Logger.hpp"
 
 #include <algorithm>
 #include <cassert>
