@@ -1,7 +1,7 @@
-#include "FomodCSPOptions.h"
-#include "FomodCSPSolverInternal.h"
-#include "FomodForwardSimulator.h"
-#include "Logger.h"
+#include "FomodCSPOptions.hpp"
+#include "FomodCSPSolverInternal.hpp"
+#include "FomodForwardSimulator.hpp"
+#include "Logger.hpp"
 
 #include <algorithm>
 #include <format>
