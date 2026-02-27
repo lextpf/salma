@@ -112,21 +112,57 @@ struct ExpandedAtoms
     std::vector<std::vector<FomodAtom>> per_conditional;  // [conditional_index]
 
     /**
-     * Apply a callable to every atom across all origin containers.
-     * Deducing `this` provides const and non-const overloads from one definition.
+     * Apply a callable to every atom across all origin containers (mutable overload).
      */
-    template <typename Self, typename Func>
-        requires std::invocable<Func, decltype(*std::declval<Self>().required.begin())>
-    void for_each(this Self&& self, Func&& fn)
+    template <typename Func>
+        requires std::invocable<Func, FomodAtom&>
+    void for_each(Func&& fn)
     {
-        for (auto&& a : self.required)
+        for (auto& a : required)
+        {
             fn(a);
-        for (auto&& v : self.per_plugin)
-            for (auto&& a : v)
+        }
+        for (auto& v : per_plugin)
+        {
+            for (auto& a : v)
+            {
                 fn(a);
-        for (auto&& v : self.per_conditional)
-            for (auto&& a : v)
+            }
+        }
+        for (auto& v : per_conditional)
+        {
+            for (auto& a : v)
+            {
                 fn(a);
+            }
+        }
+    }
+
+    /**
+     * Apply a callable to every atom across all origin containers (const overload).
+     */
+    template <typename Func>
+        requires std::invocable<Func, const FomodAtom&>
+    void for_each(Func&& fn) const
+    {
+        for (const auto& a : required)
+        {
+            fn(a);
+        }
+        for (const auto& v : per_plugin)
+        {
+            for (const auto& a : v)
+            {
+                fn(a);
+            }
+        }
+        for (const auto& v : per_conditional)
+        {
+            for (const auto& a : v)
+            {
+                fn(a);
+            }
+        }
     }
 };
 
