@@ -1,9 +1,9 @@
 #pragma once
 
-#include "Export.h"
-#include "FomodIR.h"
-#include "Types.h"
-#include "Utils.h"
+#include "Export.hpp"
+#include "FomodIR.hpp"
+#include "Types.hpp"
+#include "Utils.hpp"
 
 #include <cstdint>
 #include <string>
