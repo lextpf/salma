@@ -1,8 +1,8 @@
-#include "FomodCSPOptions.h"
+#include "FomodCSPOptions.hpp"
 
-#include "FomodCSPPrecompute.h"
-#include "FomodDependencyEvaluator.h"
-#include "Logger.h"
+#include "FomodCSPPrecompute.hpp"
+#include "FomodDependencyEvaluator.hpp"
+#include "Logger.hpp"
 
 #include <algorithm>
 #include <cassert>

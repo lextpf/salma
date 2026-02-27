@@ -1,6 +1,6 @@
 #pragma once
 
-#include "FomodCSPTypes.h"
+#include "FomodCSPTypes.hpp"
 
 #include <string>
 #include <unordered_map>
