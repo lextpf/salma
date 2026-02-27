@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Export.h"
+#include "Export.hpp"
 
 #include <filesystem>
 #include <string>
@@ -18,12 +18,15 @@ namespace mo2core
  * a given mod folder maps to.
  *
  * Search order, first hit wins:
- * 1. If @p archive_value is absolute and exists, return it.
- * 2. `$SALMA_DOWNLOADS_PATH/<archive_value>`
- * 3. `<mod_folder>/<archive_value>`
- * 4. `<mods_dir>/../<archive_value>`
- * 5. `<mods_dir>/../downloads/<archive_value>`
- * 6. `<mods_dir>/../../downloads/<archive_value>`
+ *
+ * ``` <<< Sidestep doxide bug in numbered lists
+ * 1. archive_value itself (if absolute and existing)
+ * 2. $SALMA_DOWNLOADS_PATH/<archive_value>
+ * 3. <mod_folder>/<archive_value>
+ * 4. <mods_dir>/../<archive_value>
+ * 5. <mods_dir>/../downloads/<archive_value>
+ * 6. <mods_dir>/../../downloads/<archive_value>
+ * ```
  *
  * @param archive_value Raw value from meta.ini's `[General] installationFile`
  *                      (may be relative or absolute).

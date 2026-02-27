@@ -1,4 +1,4 @@
-#include "FomodArchiveResolver.h"
+#include "FomodArchiveResolver.hpp"
 
 #include <cstdlib>
 #include <vector>
