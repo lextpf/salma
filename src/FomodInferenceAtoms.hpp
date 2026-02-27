@@ -1,12 +1,12 @@
 #pragma once
 
-#include "Export.h"
-#include "FomodAtom.h"
-#include "FomodCSPSolver.h"
-#include "FomodIR.h"
-#include "InferenceDiagnostics.h"
-#include "Logger.h"
-#include "Utils.h"
+#include "Export.hpp"
+#include "FomodAtom.hpp"
+#include "FomodCSPSolver.hpp"
+#include "FomodIR.hpp"
+#include "InferenceDiagnostics.hpp"
+#include "Logger.hpp"
+#include "Utils.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -28,7 +28,7 @@ namespace mo2core
  * @param dest  Normalized mod-relative destination path to validate.
  * @return `true` if the path is safe to use as an install destination.
  * @throw Does not throw.
- * @see mo2core::is_safe_destination (Utils.h) for the canonical rules.
+ * @see mo2core::is_safe_destination (Utils.hpp) for the canonical rules.
  */
 bool is_safe_dest(const std::string& dest);
 

@@ -1,4 +1,4 @@
-#include "FomodInferenceAtoms.h"
+#include "FomodInferenceAtoms.hpp"
 
 #include <algorithm>
 #include <format>
@@ -10,7 +10,7 @@ namespace mo2core
 // Atom expansion: resolve IR file entries into concrete atoms
 // ---------------------------------------------------------------------------
 
-// Delegate to the shared implementation in Utils.h/cpp.
+// Delegate to the shared implementation in Utils.hpp/cpp.
 bool is_safe_dest(const std::string& dest)
 {
     return is_safe_destination(dest);
@@ -27,12 +27,23 @@ void expand_entry(const FomodFileEntry& entry,
 {
     if (entry.is_folder)
     {
-        // An empty source means "root of archive"; use empty prefix so that
-        // lower_bound starts at the beginning of the sorted entry list.
+        // An empty source means "root of archive" - match every entry.
+        //
+        // The combination below relies on two empty-string identities to fall
+        // out without a special-case branch in the loop:
+        //   * lower_bound(begin, end, "") returns `begin` because "" is
+        //     lexicographically less-than-or-equal to any other string.
+        //   * std::string::starts_with("") is unconditionally true.
+        // So the loop iterates every entry exactly once.
+        //
+        // For a non-root folder we anchor the prefix with a trailing slash so
+        // that a folder entry "foo" does NOT spuriously match a sibling file
+        // "foobar.esp" - the slash forces a path-boundary match.
+        // @Claude
         auto prefix = entry.source;
         if (prefix.empty())
         {
-            // Match all entries -- leave prefix empty and skip the slash append
+            // Leave prefix empty; the identities above iterate all entries.
         }
         else if (!prefix.ends_with("/"))
         {
