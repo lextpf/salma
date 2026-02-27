@@ -1,10 +1,10 @@
 #pragma once
 
-#include "Export.h"
-#include "FomodCSPSolver.h"
-#include "FomodCSPTypes.h"
-#include "FomodIR.h"
-#include "FomodPropagator.h"
+#include "Export.hpp"
+#include "FomodCSPSolver.hpp"
+#include "FomodCSPTypes.hpp"
+#include "FomodIR.hpp"
+#include "FomodPropagator.hpp"
 
 #include <nlohmann/json.hpp>
 
