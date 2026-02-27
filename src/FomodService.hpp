@@ -4,8 +4,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include "FomodIR.h"
-#include "Types.h"
+#include "FomodIR.hpp"
+#include "Types.hpp"
 
 namespace mo2core
 {

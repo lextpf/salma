@@ -1,10 +1,10 @@
-#include "FomodService.h"
+#include "FomodService.hpp"
 #include <algorithm>
 #include <format>
-#include "FileOperations.h"
-#include "FomodDependencyEvaluator.h"
-#include "Logger.h"
-#include "Utils.h"
+#include "FileOperations.hpp"
+#include "FomodDependencyEvaluator.hpp"
+#include "Logger.hpp"
+#include "Utils.hpp"
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
