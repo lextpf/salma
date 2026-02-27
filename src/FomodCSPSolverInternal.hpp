@@ -1,7 +1,7 @@
 #pragma once
 
-#include "FomodCSPTypes.h"
-#include "FomodIR.h"
+#include "FomodCSPTypes.hpp"
+#include "FomodIR.hpp"
 
 #include <cstdint>
 #include <string>
