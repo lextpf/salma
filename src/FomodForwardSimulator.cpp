@@ -1,6 +1,6 @@
-#include "FomodForwardSimulator.h"
-#include "FomodCSPSolver.h"
-#include "FomodDependencyEvaluator.h"
+#include "FomodForwardSimulator.hpp"
+#include "FomodCSPSolver.hpp"
+#include "FomodDependencyEvaluator.hpp"
 
 namespace mo2core
 {
