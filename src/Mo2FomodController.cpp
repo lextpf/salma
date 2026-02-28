@@ -1,11 +1,11 @@
-#include "Mo2Controller.h"
-#include "Mo2Helpers.h"
+#include "Mo2Controller.hpp"
+#include "Mo2Helpers.hpp"
 
-#include "ConfigService.h"
-#include "FomodArchiveResolver.h"
-#include "FomodInferenceService.h"
-#include "Logger.h"
-#include "Utils.h"
+#include "ConfigService.hpp"
+#include "FomodArchiveResolver.hpp"
+#include "FomodInferenceService.hpp"
+#include "Logger.hpp"
+#include "Utils.hpp"
 
 #include <algorithm>
 #include <atomic>
