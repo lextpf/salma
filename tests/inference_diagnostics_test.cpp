@@ -3,13 +3,13 @@
 
 #include <nlohmann/json.hpp>
 
-#include "FomodAtom.h"
-#include "FomodCSPSolver.h"
-#include "FomodInferenceAtoms.h"
-#include "FomodIR.h"
-#include "FomodIRParser.h"
-#include "FomodPropagator.h"
-#include "InferenceDiagnostics.h"
+#include "FomodAtom.hpp"
+#include "FomodCSPSolver.hpp"
+#include "FomodInferenceAtoms.hpp"
+#include "FomodIR.hpp"
+#include "FomodIRParser.hpp"
+#include "FomodPropagator.hpp"
+#include "InferenceDiagnostics.hpp"
 
 using namespace mo2core;
 
