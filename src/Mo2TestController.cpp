@@ -1,8 +1,8 @@
-#include "Mo2Controller.h"
-#include "Mo2Helpers.h"
+#include "Mo2Controller.hpp"
+#include "Mo2Helpers.hpp"
 
-#include "Logger.h"
-#include "Utils.h"
+#include "Logger.hpp"
+#include "Utils.hpp"
 
 #include <filesystem>
 #include <format>
