@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "SecurityContext.h"
+#include "SecurityContext.hpp"
 
 #include <algorithm>
 
