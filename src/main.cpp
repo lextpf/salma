@@ -24,14 +24,14 @@
  */
 #include <crow.h>
 
-#include "ConfigService.h"
-#include "InstallationController.h"
-#include "Logger.h"
-#include "Mo2Controller.h"
-#include "SecurityContext.h"
-#include "SecurityMiddleware.h"
-#include "StaticFileHandler.h"
-#include "Utils.h"
+#include "ConfigService.hpp"
+#include "InstallationController.hpp"
+#include "Logger.hpp"
+#include "Mo2Controller.hpp"
+#include "SecurityContext.hpp"
+#include "SecurityMiddleware.hpp"
+#include "StaticFileHandler.hpp"
+#include "Utils.hpp"
 
 #include <crow/logging.h>
 #include <cstdlib>
