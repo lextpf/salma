@@ -1,6 +1,6 @@
-#include "Mo2Helpers.h"
+#include "Mo2Helpers.hpp"
 
-#include "Logger.h"
+#include "Logger.hpp"
 
 #include <cstdlib>
 #include <filesystem>
