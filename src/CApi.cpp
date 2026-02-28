@@ -1,8 +1,8 @@
-#include "CApi.h"
-#include "FomodArchiveResolver.h"
-#include "FomodInferenceService.h"
-#include "InstallationService.h"
-#include "Logger.h"
+#include "CApi.hpp"
+#include "FomodArchiveResolver.hpp"
+#include "FomodInferenceService.hpp"
+#include "InstallationService.hpp"
+#include "Logger.hpp"
 
 #include <atomic>
 #include <cstdlib>
