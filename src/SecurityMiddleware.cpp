@@ -1,5 +1,5 @@
-#include "SecurityMiddleware.h"
-#include "SecurityContext.h"
+#include "SecurityMiddleware.hpp"
+#include "SecurityContext.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -40,6 +40,19 @@ void send_403(crow::response& res, const char* error_message)
 
 void SecurityMiddleware::before_handle(crow::request& req, crow::response& res, context&)
 {
+    // CORS preflight and CSRF enforcement are intentionally split: preflights
+    // are checked by Origin alone (browsers never attach the X-Salma-Csrf header
+    // to an OPTIONS probe), while state-changing requests go through CSRF too.
+    //
+    // The empty-Origin path below is the subtle case: same-origin browser fetches
+    // and curl-style clients legitimately omit Origin, but a cross-site forgery
+    // attempt from an attacker page WILL carry an Origin set by the browser. So
+    // "no Origin" is treated as "definitely not cross-origin" and the request is
+    // allowed to fall through to the CSRF check, which is the real gate against
+    // CSRF (a token an attacker page cannot read because it is fetched via a
+    // separate same-origin GET). Conversely, a present-but-disallowed Origin is
+    // rejected outright, before we even look at the token.
+    // @Claude
     const std::string& origin = req.get_header_value("Origin");
     const auto& sec = mo2core::SecurityContext::instance();
     const bool origin_allowed = !origin.empty() && sec.is_origin_allowed(origin);
@@ -71,6 +84,8 @@ void SecurityMiddleware::before_handle(crow::request& req, crow::response& res, 
         return;
     }
 
+    // constant_time_equals (not std::string::operator==) so that the comparison
+    // does not leak token bytes via early-exit timing differences.
     const std::string& token = req.get_header_value("X-Salma-Csrf");
     if (token.empty() || !mo2core::constant_time_equals(token, sec.csrf_token()))
     {
