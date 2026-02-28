@@ -6,7 +6,7 @@
 #include <optional>
 #include <string>
 
-#include "BackgroundJob.h"
+#include "BackgroundJob.hpp"
 
 namespace mo2server
 {
