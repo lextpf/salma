@@ -2,7 +2,7 @@
 
 #include <crow.h>
 
-#include "BackgroundJob.h"
+#include "BackgroundJob.hpp"
 
 #include <chrono>
 #include <nlohmann/json.hpp>
@@ -189,7 +189,7 @@ namespace mo2server
  * | `Mo2LogController.cpp`      | `/api/logs/...`                          |
  * | `Mo2PluginController.cpp`   | `/api/plugin/...`                        |
  * | `Mo2TestController.cpp`     | `/api/test/...` plus Win32 process glue  |
- * | `Mo2Helpers.h/.cpp`         | shared helpers (json_response, paths)    |
+ * | `Mo2Helpers.hpp/.cpp`       | shared helpers (json_response, paths)    |
  *
  * Add new handlers to the file that owns their endpoint group rather
  * than to `Mo2Controller.cpp`.
