@@ -43,7 +43,7 @@ CMakePresets.json       text eol=lf
 *.xml                   text
 *.txt                   text
 vcpkg.json              text eol=lf
-LICENSE                 text
+LICENSE.md              text diff=markdown
 Doxyfile                text
 Doxyfile.in             text
 .gitattributes          text eol=lf
@@ -83,10 +83,11 @@ package-lock.json       text eol=lf -diff
 # Generated
 # ---------------------------------------------------------------------------
 docs/**                 linguist-generated=true -diff
+docs/main.html          -linguist-generated diff=html
 site/**                 linguist-generated=true -diff
 web/dist/**             linguist-generated=true -diff
 external/**             linguist-vendored=true
-triplets/**             linguist-vendored=true
+cmake/**                linguist-vendored=true
 
 # ---------------------------------------------------------------------------
 # Archives
