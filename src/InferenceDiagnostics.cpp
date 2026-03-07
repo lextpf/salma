@@ -448,6 +448,15 @@ void InferenceDiagnosticsBuilder::set_cache_hit(std::string source)
     }
 }
 
+void InferenceDiagnosticsBuilder::set_target_file_count(int count)
+{
+    if (finalized_)
+    {
+        return;
+    }
+    target_file_count_ = count;
+}
+
 void InferenceDiagnosticsBuilder::absorb_propagation(const PropagationResult& propagation)
 {
     if (finalized_)
@@ -662,6 +671,20 @@ void InferenceDiagnosticsBuilder::finalize(const SolverResult& result,
     }
     (void)propagation;  // currently consumed earlier via absorb_propagation
 
+    // Fraction of the target tree the chosen selections actually reproduce.
+    // Misses count fully; size/hash mismatches count half (right path, wrong
+    // bytes - typically post-processed content, not a wrong choice). Without
+    // a target count the ratio stays 1.0 and selected plugins keep the
+    // legacy flat non-exact score.
+    double repro_ratio = 1.0;
+    if (!result.exact_match && target_file_count_ > 0)
+    {
+        double effective_miss =
+            static_cast<double>(result.missing) +
+            0.5 * static_cast<double>(result.size_mismatch + result.hash_mismatch);
+        repro_ratio = clamp01(1.0 - effective_miss / static_cast<double>(target_file_count_));
+    }
+
     // Per-plugin component computation.
     for (size_t s = 0; s < diag_.steps.size(); ++s)
     {
@@ -683,23 +706,11 @@ void InferenceDiagnosticsBuilder::finalize(const SolverResult& result,
                 c.evidence = clamp01(evidence_component(plugin_diag, prop_forced));
                 c.propagation = clamp01(propagation_component(prop_forced));
                 // Repro: deselected plugins inherit a high score; selected
-                // plugins start at 1.0 and degrade if the group has misses.
+                // plugins score 1.0 on an exact match, else the flat 0.85
+                // scaled by how much of the target tree was reproduced.
                 if (plugin_diag.selected)
                 {
-                    int group_misses = 0;
-                    int group_targets = 0;
-                    for (const auto& q : group_diag.plugins)
-                    {
-                        // Approximate group-local target count via plugin file count.
-                        group_targets +=
-                            plugin_file_count(installer,
-                                              static_cast<int>(s),
-                                              static_cast<int>(g),
-                                              static_cast<int>(&q - &group_diag.plugins[0]));
-                    }
-                    (void)group_targets;
-                    (void)group_misses;
-                    c.repro = result.exact_match ? 1.0 : 0.85;
+                    c.repro = result.exact_match ? 1.0 : 0.85 * repro_ratio;
                 }
                 else
                 {
@@ -813,26 +824,36 @@ void InferenceDiagnosticsBuilder::finalize(const SolverResult& result,
     // Backfill `reproduced` if not already populated.
     if (diag_.run.repro.reproduced == 0)
     {
-        // Count selected plugins' file contributions as a rough proxy when
-        // the solver did not provide an explicit reproduced count.
-        int contributed = 0;
-        for (size_t s = 0; s < result.selections.size(); ++s)
+        if (target_file_count_ > 0)
         {
-            for (size_t g = 0; g < result.selections[s].size(); ++g)
+            // Target-derived count: files matched byte-perfectly.
+            diag_.run.repro.reproduced = std::max(
+                0,
+                target_file_count_ - result.missing - result.size_mismatch - result.hash_mismatch);
+        }
+        else
+        {
+            // Count selected plugins' file contributions as a rough proxy when
+            // the solver did not provide an explicit reproduced count.
+            int contributed = 0;
+            for (size_t s = 0; s < result.selections.size(); ++s)
             {
-                for (size_t p = 0; p < result.selections[s][g].size(); ++p)
+                for (size_t g = 0; g < result.selections[s].size(); ++g)
                 {
-                    if (result.selections[s][g][p])
+                    for (size_t p = 0; p < result.selections[s][g].size(); ++p)
                     {
-                        contributed += plugin_file_count(installer,
-                                                         static_cast<int>(s),
-                                                         static_cast<int>(g),
-                                                         static_cast<int>(p));
+                        if (result.selections[s][g][p])
+                        {
+                            contributed += plugin_file_count(installer,
+                                                             static_cast<int>(s),
+                                                             static_cast<int>(g),
+                                                             static_cast<int>(p));
+                        }
                     }
                 }
             }
+            diag_.run.repro.reproduced = std::max(0, contributed - result.missing);
         }
-        diag_.run.repro.reproduced = std::max(0, contributed - result.missing);
     }
 
     finalized_ = true;
