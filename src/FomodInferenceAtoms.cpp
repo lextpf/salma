@@ -57,6 +57,14 @@ void expand_entry(const FomodFileEntry& entry,
             auto dest = entry.destination.empty() ? rel : (entry.destination + "/" + rel);
 
             auto norm_dest = normalize_path(dest);
+            // Skip archive-shipped top-level meta.ini: build_target_tree
+            // excludes the installed one as MO2 metadata, so producing it here
+            // would make exact_match permanently unreachable (constant extra).
+            if (norm_dest == "meta.ini")
+            {
+                ++it;
+                continue;
+            }
             if (!is_safe_dest(norm_dest))
             {
                 Logger::instance().log_warning(
@@ -86,6 +94,12 @@ void expand_entry(const FomodFileEntry& entry,
     }
     else
     {
+        // Same top-level meta.ini exclusion as the folder branch. The parser
+        // normalizes destinations already; normalize again for direct callers.
+        if (normalize_path(entry.destination) == "meta.ini")
+        {
+            return;
+        }
         if (!is_safe_dest(entry.destination))
         {
             Logger::instance().log_warning(std::format(
