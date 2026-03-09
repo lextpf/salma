@@ -105,7 +105,7 @@ void Logger::log(const std::string& message)
             write_log_unlocked("INFO", message);
         }
     }
-    // Console output outside the lock -- interleaving is acceptable.
+    // Console output outside the lock - interleaving is acceptable.
     std::cout << message << '\n';
     if (cb_snapshot)
     {

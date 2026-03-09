@@ -67,14 +67,14 @@ enum class FomodConditionOp
 /** @brief Discriminator for the predicate a leaf condition tests. */
 enum class FomodConditionType
 {
-    Flag,     /**< `<flagDependency>` -- tests a user-set condition flag */
-    File,     /**< `<fileDependency>` -- tests whether a file is Active/Inactive/Missing */
-    Game,     /**< `<gameDependency>` -- tests the game version */
-    Plugin,   /**< `<pluginDependency>` -- tests whether a game plugin (.esp/.esm) is active */
-    Fomod,    /**< `<fomodDependency>` -- tests whether a named FOMOD package is installed */
-    Fomm,     /**< `<fommDependency>` -- tests the FOMM version */
-    Fose,     /**< `<foseDependency>` -- tests the script extender (FOSE/SKSE/etc.) version */
-    Composite /**< `<dependencies>` -- composite node combining children with And/Or */
+    Flag,     /**< `<flagDependency>` - tests a user-set condition flag */
+    File,     /**< `<fileDependency>` - tests whether a file is Active/Inactive/Missing */
+    Game,     /**< `<gameDependency>` - tests the game version */
+    Plugin,   /**< `<pluginDependency>` - tests whether a game plugin (.esp/.esm) is active */
+    Fomod,    /**< `<fomodDependency>` - tests whether a named FOMOD package is installed */
+    Fomm,     /**< `<fommDependency>` - tests the FOMM version */
+    Fose,     /**< `<foseDependency>` - tests the script extender (FOSE/SKSE/etc.) version */
+    Composite /**< `<dependencies>` - composite node combining children with And/Or */
 };
 
 /**

@@ -235,7 +235,7 @@ std::string InstallationService::handle_non_fomod_install(const fs::path& archiv
     }
 
     // Fallback folder paths come from ModStructureDetector which enumerates
-    // filesystem entries under archive_root -- they are always relative names,
+    // filesystem entries under archive_root - they are always relative names,
     // so no additional traversal validation is needed beyond the check above.
     auto main_mod_folders = ModStructureDetector::find_main_mod_folders(archive_root);
 
@@ -470,7 +470,7 @@ std::string InstallationService::resolve_json_path(const std::string& json_path,
 {
     auto& logger = Logger::instance();
 
-    // Caller provided an explicit path -- trust it.
+    // Caller provided an explicit path - trust it.
     if (!json_path.empty())
         return json_path;
 

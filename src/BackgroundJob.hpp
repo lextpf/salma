@@ -37,7 +37,7 @@ namespace mo2server
  * then **detaches** the thread (so a non-cooperative worker does not
  * indefinitely block process shutdown). Detach is safe because all state
  * accessed by the worker lives in a heap-allocated `State` struct held by
- * a `shared_ptr` that the worker captures by value -- the state outlives
+ * a `shared_ptr` that the worker captures by value - the state outlives
  * `*this` if the worker is still running at destruction time.
  *
  * Work functions that perform long-running loops should still check the
@@ -118,7 +118,7 @@ public:
      * detaches (if still running). Detaching is safe because the worker
      * captures `state_` by value, so the State outlives `*this`.
      *
-     * Idempotent across **sequential** calls -- subsequent invocations
+     * Idempotent across **sequential** calls - subsequent invocations
      * see `thread_.joinable() == false` and return immediately. The
      * destructor calls this automatically.
      *
@@ -154,7 +154,7 @@ public:
                     //
                     // Route through Logger so a host that registered a callback
                     // (e.g. the MO2 Python plugin) actually sees the warning.
-                    // Fall back to stderr if Logger throws -- shutdown() must
+                    // Fall back to stderr if Logger throws - shutdown() must
                     // not propagate exceptions from the destructor.
                     try
                     {
@@ -301,7 +301,7 @@ public:
      * std::string& error)`. The pointer is null when `has_result` is false.
      * @note The callback runs while the internal mutex is held. Do not call
      *       any operation on this BackgroundJob that also takes the mutex
-     *       (`try_start`, `shutdown`, another `read_result`) -- that would
+     *       (`try_start`, `shutdown`, another `read_result`) - that would
      *       deadlock. Lock-free operations (`request_cancel`,
      *       `is_cancel_requested`, `is_running`, `cancel_token`) are safe to
      *       call from inside the callback because they only touch atomics.

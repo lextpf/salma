@@ -49,7 +49,7 @@ namespace fs = std::filesystem;
  * **Suppression policy.**  Heartbeat endpoints (`/api/logs`,
  * `/api/logs/test`, `/api/mo2/status`) generate constant polling traffic
  * that would drown out useful log lines.  Their Request and Response entries
- * are silently dropped -- except for Response lines with a non-200 status,
+ * are silently dropped - except for Response lines with a non-200 status,
  * which are kept for debugging.
  *
  * **Routing rules.**  Crow log levels are mapped to salma Logger calls:
@@ -304,7 +304,7 @@ int main()
     // file writes, archive extraction, batch script execution, and child-process
     // spawning; opening that surface to the LAN is unsafe. Users who deliberately
     // need a non-loopback bind (e.g. dev container, remote dashboard) can set
-    // SALMA_BIND_ADDR -- and the warning makes that choice visible in the log.
+    // SALMA_BIND_ADDR - and the warning makes that choice visible in the log.
     std::string bind_addr = "127.0.0.1";
     if (const char* bind_env = std::getenv("SALMA_BIND_ADDR"); bind_env && *bind_env)
     {

@@ -36,7 +36,7 @@ namespace mo2core
  *    selections as JSON in the mod's `meta.ini`. The implementation
  *    scans `meta.ini` line-by-line and looks up the key
  *    `fomod plus/fomod` (case-insensitive) **inside the `[Settings]`
- *    section** -- keys outside that section are ignored even if they
+ *    section** - keys outside that section are ignored even if they
  *    match the name. When the parsed JSON value contains a non-empty
  *    `steps` array, inference is skipped entirely and the cached
  *    selections are returned as-is.

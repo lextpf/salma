@@ -148,7 +148,7 @@ public:
      * @brief Read the running/completed state of the active install job.
      *
      * Reads `BackgroundJob<InstallJobResult>` state under its mutex and
-     * returns a JSON status payload. Always returns 200 -- there is no
+     * returns a JSON status payload. Always returns 200 - there is no
      * "job not found" error because the controller only tracks one slot.
      *
      * @param job_id Soft-contract: the only meaningful value is `"current"`.

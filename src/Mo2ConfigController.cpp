@@ -72,7 +72,7 @@ crow::response Mo2Controller::put_config(const crow::request& req)
         }
         else
         {
-            // No mods path in body -- caller is using PUT as a "re-save" of
+            // No mods path in body - caller is using PUT as a "re-save" of
             // the current state (or sending an unrelated field). Best-effort save.
             if (!cfg.save())
             {

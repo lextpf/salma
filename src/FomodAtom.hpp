@@ -60,9 +60,9 @@ struct FomodAtom
     /** @brief Where this atom originated in the FOMOD XML. */
     enum class Origin
     {
-        Required,   /**< From `<requiredInstallFiles>` -- always included */
-        Plugin,     /**< From a `<plugin>/<files>` block -- included when the plugin is selected */
-        Conditional /**< From `<conditionalFileInstalls>` -- included when the pattern condition is
+        Required,   /**< From `<requiredInstallFiles>` - always included */
+        Plugin,     /**< From a `<plugin>/<files>` block - included when the plugin is selected */
+        Conditional /**< From `<conditionalFileInstalls>` - included when the pattern condition is
                        met */
     };
     Origin origin = Origin::Required; /**< Which FOMOD section produced this atom */

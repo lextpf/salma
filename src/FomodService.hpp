@@ -25,18 +25,18 @@ namespace mo2core
  *
  * InstallationService calls the methods below in order:
  *
- * 1. **check_module_dependencies** -- gate the entire installer on
+ * 1. **check_module_dependencies** - gate the entire installer on
  *    top-level `<moduleDependencies>`.
- * 2. **validate_json_selections** -- check that group-type constraints
+ * 2. **validate_json_selections** - check that group-type constraints
  *    are satisfied (e.g. SelectExactlyOne has exactly one selection).
- * 3. **process_required_files** -- enqueue `<requiredInstallFiles>`.
- * 4. **process_optional_files** -- walk each selected plugin, extract
+ * 3. **process_required_files** - enqueue `<requiredInstallFiles>`.
+ * 4. **process_optional_files** - walk each selected plugin, extract
  *    flags, and enqueue its `<files>` / `<folders>` entries. Also
  *    auto-installs Required plugins per step and alwaysInstall /
  *    installIfUsable files from unselected plugins (second pass).
- * 5. **process_conditional_files** -- evaluate `<conditionalFileInstalls>`
+ * 5. **process_conditional_files** - evaluate `<conditionalFileInstalls>`
  *    patterns against the collected flags.
- * 6. **execute_file_operations** -- sort by priority and copy.
+ * 6. **execute_file_operations** - sort by priority and copy.
  *
  * ```mermaid
  * ---

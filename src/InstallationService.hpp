@@ -120,7 +120,7 @@ namespace mo2core
  *   error path are also logged as warnings.
  *
  * The mod destination directory itself (`mod_path`) is **not**
- * cleaned up on failure -- once `fs::create_directories(mod_path)`
+ * cleaned up on failure - once `fs::create_directories(mod_path)`
  * has run, partial files may already have been copied there by the
  * FOMOD pipeline. Callers that need transactional installs should
  * either install into a staging directory and atomically rename, or

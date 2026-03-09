@@ -147,7 +147,7 @@ bool ConfigService::apply_mo2_mods_path(const std::string& path)
     {
         return true;
     }
-    // Save failed -- roll the in-memory value back so the running process and
+    // Save failed - roll the in-memory value back so the running process and
     // disk agree on the previous configuration.
     std::lock_guard lock(mutex_);
     mo2_mods_path_ = previous;
