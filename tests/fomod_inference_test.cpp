@@ -1,10 +1,15 @@
 #include <gtest/gtest.h>
 #include <pugixml.hpp>
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
 #include "FomodAtom.hpp"
 #include "FomodCSPSolver.hpp"
 #include "FomodDependencyEvaluator.hpp"
 #include "FomodForwardSimulator.hpp"
+#include "FomodInferenceAtoms.hpp"
 #include "FomodInferenceService.hpp"
 #include "FomodIR.hpp"
 #include "FomodIRParser.hpp"
@@ -88,20 +93,8 @@ static ExpandedAtoms build_atoms(const FomodInstaller& installer, uint64_t file_
     return atoms;
 }
 
-// Helper: build AtomIndex from ExpandedAtoms.
-static AtomIndex build_atom_index(const ExpandedAtoms& atoms)
-{
-    AtomIndex index;
-    for (const auto& a : atoms.required)
-        index[a.dest_path].push_back(a);
-    for (const auto& plugin_atoms : atoms.per_plugin)
-        for (const auto& a : plugin_atoms)
-            index[a.dest_path].push_back(a);
-    for (const auto& cond_atoms : atoms.per_conditional)
-        for (const auto& a : cond_atoms)
-            index[a.dest_path].push_back(a);
-    return index;
-}
+// AtomIndex construction comes straight from the production helper
+// (mo2core::build_atom_index in FomodInferenceAtoms.hpp).
 
 // Helper: build a target tree from a set of dest paths.
 static TargetTree build_target(const std::vector<std::string>& paths, uint64_t file_size = 100)
@@ -276,6 +269,73 @@ TEST(FomodInference, Conditional_AllMatchingPatternsApplied)
     EXPECT_TRUE(sim.files.count("base.esp"));
     EXPECT_TRUE(sim.files.count("patch_a.esp"));
     EXPECT_TRUE(sim.files.count("patch_b.esp"));
+}
+
+// ---------------------------------------------------------------------------
+// Test 3b: output-tree data contract. The Files tab is built by
+// FomodInferenceService::add_output_tree, which serializes simulate()'s file
+// map sorted by destination path. This guards that every selected plugin file
+// reaches the map and that the sort yields stable lexicographic order, carrying
+// the size + source each entry renders.
+// ---------------------------------------------------------------------------
+TEST(FomodInference, OutputTree_SelectedFilesSortedByDest)
+{
+    const char* xml = R"(
+    <config>
+      <installSteps>
+        <installStep name="Step1">
+          <optionalFileGroups>
+            <group name="G1" type="SelectExactlyOne">
+              <plugins>
+                <plugin name="P1">
+                  <files>
+                    <file source="z/zebra.esp" destination="zebra.esp"/>
+                    <file source="a/alpha.esp" destination="alpha.esp"/>
+                    <file source="m/core.nif" destination="meshes/core.nif"/>
+                  </files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+              </plugins>
+            </group>
+          </optionalFileGroups>
+        </installStep>
+      </installSteps>
+    </config>)";
+
+    auto installer = parse_xml(xml);
+    auto atoms = build_atoms(installer, 100);
+
+    // Select P1 (step 0, group 0, plugin 0).
+    std::vector<std::vector<std::vector<bool>>> selections = {{{true}}};
+
+    InferenceOverrides overrides;
+    overrides.step_visible.assign(1, ExternalConditionOverride::ForceTrue);
+
+    auto sim = simulate(installer, atoms, selections, nullptr, &overrides);
+
+    // Every selected file reaches the simulated tree (the output-tree source).
+    ASSERT_EQ(sim.files.size(), 3u);
+    ASSERT_TRUE(sim.files.count("alpha.esp"));
+    ASSERT_TRUE(sim.files.count("zebra.esp"));
+    ASSERT_TRUE(sim.files.count("meshes/core.nif"));
+
+    // Replicate add_output_tree's sort: entries ordered by destination path.
+    std::vector<std::string> dests;
+    for (const auto& [dest, atom] : sim.files)
+    {
+        dests.push_back(dest);
+    }
+    std::sort(dests.begin(), dests.end());
+
+    EXPECT_EQ(dests[0], "alpha.esp");
+    EXPECT_EQ(dests[1], "meshes/core.nif");
+    EXPECT_EQ(dests[2], "zebra.esp");
+
+    // Each winning atom carries the size + source the Files tab renders.
+    EXPECT_EQ(sim.files.at("alpha.esp").file_size, 100u);
+    EXPECT_EQ(sim.files.at("alpha.esp").source_path, "a/alpha.esp");
+    EXPECT_EQ(sim.files.at("zebra.esp").source_path, "z/zebra.esp");
+    EXPECT_EQ(sim.files.at("meshes/core.nif").source_path, "m/core.nif");
 }
 
 // ---------------------------------------------------------------------------
@@ -741,4 +801,307 @@ TEST(FomodInference, Overrides_UniqueDestForcesTrue)
 
     ASSERT_EQ(overrides.step_visible.size(), 1u);
     EXPECT_EQ(overrides.step_visible[0], ExternalConditionOverride::ForceTrue);
+}
+
+// ---------------------------------------------------------------------------
+// Regression: branch-and-bound lower bound must treat a conditional-only dest
+// as still fixable while a flag-setter group remains unassigned (finding 2.2,
+// conditional-only dest admissibility).
+//
+// The lower bound's dest_to_groups / dest_to_size_match_groups /
+// dest_to_hash_capable_groups maps are populated from Plugin-origin atoms only.
+// A dest that some path produces solely via a conditionalFileInstalls pattern
+// (gated on a flag set by a LATER group) has no entry there, so the buggy bound
+// counts it as an unfixable miss and cannot_beat() prunes the subtree that
+// would have reached the exact solution.
+//
+// This test must exercise the backtracking DFS, where lower_bound() runs. The
+// scenario is therefore built as a genuine local optimum that greedy + local
+// search CANNOT escape with a single group flip, so the solver is forced past
+// Phase-1 into the global backtrack pass where the bound fires.
+//
+// Scenario (6 SelectExactlyOne groups, steps Step0..Step5):
+//   - Step0: "Decoy0" directly produces the conditional dest "cond/special.dat"
+//     AND an unwanted "decoy/extra.dat"; "Clean0" produces only "base/0.dat".
+//     Decoy0 out-scores Clean0 (it uniquely supplies cond/special.dat), so
+//     greedy picks Decoy0 -> missing=0, extra=1 (the decoy file).
+//   - Step5 (LAST group, highest order position): "Plain5" directly produces
+//     "base/5.dat" and "Flag5" produces no files but sets flag cond=on. The
+//     conditionalFileInstalls pattern gated on cond=on produces BOTH
+//     "base/5.dat" and "cond/special.dat". Because Plain5 is the unique plugin
+//     producer of base/5.dat (evidence 3) it out-scores Flag5 (evidence 2 from
+//     the conditional flag link), so greedy leaves the flag OFF and picks
+//     Plain5. cond/special.dat is then supplied only by Decoy0.
+//
+// The greedy result {Decoy0, Clean1..4, Plain5} is a STRICT local optimum at
+// {missing:0, extra:1} that no single flip improves:
+//   - Flip Step0 Decoy0 -> Clean0: drops decoy/extra.dat but also drops
+//     cond/special.dat (conditional still OFF because Plain5 is selected) ->
+//     {missing:1, extra:0}, not better.
+//   - Flip Step5 Plain5 -> Flag5: fires the conditional (cond/special.dat now
+//     redundant, base/5.dat now from the pattern) but leaves decoy/extra.dat ->
+//     {missing:0, extra:1}, not better.
+// The exact reproduction needs BOTH changes at once (Clean0 AND Flag5), a
+// 2-coordinated move that hill-climbing cannot reach. targeted_repair only
+// touches SelectAny/AtLeastOne groups, so Phase-1 gives up here and the solver
+// escalates to the global backtracking DFS.
+//
+// Why the buggy bound prunes the exact path: the bound fires at order position 4
+// (group G4). On the prefix that chose Clean0 (not Decoy0) with Step5 still at
+// its best value Plain5, "cond/special.dat" is missing from the partial sim.
+// Its only dest_to_groups entry is Step0's Decoy0, already past in the order, so
+// has_remaining_group() is false; the conditional's flag setter (Step5, position
+// 5) is invisible to dest_to_groups. The buggy can_fix_missing reports it
+// unfixable -> lb.missing = 1 > best.missing = 0 -> cannot_beat() prunes before
+// Step5=Flag5 is ever tried, so exact_match stays false on revert.
+//
+// The fix's conditional_repair_remaining() sees that "cond/special.dat" is a
+// conditional dest, that flag "cond" is needed, and that its setter group
+// (Step5) is still unassigned (order_pos >= next_idx), so it treats the dest as
+// fixable -> lb.missing = 0 -> the subtree survives and the exact is found.
+//
+// Step3 carries a second decoy "Swap3" that produces cond/special.dat instead
+// of base/3.dat (it survives propagation because it only ever supplies a target
+// file). Greedy prefers Clean3 (the unique producer of base/3.dat), but the DFS
+// still explores the Swap3 branch inside the Decoy0 subtree. On that branch
+// base/3.dat is missing and its only producer group (Step3) is already past in
+// the order, so the bound prunes it on genuine, non-conditional grounds. This
+// guarantees lower_bound > 0 in the pruning summary even WITH the fix present,
+// proving the DFS bound path actually executed.
+TEST(FomodInference, ConditionalDest_FlagSetByLaterGroup_ReachesExact)
+{
+    const char* xml = R"(
+    <config>
+      <installSteps>
+        <installStep name="Step0">
+          <optionalFileGroups>
+            <group name="G0" type="SelectExactlyOne">
+              <plugins order="Explicit">
+                <plugin name="Decoy0">
+                  <files>
+                    <file source="d0/base.dat" destination="base/0.dat"/>
+                    <file source="d0/extra.dat" destination="decoy/extra.dat"/>
+                    <file source="d0/special.dat" destination="cond/special.dat"/>
+                  </files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+                <plugin name="Clean0">
+                  <files><file source="c0/base.dat" destination="base/0.dat"/></files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+              </plugins>
+            </group>
+          </optionalFileGroups>
+        </installStep>
+        <installStep name="Step1">
+          <optionalFileGroups>
+            <group name="G1" type="SelectExactlyOne">
+              <plugins order="Explicit">
+                <plugin name="Clean1">
+                  <files><file source="c1/base.dat" destination="base/1.dat"/></files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+                <plugin name="Alt1">
+                  <files><file source="a1/alt.dat" destination="alt/1.dat"/></files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+              </plugins>
+            </group>
+          </optionalFileGroups>
+        </installStep>
+        <installStep name="Step2">
+          <optionalFileGroups>
+            <group name="G2" type="SelectExactlyOne">
+              <plugins order="Explicit">
+                <plugin name="Clean2">
+                  <files><file source="c2/base.dat" destination="base/2.dat"/></files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+                <plugin name="Alt2">
+                  <files><file source="a2/alt.dat" destination="alt/2.dat"/></files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+              </plugins>
+            </group>
+          </optionalFileGroups>
+        </installStep>
+        <installStep name="Step3">
+          <optionalFileGroups>
+            <group name="G3" type="SelectExactlyOne">
+              <plugins order="Explicit">
+                <plugin name="Clean3">
+                  <files><file source="c3/base.dat" destination="base/3.dat"/></files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+                <plugin name="Swap3">
+                  <files><file source="s3/special.dat" destination="cond/special.dat"/></files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+              </plugins>
+            </group>
+          </optionalFileGroups>
+        </installStep>
+        <installStep name="Step4">
+          <optionalFileGroups>
+            <group name="G4" type="SelectExactlyOne">
+              <plugins order="Explicit">
+                <plugin name="Clean4">
+                  <files><file source="c4/base.dat" destination="base/4.dat"/></files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+                <plugin name="Twin4">
+                  <files><file source="t4/base.dat" destination="base/4.dat"/></files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+              </plugins>
+            </group>
+          </optionalFileGroups>
+        </installStep>
+        <installStep name="Step5">
+          <optionalFileGroups>
+            <group name="G5" type="SelectExactlyOne">
+              <plugins order="Explicit">
+                <plugin name="Plain5">
+                  <files><file source="p5/base.dat" destination="base/5.dat"/></files>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+                <plugin name="Flag5">
+                  <conditionFlags>
+                    <flag name="cond">on</flag>
+                  </conditionFlags>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+              </plugins>
+            </group>
+          </optionalFileGroups>
+        </installStep>
+      </installSteps>
+      <conditionalFileInstalls>
+        <patterns>
+          <pattern>
+            <dependencies>
+              <flagDependency flag="cond" value="on"/>
+            </dependencies>
+            <files>
+              <file source="cfi/base5.dat" destination="base/5.dat"/>
+              <file source="cfi/special.dat" destination="cond/special.dat"/>
+            </files>
+          </pattern>
+        </patterns>
+      </conditionalFileInstalls>
+    </config>)";
+
+    auto installer = parse_xml(xml);
+    auto atoms = build_atoms(installer);
+    auto atom_index = build_atom_index(atoms);
+
+    // Target: six base files plus the conditional-only file. The exact
+    // reproduction is Clean0 + Clean1..3 + (Clean4|Twin4) + Flag5. Flag5 sets
+    // cond=on, firing the conditional install that supplies base/5.dat and
+    // cond/special.dat, and Clean0 avoids decoy/extra.dat, so the tree matches
+    // with no extras. Reaching it requires flipping both Step0 and Step5, which
+    // single-flip local search cannot do (see the header comment).
+    auto target = build_target({"base/0.dat",
+                                "base/1.dat",
+                                "base/2.dat",
+                                "base/3.dat",
+                                "base/4.dat",
+                                "base/5.dat",
+                                "cond/special.dat"});
+    std::unordered_set<std::string> excluded;
+
+    InferenceOverrides overrides;
+    overrides.step_visible.assign(installer.steps.size(), ExternalConditionOverride::Unknown);
+    // Leave the conditional pattern Unknown: a pure flagDependency is evaluated
+    // from the flag map regardless of the external override, so the conditional
+    // fires exactly when Flag5 is selected.
+    overrides.conditional_active.assign(installer.conditional_patterns.size(),
+                                        ExternalConditionOverride::Unknown);
+
+    auto propagation =
+        propagate(installer, atoms, atom_index, target, excluded, overrides, nullptr);
+
+    auto result =
+        solve_fomod_csp(installer, atoms, atom_index, target, excluded, &overrides, &propagation);
+
+    EXPECT_TRUE(result.exact_match)
+        << "solver pruned the conditional-gated exact solution: "
+           "missing="
+        << result.missing << " extra=" << result.extra << " size_mm=" << result.size_mismatch
+        << " hash_mm=" << result.hash_mismatch;
+
+    // Step5 is plugin order [Plain5, Flag5]; the exact solution must select
+    // Flag5 (index 1) so the cond=on flag fires the conditional install.
+    ASSERT_EQ(result.selections.size(), 6u);
+    ASSERT_EQ(result.selections[5].size(), 1u);
+    ASSERT_EQ(result.selections[5][0].size(), 2u);
+    EXPECT_FALSE(result.selections[5][0][0]);  // Plain5 not selected
+    EXPECT_TRUE(result.selections[5][0][1]);   // Flag5 selected (sets cond=on)
+}
+
+// ---------------------------------------------------------------------------
+// Archive-shipped meta.ini is never FOMOD payload
+// ---------------------------------------------------------------------------
+
+TEST(FomodInference, ExpandEntry_FolderSkipsArchiveShippedMetaIni)
+{
+    // Some archives ship a meta.ini alongside their FOMOD payload. The target
+    // scan (build_target_tree) excludes the installed meta.ini as MO2
+    // metadata, so the expansion side must exclude it too - otherwise the
+    // simulated output carries a file the target can never contain and
+    // exact_match becomes unreachable (permanent "extra" plus fallback
+    // penalty on an otherwise perfect reproduction).
+    FomodFileEntry folder;
+    folder.is_folder = true;
+    folder.source = "opt";
+    folder.destination = "";
+    folder.priority = 0;
+
+    std::vector<std::string> sorted_entries = {"opt/meta.ini", "opt/textures/blue.dds"};
+    std::unordered_map<std::string, uint64_t> entry_sizes = {{"opt/meta.ini", 10},
+                                                             {"opt/textures/blue.dds", 100}};
+
+    std::vector<FomodAtom> out;
+    expand_entry(folder, sorted_entries, entry_sizes, 0, FomodAtom::Origin::Plugin, 0, -1, out);
+
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].dest_path, "textures/blue.dds");
+}
+
+TEST(FomodInference, ExpandEntry_FileSkipsMetaIniDestination)
+{
+    FomodFileEntry file;
+    file.is_folder = false;
+    file.source = "extras/meta.ini";
+    file.destination = "meta.ini";
+    file.priority = 0;
+
+    std::vector<std::string> sorted_entries = {"extras/meta.ini"};
+    std::unordered_map<std::string, uint64_t> entry_sizes = {{"extras/meta.ini", 10}};
+
+    std::vector<FomodAtom> out;
+    expand_entry(file, sorted_entries, entry_sizes, 0, FomodAtom::Origin::Required, -1, -1, out);
+
+    EXPECT_TRUE(out.empty());
+}
+
+TEST(FomodInference, ExpandEntry_KeepsNestedMetaIni)
+{
+    // Only the top-level meta.ini is MO2 metadata. A nested one (e.g.
+    // skse/plugins/foo/meta.ini) is real payload and appears on both sides
+    // of the diff, so it must keep flowing through expansion.
+    FomodFileEntry folder;
+    folder.is_folder = true;
+    folder.source = "core";
+    folder.destination = "skse";
+    folder.priority = 0;
+
+    std::vector<std::string> sorted_entries = {"core/plugins/meta.ini"};
+    std::unordered_map<std::string, uint64_t> entry_sizes = {{"core/plugins/meta.ini", 10}};
+
+    std::vector<FomodAtom> out;
+    expand_entry(folder, sorted_entries, entry_sizes, 0, FomodAtom::Origin::Plugin, 0, -1, out);
+
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].dest_path, "skse/plugins/meta.ini");
 }
