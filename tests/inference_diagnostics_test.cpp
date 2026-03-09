@@ -351,3 +351,97 @@ TEST(InferenceDiagnostics, BackwardCompatPluginReader)
     nlohmann::json malformed = 42;
     EXPECT_EQ(read_plugin_name_local(malformed), "");
 }
+
+// ---------------------------------------------------------------------------
+// Repro component reflects tree-compare quality
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+const char* kSingleGroupXml = R"(
+<config>
+  <installSteps>
+    <installStep name="Step1">
+      <optionalFileGroups>
+        <group name="G1" type="SelectExactlyOne">
+          <plugins>
+            <plugin name="P1">
+              <files><file source="a.wav" destination="sound/a.wav"/></files>
+              <typeDescriptor><type name="Optional"/></typeDescriptor>
+            </plugin>
+          </plugins>
+        </group>
+      </optionalFileGroups>
+    </installStep>
+  </installSteps>
+</config>)";
+
+}  // namespace
+
+TEST(InferenceDiagnostics, ReproComponent_CollapsesOnMassiveMisses)
+{
+    auto installer = parse_xml(kSingleGroupXml);
+
+    SolverResult result;
+    result.selections = {{{true}}};
+    result.exact_match = false;
+    result.missing = 35;
+
+    InferenceDiagnosticsBuilder builder(installer);
+    builder.absorb_solver(result);
+    builder.set_target_file_count(36);
+    PropagationResult dummy;
+    builder.finalize(result, dummy, installer);
+
+    const auto& run = builder.diagnostics().run;
+    // 35 of 36 target files unexplained by the chosen selections: the repro
+    // component must collapse toward zero instead of resting at the flat
+    // non-exact default.
+    EXPECT_LT(run.confidence.components.repro, 0.20);
+    // reproduced becomes target-derived: 36 targets - 35 missing = 1.
+    EXPECT_EQ(run.repro.reproduced, 1);
+    EXPECT_EQ(run.confidence.band, "low");
+}
+
+TEST(InferenceDiagnostics, ReproComponent_SizeMismatchGetsHalfCredit)
+{
+    auto installer = parse_xml(kSingleGroupXml);
+
+    SolverResult result;
+    result.selections = {{{true}}};
+    result.exact_match = false;
+    result.size_mismatch = 5;
+
+    InferenceDiagnosticsBuilder builder(installer);
+    builder.absorb_solver(result);
+    builder.set_target_file_count(144);
+    PropagationResult dummy;
+    builder.finalize(result, dummy, installer);
+
+    const auto& run = builder.diagnostics().run;
+    // 5 of 144 files differ only in size (post-processed content, e.g.
+    // BodySlide-regenerated meshes): repro stays high because the selection
+    // itself is still well supported by the remaining 139 exact matches.
+    EXPECT_GT(run.confidence.components.repro, 0.80);
+    EXPECT_EQ(run.repro.reproduced, 139);
+}
+
+TEST(InferenceDiagnostics, ReproComponent_FlatWithoutTargetCount)
+{
+    // Callers that never provide a target count keep the legacy behavior:
+    // selected plugins score the flat 0.85 non-exact default.
+    auto installer = parse_xml(kSingleGroupXml);
+
+    SolverResult result;
+    result.selections = {{{true}}};
+    result.exact_match = false;
+    result.missing = 35;
+
+    InferenceDiagnosticsBuilder builder(installer);
+    builder.absorb_solver(result);
+    PropagationResult dummy;
+    builder.finalize(result, dummy, installer);
+
+    EXPECT_NEAR(builder.diagnostics().run.confidence.components.repro, 0.85, 1e-9);
+}
