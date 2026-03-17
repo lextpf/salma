@@ -23,13 +23,17 @@ namespace mo2core
  * ## :material-swap-horizontal: Parsing Pipeline
  *
  * 1. `parse` - entry point; extracts required files, steps, and conditional
- *    patterns from the document root.
+ *    patterns from the
+ * document root.
  * 2. `compile_condition` - recursively converts `<dependencies>` /
- *    `<dependencyType>` nodes into a `FomodCondition` tree.
+ *    `<dependencyType>` nodes
+ * into a `FomodCondition` tree.
  * 3. `parse_file_entry` - converts a single `<file>` or `<folder>` element,
- *    applying prefix and destination resolution.
+ *    applying prefix
+ * and destination resolution.
  * 4. `parse_group_type` - maps the XML type string to `FomodGroupType`.
- * 5. `resolve_file_destination` - infers the destination when the XML omits it.
+ * 5.
+ * `resolve_file_destination` - infers the destination when the XML omits it.
  */
 class FomodIRParser
 {

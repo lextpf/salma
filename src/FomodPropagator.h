@@ -42,11 +42,14 @@ struct PropagationResult
  * plugin domain using three strategies:
  *
  * 1. **Plugin type constraints** - `Required` and `NotUsable` plugins are
- *    pinned; `SelectAll` groups are resolved immediately.
+ *    pinned; `SelectAll`
+ * groups are resolved immediately.
  * 2. **File evidence** - plugins whose files are entirely absent from the
- *    target tree are eliminated; unique file matches pin a plugin.
+ *    target tree are
+ * eliminated; unique file matches pin a plugin.
  * 3. **Cardinality** - after elimination, groups with only one valid
- *    combination under their `FomodGroupType` are resolved.
+ *    combination under their
+ * `FomodGroupType` are resolved.
  *
  * All steps are treated as visible because original step visibility at
  * install time cannot be determined during inference.
