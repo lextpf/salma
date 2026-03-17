@@ -1,0 +1,48 @@
+name: tests
+
+on:
+  workflow_run:
+    workflows: [build]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: [self-hosted, windows]
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    env:
+      SALMA_MODS_PATH: ${{ vars.SALMA_MODS_PATH }}
+      SALMA_DEPLOY_PATH: ${{ vars.SALMA_DEPLOY_PATH }}
+      SALMA_DOWNLOADS_PATH: ${{ vars.SALMA_DOWNLOADS_PATH }}
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: "05442024c3fda64320bd25d2251cc9807b84fb6f"
+
+      - name: Configure
+        run: cmake --preset default
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run round-trip tests
+        run: python test.py --limit 50
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: test.log

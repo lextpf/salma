@@ -1,0 +1,17 @@
+{
+  "name": "salma",
+  "version-string": "1.0.0",
+  "builtin-baseline": "05442024c3fda64320bd25d2251cc9807b84fb6f",
+  "dependencies": [
+    "crow",
+    {
+      "name": "libarchive",
+      "default-features": false,
+      "features": ["bzip2", "lz4", "lzma", "zstd"]
+    },
+    "pugixml",
+    "nlohmann-json",
+    "bit7z",
+    "gtest"
+  ]
+}

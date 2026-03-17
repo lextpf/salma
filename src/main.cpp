@@ -1,0 +1,265 @@
+/*  ============================================================================================  *
+ *
+ *       ::::::::      :::     :::        ::::    ::::      :::         ⢠⣤⣤⣀ ⠀⠀⠀⠀⠀⠀ ⣀⣤⣤⡄
+ *      :+:    :+:   :+: :+:   :+:        +:+:+: :+:+:+   :+: :+:      ⢸⣿⣿⣿⣿⣦⣄⣀⣠⣴⣿⣿⣿⣿⡇⠀*
+ *      +:+         +:+   +:+  +:+        +:+ +:+:+ +:+  +:+   +:+     ⣸⣿⣿⣿⣿⣿⡽⣿⣯⣿⣿⣿⣿⣿⣇
+ *      +#++:++#++ +#++:++#++: +#+        +#+  +:+  +#+ +#++:++#++:    ⢻⣿⣿⣿⠿⣻⣵⡟⣮⣟⠿⣿⣿⣿⡟
+ *             +#+ +#+     +#+ +#+        +#+       +#+ +#+     +#+    ⠀⠀⠀⠀⣼⣿⡿ ⠀⢿⣿⣷⡀
+ *      #+#    #+# #+#     #+# #+#        #+#       #+# #+#     #+#    *⠀⣠⣾⣿⣿⠃ ⠀⠈⢿⣿⣿⣦⡀
+ *       ########  ###     ### ########## ###       ### ###     ###    ⠀⠈⠉⠹⡿⠁⠀⠀⠀⠀⠈⢻⡇⠉⠉
+ *
+ *                                 << M O D   I N S T A L L E R >>
+ *
+ *  ============================================================================================  *
+ *
+ *      A Crow HTTP server that hosts the React frontend and exposes
+ *      REST endpoints for wizardless FOMOD-aware mod installation and
+ *      FOMOD inference, backed by libarchive, bit7z, and pugixml.
+ *
+ *    ----------------------------------------------------------------------
+ *
+ *      Repository:   https://github.com/lextpf/salma
+ *      License:      MIT
+ */
+#include <crow.h>
+#include <crow/middlewares/cors.h>
+
+#include "ConfigService.h"
+#include "InstallationController.h"
+#include "Logger.h"
+#include "Mo2Controller.h"
+#include "StaticFileHandler.h"
+
+#include <crow/logging.h>
+#include <filesystem>
+#include <format>
+#include <string_view>
+
+namespace fs = std::filesystem;
+
+/**
+ * @brief Bridges Crow's ILogHandler into salma's Logger so all HTTP-server
+ *        output shares the same timestamp + level format as the rest of salma.
+ *
+ * **Suppression policy.**  Heartbeat endpoints (`/api/logs`,
+ * `/api/logs/test`, `/api/mo2/status`) generate constant polling traffic
+ * that would drown out useful log lines.  Their Request and Response entries
+ * are silently dropped -- except for Response lines with a non-200 status,
+ * which are kept for debugging.
+ *
+ * **Routing rules.**  Crow log levels are mapped to salma Logger calls:
+ * - `Error` / `Critical` -> Logger::log_error
+ * - `Warning`            -> Logger::log_warning
+ * - everything else      -> Logger::log
+ *
+ * Every forwarded message is prefixed with `[crow]`.
+ *
+ * @note Suppression uses string-prefix matching (`rfind(..., 0)`), so any
+ *       non-Crow message that happens to start with "Request:" or "Response:"
+ *       would also be filtered.  In practice only Crow produces these
+ *       prefixes, so this is not an issue.
+ *
+ * **Extending suppression.**  To suppress additional endpoints, add a
+ * new `message.find(...)` clause to the `is_heartbeat` check in
+ * should_suppress_noise(). Test by temporarily enabling verbose Crow
+ * logging (LogLevel::Debug) and verifying the target lines no longer
+ * appear in salma.log while non-200 responses still do.
+ */
+class SalmaLogHandler : public crow::ILogHandler
+{
+public:
+    static bool should_suppress_noise(const std::string& message)
+    {
+        const bool is_request = message.starts_with("Request:");
+        const bool is_response = message.starts_with("Response:");
+        if (!is_request && !is_response)
+        {
+            return false;
+        }
+
+        const bool is_heartbeat = message.find("GET /api/logs") != std::string::npos ||
+                                  message.find("/api/logs?") != std::string::npos ||
+                                  message.find("GET /api/logs/test") != std::string::npos ||
+                                  message.find("/api/logs/test?") != std::string::npos ||
+                                  message.find("GET /api/mo2/status") != std::string::npos ||
+                                  message.find("/api/mo2/status ") != std::string::npos;
+        if (!is_heartbeat)
+        {
+            return false;
+        }
+
+        // Keep failed polling responses for debugging, but suppress the
+        // expected heartbeat traffic.
+        if (is_response)
+        {
+            return message.find(" 200 ") != std::string::npos;
+        }
+        return true;
+    }
+
+    void log(const std::string& message, crow::LogLevel level) override
+    {
+        if (should_suppress_noise(message))
+        {
+            return;
+        }
+
+        auto& logger = mo2core::Logger::instance();
+        switch (level)
+        {
+            case crow::LogLevel::Error:
+            case crow::LogLevel::Critical:
+                logger.log_error(std::format("[crow] {}", message));
+                break;
+            case crow::LogLevel::Warning:
+                logger.log_warning(std::format("[crow] {}", message));
+                break;
+            default:
+                logger.log(std::format("[crow] {}", message));
+                break;
+        }
+    }
+};
+
+int main()
+{
+    auto& logger = mo2core::Logger::instance();
+
+    static SalmaLogHandler crow_log_handler;
+    crow::logger::setHandler(&crow_log_handler);
+
+    logger.log("[server] Starting server...");
+
+    mo2server::ConfigService::instance().load();
+
+    crow::App<crow::CORSHandler> app;
+
+    // CORS: permissive policy for local development.
+    // The Vite dev proxy targets localhost:5000; without CORS the
+    // browser blocks cross-origin requests from localhost:5173.
+    // Note: origin("*") is incompatible with allow_credentials() per the CORS spec;
+    // browsers reject that combination. Credentials are not needed for this local tool.
+    auto& cors = app.get_middleware<crow::CORSHandler>();
+    cors.global()
+        .origin("*")
+        .methods("GET"_method, "POST"_method, "PUT"_method, "DELETE"_method, "OPTIONS"_method)
+        .headers("Content-Type", "Authorization");
+
+    mo2server::InstallationController controller;
+    mo2server::Mo2Controller mo2_controller;
+
+    // Static file directory: try cwd/web/dist, fall back to parent/web/dist
+    auto exe_dir = fs::current_path();
+    auto static_dir = (exe_dir / "web" / "dist").string();
+    if (!fs::exists(static_dir))
+    {
+        static_dir = (exe_dir.parent_path() / "web" / "dist").string();
+    }
+    logger.log(std::format("[server] Static files directory: {}", static_dir));
+    mo2server::StaticFileHandler static_handler(static_dir);
+
+    // POST /api/installation/upload    - multipart archive upload + install
+    // POST /api/installation/install   - install from existing archive path
+    // GET  /api/installation/status/id - check job status
+    CROW_ROUTE(app, "/api/installation/upload")
+        .methods(crow::HTTPMethod::POST)([&controller](const crow::request& req)
+                                         { return controller.handle_upload(req); });
+
+    CROW_ROUTE(app, "/api/installation/install")
+        .methods(crow::HTTPMethod::POST)([&controller](const crow::request& req)
+                                         { return controller.handle_install(req); });
+
+    CROW_ROUTE(app, "/api/installation/status/<string>")
+        .methods(crow::HTTPMethod::GET)([&controller](const std::string& job_id)
+                                        { return controller.handle_status(job_id); });
+
+    // MO2 integration routes
+    CROW_ROUTE(app, "/api/config")
+        .methods(crow::HTTPMethod::GET)([&mo2_controller]()
+                                        { return mo2_controller.get_config(); });
+
+    CROW_ROUTE(app, "/api/config")
+        .methods(crow::HTTPMethod::PUT)([&mo2_controller](const crow::request& req)
+                                        { return mo2_controller.put_config(req); });
+
+    CROW_ROUTE(app, "/api/mo2/status")
+        .methods(crow::HTTPMethod::GET)([&mo2_controller]()
+                                        { return mo2_controller.get_status(); });
+
+    CROW_ROUTE(app, "/api/mo2/fomods")
+        .methods(crow::HTTPMethod::GET)([&mo2_controller]()
+                                        { return mo2_controller.list_fomods(); });
+
+    CROW_ROUTE(app, "/api/mo2/fomods/scan")
+        .methods(crow::HTTPMethod::POST)([&mo2_controller]()
+                                         { return mo2_controller.scan_fomods(); });
+
+    CROW_ROUTE(app, "/api/mo2/fomods/scan/status")
+        .methods(crow::HTTPMethod::GET)([&mo2_controller]()
+                                        { return mo2_controller.get_scan_status(); });
+
+    CROW_ROUTE(app, "/api/mo2/fomods/<string>")
+        .methods(crow::HTTPMethod::GET)([&mo2_controller](const std::string& name)
+                                        { return mo2_controller.get_fomod(name); });
+
+    CROW_ROUTE(app, "/api/mo2/fomods/<string>")
+        .methods("DELETE"_method)([&mo2_controller](const std::string& name)
+                                  { return mo2_controller.delete_fomod(name); });
+
+    CROW_ROUTE(app, "/api/plugin/deploy")
+        .methods(crow::HTTPMethod::POST)([&mo2_controller]()
+                                         { return mo2_controller.deploy_plugin(); });
+
+    CROW_ROUTE(app, "/api/plugin/purge")
+        .methods(crow::HTTPMethod::POST)([&mo2_controller]()
+                                         { return mo2_controller.purge_plugin(); });
+
+    CROW_ROUTE(app, "/api/plugin/status")
+        .methods(crow::HTTPMethod::GET)([&mo2_controller]()
+                                        { return mo2_controller.get_plugin_action_status(); });
+
+    CROW_ROUTE(app, "/api/logs")
+        .methods(crow::HTTPMethod::GET)([&mo2_controller](const crow::request& req)
+                                        { return mo2_controller.get_logs(req); });
+
+    CROW_ROUTE(app, "/api/logs/test")
+        .methods(crow::HTTPMethod::GET)([&mo2_controller](const crow::request& req)
+                                        { return mo2_controller.get_test_logs(req); });
+
+    CROW_ROUTE(app, "/api/logs/clear")
+        .methods(crow::HTTPMethod::POST)([&mo2_controller]()
+                                         { return mo2_controller.clear_logs(); });
+
+    CROW_ROUTE(app, "/api/logs/clear/test")
+        .methods(crow::HTTPMethod::POST)([&mo2_controller]()
+                                         { return mo2_controller.clear_test_logs(); });
+
+    CROW_ROUTE(app, "/api/test/run")
+        .methods(crow::HTTPMethod::POST)([&mo2_controller](const crow::request& req)
+                                         { return mo2_controller.run_tests(req); });
+
+    CROW_ROUTE(app, "/api/test/status")
+        .methods(crow::HTTPMethod::GET)([&mo2_controller]()
+                                        { return mo2_controller.get_test_status(); });
+
+    // Non-API paths are served from the static directory.
+    // Unknown paths fall through to index.html for client-side routing.
+    CROW_ROUTE(app, "/")
+    ([&static_handler]() { return static_handler.serve(""); });
+
+    CROW_ROUTE(app, "/<path>")
+    (
+        [&static_handler](const std::string& path)
+        {
+            if (path.substr(0, 4) == "api/")
+            {
+                return crow::response(404);
+            }
+            return static_handler.serve(path);
+        });
+
+    logger.log("[server] Server starting on port 5000");
+    app.port(5000).multithreaded().run();
+
+    return 0;
+}
