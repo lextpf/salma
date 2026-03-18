@@ -130,6 +130,23 @@ public:
      */
     void log_warning(const std::string& message);
 
+    /**
+     * @brief Truncate the log file safely.
+     *
+     * Acquires the file-write mutex, closes the persistent file handle,
+     * truncates the file, and reopens it in append mode. This avoids the
+     * corruption that would occur if an external caller truncated the file
+     * while the Logger still held an open handle.
+     *
+     * @return `true` if the file was successfully truncated and reopened.
+     */
+    bool clear_log();
+
+    /**
+     * @brief Return the path to the active log file.
+     */
+    std::string log_path() const;
+
 private:
     Logger();
     ~Logger();

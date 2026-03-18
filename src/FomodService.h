@@ -211,12 +211,7 @@ private:
                              const std::string& dst_base,
                              const FomodDependencyContext* context);
     int get_priority(const pugi::xml_node& node);
-    std::string escape_xpath_string(const std::string& value);
     std::string normalize_string(const std::string& value);
-    std::vector<pugi::xml_node> find_plugin_nodes_by_value(const pugi::xml_document& doc,
-                                                           const std::string& step_name,
-                                                           const std::string& group_name,
-                                                           const std::string& plugin_name);
     bool validate_group_selection(const pugi::xml_node& group_node,
                                   const std::unordered_set<std::string>& selected_plugins);
     PluginType evaluate_plugin_type(const pugi::xml_node& plugin_node,

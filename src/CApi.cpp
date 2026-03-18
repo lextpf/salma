@@ -43,6 +43,12 @@ extern "C"
             g_result = e.what();
             return g_result.c_str();
         }
+        catch (...)
+        {
+            mo2core::Logger::instance().log_error("[install] Fatal error: unknown exception");
+            g_result = "Unknown fatal error during installation";
+            return g_result.c_str();
+        }
     }
 
     MO2_API const char* installWithConfig(const char* archivePath,
@@ -68,6 +74,12 @@ extern "C"
             g_result = e.what();
             return g_result.c_str();
         }
+        catch (...)
+        {
+            mo2core::Logger::instance().log_error("[install] Fatal error: unknown exception");
+            g_result = "Unknown fatal error during installation";
+            return g_result.c_str();
+        }
     }
 
     MO2_API const char* inferFomodSelections(const char* archivePath, const char* modPath)
@@ -85,6 +97,12 @@ extern "C"
         catch (const std::exception& e)
         {
             mo2core::Logger::instance().log_error(std::string("[infer] Fatal error: ") + e.what());
+            g_infer_result = "";
+            return g_infer_result.c_str();
+        }
+        catch (...)
+        {
+            mo2core::Logger::instance().log_error("[infer] Fatal error: unknown exception");
             g_infer_result = "";
             return g_infer_result.c_str();
         }

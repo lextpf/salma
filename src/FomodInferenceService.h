@@ -2,8 +2,11 @@
 
 #include "Export.h"
 
+#include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include <nlohmann/json.hpp>
@@ -46,11 +49,26 @@ public:
      */
     std::string infer_selections(const std::string& archive_path, const std::string& mod_path);
 
+    /// Cached content hash for an archive entry.
+    struct CachedHash
+    {
+        uint64_t hash = 0;
+        uint64_t size = 0;
+    };
+
+    /// Maximum cache entries before clearing.
+    static constexpr size_t kMaxCacheEntries = 100000;
+
 private:
     nlohmann::json try_fomod_plus_json(const std::filesystem::path& mod_path);
 
     static std::unordered_set<std::string> scan_installed_files(
         const std::filesystem::path& mod_path);
+
+    /// Instance-scoped hash cache for contested archive entries.
+    /// Bounded to kMaxCacheEntries; cleared when exceeded.
+    std::mutex cache_mutex_;
+    std::unordered_map<std::string, CachedHash> archive_entry_hash_cache_;
 };
 
 }  // namespace mo2core

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <random>
+#include <ranges>
 
 namespace mo2core
 {
@@ -62,26 +63,13 @@ std::vector<pugi::xml_node> get_ordered_nodes(const pugi::xml_node& parent, cons
         nodes.push_back(child);
     }
 
+    auto name_projection = [](const pugi::xml_node& n)
+    { return std::string(n.attribute("name").as_string()); };
+
     if (order == "Descending")
-    {
-        std::sort(nodes.begin(),
-                  nodes.end(),
-                  [](const pugi::xml_node& a, const pugi::xml_node& b)
-                  {
-                      return std::string(a.attribute("name").as_string()) >
-                             std::string(b.attribute("name").as_string());
-                  });
-    }
+        std::ranges::sort(nodes, std::ranges::greater{}, name_projection);
     else if (order == "Ascending")
-    {
-        std::sort(nodes.begin(),
-                  nodes.end(),
-                  [](const pugi::xml_node& a, const pugi::xml_node& b)
-                  {
-                      return std::string(a.attribute("name").as_string()) <
-                             std::string(b.attribute("name").as_string());
-                  });
-    }
+        std::ranges::sort(nodes, std::ranges::less{}, name_projection);
     // "Explicit" = document order (already correct from iteration)
     return nodes;
 }
@@ -95,30 +83,25 @@ bool xml_bool_attribute_true(const pugi::xml_attribute& attr)
     return value == "true" || value == "1";
 }
 
+static constexpr EnumStringMap<PluginType, 5> plugin_type_map = {
+    std::array<std::pair<PluginType, std::string_view>, 5>{{
+        {PluginType::Required, "Required"},
+        {PluginType::Recommended, "Recommended"},
+        {PluginType::Optional, "Optional"},
+        {PluginType::NotUsable, "NotUsable"},
+        {PluginType::CouldBeUsable, "CouldBeUsable"},
+    }},
+    PluginType::Optional,
+};
+
 PluginType parse_plugin_type_string(const std::string& type_name)
 {
-    if (type_name == "Required")
-        return PluginType::Required;
-    if (type_name == "Recommended")
-        return PluginType::Recommended;
-    if (type_name == "Optional")
-        return PluginType::Optional;
-    if (type_name == "NotUsable")
-        return PluginType::NotUsable;
-    if (type_name == "CouldBeUsable")
-        return PluginType::CouldBeUsable;
-    return PluginType::Optional;
+    return plugin_type_map.from_string(type_name);
 }
 
-uint64_t fnv1a_hash(const char* data, size_t size)
+std::string_view plugin_type_to_string(PluginType type)
 {
-    uint64_t hash = 14695981039346656037ULL;
-    for (size_t i = 0; i < size; ++i)
-    {
-        hash ^= static_cast<uint64_t>(static_cast<unsigned char>(data[i]));
-        hash *= 1099511628211ULL;
-    }
-    return hash;
+    return plugin_type_map.to_string(type);
 }
 
 }  // namespace mo2core

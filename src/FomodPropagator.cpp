@@ -37,19 +37,7 @@ PropagationResult propagate(const FomodInstaller& installer,
         resolved[si].assign(installer.steps[si].groups.size(), false);
 
     // Build flat_start index: maps (step_idx, group_idx) -> flat plugin start index.
-    std::vector<std::vector<int>> flat_starts(installer.steps.size());
-    {
-        int flat = 0;
-        for (size_t si = 0; si < installer.steps.size(); ++si)
-        {
-            flat_starts[si].resize(installer.steps[si].groups.size());
-            for (size_t gi = 0; gi < installer.steps[si].groups.size(); ++gi)
-            {
-                flat_starts[si][gi] = flat;
-                flat += static_cast<int>(installer.steps[si].groups[gi].plugins.size());
-            }
-        }
-    }
+    auto flat_starts = compute_flat_starts(installer);
 
     std::unordered_map<std::string, std::string> flags;
 
@@ -175,7 +163,9 @@ PropagationResult propagate(const FomodInstaller& installer,
                             group_resolved = true;
                         break;
                     case FomodGroupType::SelectAtMostOne:
-                        if (usable_count <= 1)
+                        // Only resolve when forced to zero. When usable_count == 1,
+                        // "select zero" is still valid, so leave it for the CSP solver.
+                        if (usable_count == 0)
                             group_resolved = true;
                         break;
                     case FomodGroupType::SelectAtLeastOne:

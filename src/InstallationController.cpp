@@ -183,7 +183,12 @@ crow::response InstallationController::handle_upload(const crow::request& req)
 
         // Capture all values by copy - request object is invalid after return
         std::string temp_path = uploaded.temp_path;
-        std::thread(
+        // Join any previous thread before launching a new one
+        if (install_thread_.joinable())
+        {
+            install_thread_.join();
+        }
+        install_thread_ = std::thread(
             [this, temp_path, mod_path, json_path, mod_name, json_is_temp]()
             {
 #ifdef _WIN32
@@ -206,6 +211,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
                     install_result_mod_path_ = result;
                     install_result_mod_name_ = mod_name;
                     install_last_error_.clear();
+                    install_running_.store(false);
                 }
                 catch (const std::exception& ex)
                 {
@@ -214,6 +220,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
                     install_has_result_ = true;
                     install_last_success_ = false;
                     install_last_error_ = ex.what();
+                    install_running_.store(false);
                 }
 
                 // Cleanup temp files
@@ -221,17 +228,16 @@ crow::response InstallationController::handle_upload(const crow::request& req)
                 {
                     fs::remove(temp_path);
                     if (json_is_temp && !json_path.empty() && fs::exists(json_path))
+                    {
                         fs::remove(json_path);
+                    }
                 }
                 catch (const std::exception& ex)
                 {
                     mo2core::Logger::instance().log_warning(
                         std::format("[install] Temp file cleanup failed: {}", ex.what()));
                 }
-
-                install_running_.store(false);
-            })
-            .detach();
+            });
 
         return json_response(200, {{"started", true}, {"modName", mod_name}});
     }
@@ -269,7 +275,11 @@ crow::response InstallationController::handle_install(const crow::request& req)
             install_last_error_.clear();
         }
 
-        std::thread(
+        if (install_thread_.joinable())
+        {
+            install_thread_.join();
+        }
+        install_thread_ = std::thread(
             [this, archive_path, mod_path_val, json_path]()
             {
 #ifdef _WIN32
@@ -291,6 +301,7 @@ crow::response InstallationController::handle_install(const crow::request& req)
                     install_last_success_ = true;
                     install_result_mod_path_ = result;
                     install_last_error_.clear();
+                    install_running_.store(false);
                 }
                 catch (const std::exception& ex)
                 {
@@ -299,11 +310,9 @@ crow::response InstallationController::handle_install(const crow::request& req)
                     install_has_result_ = true;
                     install_last_success_ = false;
                     install_last_error_ = ex.what();
+                    install_running_.store(false);
                 }
-
-                install_running_.store(false);
-            })
-            .detach();
+            });
 
         return json_response(200, {{"started", true}});
     }
@@ -316,8 +325,10 @@ crow::response InstallationController::handle_install(const crow::request& req)
 
 crow::response InstallationController::handle_status(const std::string& /*job_id*/)
 {
-    json result = {{"running", install_running_.load()}};
+    // Read running state under the same lock as result fields to avoid
+    // observing stale results from a previous run during reset.
     std::lock_guard<std::mutex> lock(install_mutex_);
+    json result = {{"running", install_running_.load()}};
     if (install_has_result_)
     {
         result["success"] = install_last_success_;

@@ -17,10 +17,17 @@ namespace mo2server
 
 ConfigService::ConfigService()
 {
-    // salma.json lives next to the executable
-    wchar_t exe_path[MAX_PATH];
-    GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
-    config_path_ = fs::path(exe_path).parent_path() / "salma.json";
+    // salma.json lives next to the executable.
+    // Retry with larger buffer if MAX_PATH is insufficient (long path support).
+    std::wstring exe_buf(MAX_PATH, L'\0');
+    DWORD len = GetModuleFileNameW(nullptr, exe_buf.data(), static_cast<DWORD>(exe_buf.size()));
+    while (len >= exe_buf.size())
+    {
+        exe_buf.resize(exe_buf.size() * 2);
+        len = GetModuleFileNameW(nullptr, exe_buf.data(), static_cast<DWORD>(exe_buf.size()));
+    }
+    exe_buf.resize(len);
+    config_path_ = fs::path(exe_buf).parent_path() / "salma.json";
 }
 
 ConfigService& ConfigService::instance()

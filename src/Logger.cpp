@@ -85,6 +85,38 @@ void Logger::log_warning(const std::string& message)
     }
 }
 
+bool Logger::clear_log()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto path = fs::path(log_directory_) / "salma.log";
+
+    if (log_file_.is_open())
+    {
+        log_file_.flush();
+        log_file_.close();
+    }
+
+    // Truncate the file
+    {
+        std::ofstream ofs(path, std::ios::trunc);
+        if (!ofs)
+        {
+            // Reopen in append mode even on failure
+            log_file_.open(path, std::ios::app);
+            return false;
+        }
+    }
+
+    // Reopen in append mode
+    log_file_.open(path, std::ios::app);
+    return log_file_.is_open();
+}
+
+std::string Logger::log_path() const
+{
+    return (fs::path(log_directory_) / "salma.log").string();
+}
+
 void Logger::write_log(const std::string& level, const std::string& message)
 {
     // Mutex-guarded: serializes concurrent file writes.

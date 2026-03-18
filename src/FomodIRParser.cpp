@@ -1,16 +1,63 @@
 #include "FomodIRParser.h"
+#include "Logger.h"
 #include "Utils.h"
+
+#include <concepts>
+#include <string_view>
+
+using namespace std::string_view_literals;
+
+static_assert(mo2core::no_hash_collisions(std::array{
+    "flagDependency"sv,
+    "fileDependency"sv,
+    "gameDependency"sv,
+    "pluginDependency"sv,
+    "fomodDependency"sv,
+    "fommDependency"sv,
+    "foseDependency"sv,
+    "dependencies"sv,
+}));
 
 namespace mo2core
 {
 
+// Iterate <file>/<folder> child elements with non-empty source attributes.
+template <std::invocable<const pugi::xml_node&> Func>
+static void for_each_file_node(const pugi::xml_node& parent, Func&& fn)
+{
+    for (auto node : parent.children())
+    {
+        if (node.type() != pugi::node_element)
+            continue;
+        std::string_view name = node.name();
+        if (name != "file" && name != "folder")
+            continue;
+        if (std::string_view(node.attribute("source").as_string()).empty())
+            continue;
+        fn(node);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // compile_condition: recursively convert a <dependencies> XML node into IR
 // ---------------------------------------------------------------------------
-FomodCondition FomodIRParser::compile_condition(const pugi::xml_node& deps_node)
+
+// Guard against malicious/malformed deeply-nested XML that would blow the stack
+static constexpr int MAX_CONDITION_DEPTH = 32;
+
+static FomodCondition compile_condition_impl(const pugi::xml_node& deps_node, int depth)
 {
     FomodCondition cond;
     cond.type = FomodConditionType::Composite;
+
+    if (depth > MAX_CONDITION_DEPTH)
+    {
+        // Bail out with an always-true empty And to avoid stack overflow
+        mo2core::Logger::instance().log_warning(
+            "[fomod] Condition nesting exceeds maximum depth, treating as always-true");
+        cond.op = FomodConditionOp::And;
+        return cond;
+    }
 
     std::string op = deps_node.attribute("operator").as_string("And");
     cond.op = (op == "Or") ? FomodConditionOp::Or : FomodConditionOp::And;
@@ -20,68 +67,63 @@ FomodCondition FomodIRParser::compile_condition(const pugi::xml_node& deps_node)
         if (child.type() != pugi::node_element)
             continue;
 
-        std::string name = child.name();
+        std::string_view name = child.name();
+        FomodCondition leaf;
 
-        if (name == "flagDependency")
+        switch (fnv1a_hash(name.data(), name.size()))
         {
-            FomodCondition leaf;
-            leaf.type = FomodConditionType::Flag;
-            leaf.flag_name = child.attribute("flag").as_string();
-            leaf.flag_value = child.attribute("value").as_string();
-            cond.children.push_back(std::move(leaf));
+            case "flagDependency"_h:
+                leaf.type = FomodConditionType::Flag;
+                leaf.flag_name = child.attribute("flag").as_string();
+                leaf.flag_value = child.attribute("value").as_string();
+                cond.children.push_back(std::move(leaf));
+                break;
+            case "fileDependency"_h:
+                leaf.type = FomodConditionType::File;
+                leaf.file_path = child.attribute("file").as_string();
+                leaf.file_state = child.attribute("state").as_string("Active");
+                cond.children.push_back(std::move(leaf));
+                break;
+            case "gameDependency"_h:
+                leaf.type = FomodConditionType::Game;
+                leaf.version = child.attribute("version").as_string();
+                cond.children.push_back(std::move(leaf));
+                break;
+            case "pluginDependency"_h:
+                leaf.type = FomodConditionType::Plugin;
+                leaf.plugin_name = child.attribute("name").as_string();
+                leaf.plugin_type = child.attribute("type").as_string("Active");
+                cond.children.push_back(std::move(leaf));
+                break;
+            case "fomodDependency"_h:
+                leaf.type = FomodConditionType::Fomod;
+                leaf.fomod_name = child.attribute("name").as_string();
+                cond.children.push_back(std::move(leaf));
+                break;
+            case "fommDependency"_h:
+                leaf.type = FomodConditionType::Fomm;
+                leaf.version = child.attribute("version").as_string();
+                cond.children.push_back(std::move(leaf));
+                break;
+            case "foseDependency"_h:
+                leaf.type = FomodConditionType::Fose;
+                leaf.version = child.attribute("version").as_string();
+                cond.children.push_back(std::move(leaf));
+                break;
+            case "dependencies"_h:
+                cond.children.push_back(compile_condition_impl(child, depth + 1));
+                break;
+            default:
+                break;  // Unknown elements silently skipped
         }
-        else if (name == "fileDependency")
-        {
-            FomodCondition leaf;
-            leaf.type = FomodConditionType::File;
-            leaf.file_path = child.attribute("file").as_string();
-            leaf.file_state = child.attribute("state").as_string("Active");
-            cond.children.push_back(std::move(leaf));
-        }
-        else if (name == "gameDependency")
-        {
-            FomodCondition leaf;
-            leaf.type = FomodConditionType::Game;
-            leaf.version = child.attribute("version").as_string();
-            cond.children.push_back(std::move(leaf));
-        }
-        else if (name == "pluginDependency")
-        {
-            FomodCondition leaf;
-            leaf.type = FomodConditionType::Plugin;
-            leaf.plugin_name = child.attribute("name").as_string();
-            leaf.plugin_type = child.attribute("type").as_string("Active");
-            cond.children.push_back(std::move(leaf));
-        }
-        else if (name == "fomodDependency")
-        {
-            FomodCondition leaf;
-            leaf.type = FomodConditionType::Fomod;
-            leaf.fomod_name = child.attribute("name").as_string();
-            cond.children.push_back(std::move(leaf));
-        }
-        else if (name == "fommDependency")
-        {
-            FomodCondition leaf;
-            leaf.type = FomodConditionType::Fomm;
-            leaf.version = child.attribute("version").as_string();
-            cond.children.push_back(std::move(leaf));
-        }
-        else if (name == "foseDependency")
-        {
-            FomodCondition leaf;
-            leaf.type = FomodConditionType::Fose;
-            leaf.version = child.attribute("version").as_string();
-            cond.children.push_back(std::move(leaf));
-        }
-        else if (name == "dependencies")
-        {
-            cond.children.push_back(compile_condition(child));
-        }
-        // Unknown elements are silently skipped (matches existing behavior)
     }
 
     return cond;
+}
+
+FomodCondition FomodIRParser::compile_condition(const pugi::xml_node& deps_node)
+{
+    return compile_condition_impl(deps_node, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -143,17 +185,20 @@ FomodFileEntry FomodIRParser::parse_file_entry(const pugi::xml_node& node,
 // ---------------------------------------------------------------------------
 // parse_group_type
 // ---------------------------------------------------------------------------
+static constexpr EnumStringMap<FomodGroupType, 5> group_type_map = {
+    std::array<std::pair<FomodGroupType, std::string_view>, 5>{{
+        {FomodGroupType::SelectExactlyOne, "SelectExactlyOne"},
+        {FomodGroupType::SelectAtMostOne, "SelectAtMostOne"},
+        {FomodGroupType::SelectAtLeastOne, "SelectAtLeastOne"},
+        {FomodGroupType::SelectAll, "SelectAll"},
+        {FomodGroupType::SelectAny, "SelectAny"},
+    }},
+    FomodGroupType::SelectAny,
+};
+
 FomodGroupType FomodIRParser::parse_group_type(const std::string& type_str)
 {
-    if (type_str == "SelectExactlyOne")
-        return FomodGroupType::SelectExactlyOne;
-    if (type_str == "SelectAtMostOne")
-        return FomodGroupType::SelectAtMostOne;
-    if (type_str == "SelectAtLeastOne")
-        return FomodGroupType::SelectAtLeastOne;
-    if (type_str == "SelectAll")
-        return FomodGroupType::SelectAll;
-    return FomodGroupType::SelectAny;
+    return group_type_map.from_string(type_str);
 }
 
 // ---------------------------------------------------------------------------
@@ -180,18 +225,10 @@ FomodInstaller FomodIRParser::parse(const pugi::xml_document& doc,
 
     // Required install files
     auto req_parent = config.child("requiredInstallFiles");
-    for (auto node : req_parent.children())
-    {
-        if (node.type() != pugi::node_element)
-            continue;
-        std::string name = node.name();
-        if (name != "file" && name != "folder")
-            continue;
-        std::string source = node.attribute("source").as_string();
-        if (source.empty())
-            continue;
-        installer.required_files.push_back(parse_file_entry(node, archive_prefix));
-    }
+    for_each_file_node(
+        req_parent,
+        [&](const pugi::xml_node& node)
+        { installer.required_files.push_back(parse_file_entry(node, archive_prefix)); });
 
     // Install steps (ordered)
     auto steps_parent = config.child("installSteps");
@@ -281,18 +318,10 @@ FomodInstaller FomodIRParser::parse(const pugi::xml_document& doc,
                 auto files_node = pnode.child("files");
                 if (files_node)
                 {
-                    for (auto fnode : files_node.children())
-                    {
-                        if (fnode.type() != pugi::node_element)
-                            continue;
-                        std::string fname = fnode.name();
-                        if (fname != "file" && fname != "folder")
-                            continue;
-                        std::string source = fnode.attribute("source").as_string();
-                        if (source.empty())
-                            continue;
-                        plugin.files.push_back(parse_file_entry(fnode, archive_prefix));
-                    }
+                    for_each_file_node(
+                        files_node,
+                        [&](const pugi::xml_node& fnode)
+                        { plugin.files.push_back(parse_file_entry(fnode, archive_prefix)); });
                 }
 
                 // Condition flags
@@ -338,18 +367,10 @@ FomodInstaller FomodIRParser::parse(const pugi::xml_document& doc,
                 auto files = pat.child("files");
                 if (files)
                 {
-                    for (auto fnode : files.children())
-                    {
-                        if (fnode.type() != pugi::node_element)
-                            continue;
-                        std::string fname = fnode.name();
-                        if (fname != "file" && fname != "folder")
-                            continue;
-                        std::string source = fnode.attribute("source").as_string();
-                        if (source.empty())
-                            continue;
-                        cp.files.push_back(parse_file_entry(fnode, archive_prefix));
-                    }
+                    for_each_file_node(
+                        files,
+                        [&](const pugi::xml_node& fnode)
+                        { cp.files.push_back(parse_file_entry(fnode, archive_prefix)); });
                 }
                 installer.conditional_patterns.push_back(std::move(cp));
             }

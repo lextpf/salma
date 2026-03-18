@@ -31,6 +31,15 @@ Mo2Controller::Mo2Controller() = default;
 
 Mo2Controller::~Mo2Controller()
 {
+    // Join background threads to avoid use-after-free on shutdown
+    if (scan_thread_.joinable())
+    {
+        scan_thread_.join();
+    }
+    if (plugin_action_thread_.joinable())
+    {
+        plugin_action_thread_.join();
+    }
 #ifdef _WIN32
     if (test_process_)
     {
@@ -236,9 +245,10 @@ static fs::path resolve_deploy_path(const std::string& mo2_mods_path)
         }
     }
 
-    mo2core::Logger::instance().log_warning(
-        "[server] Using hardcoded fallback deploy path: D:\\Nolvus\\Instance\\MO2\\plugins");
-    return fs::path(R"(D:\Nolvus\Instance\MO2\plugins)");
+    mo2core::Logger::instance().log_error(
+        "[server] Cannot determine plugin deploy path: "
+        "set SALMA_DEPLOY_PATH or configure MO2 mods path");
+    return {};
 }
 
 static bool plugin_installed_at(const fs::path& deploy_path)
@@ -275,8 +285,34 @@ static int run_batch_script(const fs::path& script_path,
     set_env("SALMA_DEPLOY_PATH", deploy_path.string());
     set_env("SALMA_MODS_PATH", mods_path.string());
 
+    // Use CreateProcessA instead of std::system to avoid shell injection.
+    // The batch script path is from a known location (cwd), but deploy_path
+    // and mods_path come from config/env and must not be passed through a shell.
     std::string cmd = std::format(R"(cmd.exe /c "call "{}"")", script_path.string());
-    int exit_code = std::system(cmd.c_str());
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    int exit_code = -1;
+
+    if (CreateProcessA(nullptr,
+                       cmd.data(),
+                       nullptr,
+                       nullptr,
+                       FALSE,
+                       CREATE_NO_WINDOW,
+                       nullptr,
+                       nullptr,
+                       &si,
+                       &pi))
+    {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD code = 0;
+        GetExitCodeProcess(pi.hProcess, &code);
+        exit_code = static_cast<int>(code);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
 
     for (const auto& backup : backups)
     {
@@ -655,7 +691,11 @@ crow::response Mo2Controller::scan_fomods()
         scan_output_dir_ = output_dir.string();
     }
 
-    std::thread(
+    if (scan_thread_.joinable())
+    {
+        scan_thread_.join();
+    }
+    scan_thread_ = std::thread(
         [this, mods_dir, output_dir]()
         {
 #ifdef _WIN32
@@ -697,8 +737,7 @@ crow::response Mo2Controller::scan_fomods()
                 scan_last_error_ = "Unknown scan error";
             }
             scan_running_.store(false);
-        })
-        .detach();
+        });
 
     return json_response(200, {{"success", true}, {"running", true}, {"started", true}});
 }
@@ -832,9 +871,10 @@ crow::response Mo2Controller::deploy_plugin()
     }
     if (mods_path.empty())
     {
-        mo2core::Logger::instance().log_warning(
-            "[server] Using hardcoded fallback mods path for deploy");
-        mods_path = fs::path(R"(D:\Nolvus\Instance\MODS\mods)");
+        plugin_action_running_.store(false);
+        return json_response(
+            400,
+            {{"error", "MO2 mods path not configured. Set SALMA_MODS_PATH or configure via API"}});
     }
     fs::path deploy_path = resolve_deploy_path(mods_path.string());
 
@@ -845,7 +885,11 @@ crow::response Mo2Controller::deploy_plugin()
         plugin_action_last_error_.clear();
     }
 
-    std::thread(
+    if (plugin_action_thread_.joinable())
+    {
+        plugin_action_thread_.join();
+    }
+    plugin_action_thread_ = std::thread(
         [this, script_path, deploy_path, mods_path]()
         {
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
@@ -863,8 +907,10 @@ crow::response Mo2Controller::deploy_plugin()
                 plugin_action_plugin_installed_ = plugin_installed_at(deploy_path);
                 plugin_action_deploy_path_ = deploy_path.string();
                 if (exit_code != 0)
+                {
                     plugin_action_last_error_ =
                         std::format("deploy.bat failed with exit code {}", exit_code);
+                }
             }
             catch (const std::exception& ex)
             {
@@ -875,8 +921,7 @@ crow::response Mo2Controller::deploy_plugin()
                 plugin_action_last_error_ = ex.what();
             }
             plugin_action_running_.store(false);
-        })
-        .detach();
+        });
 
     return json_response(200, {{"started", true}, {"action", "deploy"}});
 #else
@@ -916,9 +961,10 @@ crow::response Mo2Controller::purge_plugin()
     }
     if (mods_path.empty())
     {
-        mo2core::Logger::instance().log_warning(
-            "[server] Using hardcoded fallback mods path for purge");
-        mods_path = fs::path(R"(D:\Nolvus\Instance\MODS\mods)");
+        plugin_action_running_.store(false);
+        return json_response(
+            400,
+            {{"error", "MO2 mods path not configured. Set SALMA_MODS_PATH or configure via API"}});
     }
     fs::path deploy_path = resolve_deploy_path(mods_path.string());
 
@@ -929,7 +975,11 @@ crow::response Mo2Controller::purge_plugin()
         plugin_action_last_error_.clear();
     }
 
-    std::thread(
+    if (plugin_action_thread_.joinable())
+    {
+        plugin_action_thread_.join();
+    }
+    plugin_action_thread_ = std::thread(
         [this, script_path, deploy_path, mods_path]()
         {
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
@@ -947,8 +997,10 @@ crow::response Mo2Controller::purge_plugin()
                 plugin_action_plugin_installed_ = plugin_installed_at(deploy_path);
                 plugin_action_deploy_path_ = deploy_path.string();
                 if (exit_code != 0)
+                {
                     plugin_action_last_error_ =
                         std::format("purge.bat failed with exit code {}", exit_code);
+                }
             }
             catch (const std::exception& ex)
             {
@@ -959,8 +1011,7 @@ crow::response Mo2Controller::purge_plugin()
                 plugin_action_last_error_ = ex.what();
             }
             plugin_action_running_.store(false);
-        })
-        .detach();
+        });
 
     return json_response(200, {{"started", true}, {"action", "purge"}});
 #else
@@ -995,6 +1046,7 @@ crow::response Mo2Controller::get_plugin_action_status()
 
 static crow::response read_log_file(const fs::path& log_path, const crow::request& req)
 {
+    static constexpr int kMaxLinesLimit = 5000;
     int max_lines = 100;
     auto lines_param = req.url_params.get("lines");
     if (lines_param)
@@ -1007,7 +1059,13 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
         {
         }
         if (max_lines < 0)
+        {
             max_lines = 0;
+        }
+        if (max_lines > kMaxLinesLimit)
+        {
+            max_lines = kMaxLinesLimit;
+        }
     }
 
     int64_t offset = -1;
@@ -1149,24 +1207,15 @@ crow::response Mo2Controller::get_test_logs(const crow::request& req)
 
 crow::response Mo2Controller::clear_logs()
 {
-    auto log_path = fs::current_path() / "logs" / "salma.log";
-
-    try
+    // Use Logger::clear_log() to coordinate truncation with the persistent
+    // file handle, avoiding corrupted writes from concurrent log calls.
+    auto& logger = mo2core::Logger::instance();
+    if (logger.clear_log())
     {
-        fs::create_directories(log_path.parent_path());
-        std::ofstream ofs(log_path, std::ios::trunc);
-        if (!ofs)
-        {
-            return json_response(500, {{"error", "Failed to clear salma.log"}});
-        }
-        mo2core::Logger::instance().log("[server] Cleared logs/salma.log");
+        logger.log("[server] Cleared logs/salma.log");
         return json_response(200, {{"success", true}});
     }
-    catch (const std::exception& ex)
-    {
-        return json_response(500,
-                             {{"error", std::format("Failed to clear salma.log: {}", ex.what())}});
-    }
+    return json_response(500, {{"error", "Failed to clear salma.log"}});
 }
 
 // ---------------------------------------------------------------------------
@@ -1235,11 +1284,12 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
         }
     }
 
-    // Sanitize args: reject shell metacharacters to prevent command injection
+    // Sanitize args: reject shell metacharacters to prevent command injection.
+    // Double-quotes and semicolons are also blocked to prevent cmd.exe string breakout.
     for (char c : args)
     {
         if (c == '&' || c == '|' || c == '>' || c == '<' || c == '^' || c == '%' || c == '!' ||
-            c == '`' || c == '\n' || c == '\r')
+            c == '`' || c == '"' || c == ';' || c == '(' || c == ')' || c == '\n' || c == '\r')
         {
             return json_response(400, {{"error", "Invalid characters in test arguments"}});
         }

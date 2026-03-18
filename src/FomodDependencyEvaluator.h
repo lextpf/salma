@@ -3,6 +3,7 @@
 #include "Export.h"
 #include "FomodIR.h"
 #include "Types.h"
+#include "Utils.h"
 
 #include <cstdint>
 #include <pugixml.hpp>
@@ -137,9 +138,9 @@ private:
     bool evaluate_fomod_dependency(const pugi::xml_node& dep_node);
     bool evaluate_fomm_dependency(const pugi::xml_node& dep_node);
     bool evaluate_fose_dependency(const pugi::xml_node& dep_node);
-    bool compare_versions(const std::string& actual,
-                          const std::string& required,
-                          const std::string& op);
+    Result<bool> compare_versions(const std::string& actual,
+                                  const std::string& required,
+                                  const std::string& op);
 
     std::unordered_map<std::string, std::string>&
         plugin_flags_;                       ///< Reference to FomodService's flag map
