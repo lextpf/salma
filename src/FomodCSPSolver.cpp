@@ -110,6 +110,10 @@ struct OptionProfile
     std::unordered_set<std::string> produced;
     std::unordered_set<std::string> produced_atoms;
     std::unordered_map<std::string, std::string> flags_written;
+
+    OptionProfile() = default;
+    OptionProfile(OptionProfile&&) noexcept = default;
+    OptionProfile& operator=(OptionProfile&&) noexcept = default;
 };
 
 struct CachedOptions
@@ -151,6 +155,10 @@ struct Precompute
     std::vector<int> contested_plugins;
 
     std::vector<std::vector<int>> components;
+
+    Precompute() = default;
+    Precompute(Precompute&&) noexcept = default;
+    Precompute& operator=(Precompute&&) noexcept = default;
 };
 
 struct OptionCacheKey
