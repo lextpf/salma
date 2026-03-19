@@ -160,6 +160,8 @@ public:
     crow::response deploy_plugin();
     crow::response purge_plugin();
     crow::response get_plugin_action_status();
+
+    crow::response run_plugin_action(const std::string& action);
     crow::response get_logs(const crow::request& req);
     crow::response get_test_logs(const crow::request& req);
     crow::response clear_logs();
