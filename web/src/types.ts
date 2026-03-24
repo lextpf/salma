@@ -6,6 +6,11 @@ export interface InstallationJob {
   error?: string
   uploadProgress?: number
   processingStatus?: string
+  // Locally-stamped session metadata (the backend does not return these). Used
+  // by the Install feed for real timestamps, duration, and size.
+  createdAt: number
+  completedAt?: number
+  sizeBytes?: number
 }
 
 export interface AppConfig {
@@ -29,6 +34,11 @@ export interface FomodEntry {
   size: number
   modified: number
   stepCount: number
+  // Per-entry inference confidence, populated from the cached FOMOD JSON's
+  // diagnostics. Absent for entries written before the diagnostics schema.
+  confidence?: number
+  confidenceBand?: ConfidenceBand
+  exactMatch?: boolean
 }
 
 export interface LogsResponse {
@@ -161,6 +171,14 @@ export interface RunDiagnostics {
   cache: { hit: boolean; source: string }
 }
 
+// One entry in a FOMOD's inferred virtual output tree (the Files tab). Paths
+// are lowercased by the inference pipeline's normalization.
+export interface FomodFileEntry {
+  path: string
+  size: number
+  source?: string
+}
+
 export interface FomodDetail {
   moduleName?: string
   steps?: FomodStep[]
@@ -168,4 +186,9 @@ export interface FomodDetail {
   schema_version?: number
   updated?: number
   modified?: number
+  // Inferred install output tree, embedded by the backend during scan. Absent
+  // for entries written before this field existed (Files tab degrades to empty).
+  outputTree?: FomodFileEntry[]
+  outputTreeTruncated?: boolean
+  outputTreeTotal?: number
 }
