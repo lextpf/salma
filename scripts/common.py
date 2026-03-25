@@ -153,25 +153,25 @@ def parse_separator_mods(separator: str) -> set[str]:
     lines = modlist.read_text(encoding="utf-8").splitlines()
 
     target = f"{separator}_separator"
-    in_section = False
-    mods = set()
+    current_section: set[str] = set()
+    found = False
     for line in lines:
         stripped = line.strip()
         if not stripped:
             continue
         # Strip +/- prefix to get the entry name
         name = stripped[1:] if stripped[0] in "+-" else stripped
-        if name == target:
-            in_section = True
-            continue
-        if in_section:
-            if name.endswith("_separator"):
+        if name.endswith("_separator"):
+            if name == target:
+                found = True
                 break
-            mods.add(name)
+            current_section = set()
+            continue
+        current_section.add(name)
 
-    if not in_section:
+    if not found:
         raise ValueError(f"Separator '{separator}' not found in {modlist}")
-    return mods
+    return current_section
 
 
 # ---------------------------------------------------------------------------

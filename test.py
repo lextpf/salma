@@ -143,6 +143,8 @@ def main():
         log(f"Downloads: {DOWNLOADS_PATH_ENV}")
     if separator_mods is not None:
         log(f"Separator: {len(separator_mods)} mods under {args.separator}")
+        for m in sorted(separator_mods)[:10]:
+            log_debug(f"  separator mod: {m!r}")
 
     # Locate and load DLL
     dll_path = find_dll()
@@ -154,6 +156,10 @@ def main():
         d for d in MODS_PATH.iterdir()
         if d.is_dir() and get_archive_path(d)
     )
+
+    # Apply separator filter before counting
+    if separator_mods is not None:
+        mod_folders = [d for d in mod_folders if d.name in separator_mods]
 
     total = len(mod_folders)
     if not total:
@@ -172,10 +178,6 @@ def main():
 
     for i, mod_folder in enumerate(mod_folders, 1):
         mod_name = mod_folder.name
-
-        # Filter to separator mods only
-        if separator_mods is not None and mod_name not in separator_mods:
-            continue
 
         label = f"[{i}/{total}] {mod_name}"
         log_debug(f"--- {label} ---")
@@ -217,7 +219,7 @@ def main():
                 continue
             log_debug(f"  [scan] Done in {t_scan:.2f}s "
                       f"({len(json_str)} chars)")
-            log_salma(status_line(
+            log(status_line(
                 f"[infer] {label}",
                 "INFERRED",
                 f"({len(json_str)} chars, {t_scan:.1f}s)",
@@ -313,4 +315,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        logger.exception("Fatal error")
+        sys.exit(1)
