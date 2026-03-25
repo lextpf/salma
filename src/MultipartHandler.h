@@ -19,13 +19,10 @@ namespace mo2server
  * ## :material-upload: File Handling
  *
  * Uploaded files are saved to the system temp directory with a random
- * 5-digit numeric suffix and the original file extension preserved
+ * 12-character hex suffix and the original file extension preserved
  * (important for archive format detection by ArchiveService). The
- * random range is 10000-99999, so collisions are possible under
- * concurrent uploads -- a collision silently overwrites the existing
- * temp file. If this becomes a concern, callers could add a
- * timestamp or UUID to the filename, or use a per-request temp
- * directory.
+ * hex suffix provides 16^12 (~2.8 * 10^14) possibilities, making
+ * collisions negligible even under heavy concurrent uploads.
  *
  * ## :material-alert-circle-outline: Failure Behavior
  *

@@ -54,7 +54,7 @@ namespace fs = std::filesystem;
  *
  * Every forwarded message is prefixed with `[crow]`.
  *
- * @note Suppression uses string-prefix matching (`rfind(..., 0)`), so any
+ * @note Suppression uses string-prefix matching (`.starts_with()`), so any
  *       non-Crow message that happens to start with "Request:" or "Response:"
  *       would also be filtered.  In practice only Crow produces these
  *       prefixes, so this is not an issue.
@@ -154,6 +154,11 @@ int main()
     if (!fs::exists(static_dir))
     {
         static_dir = (exe_dir.parent_path() / "web" / "dist").string();
+    }
+    if (!fs::exists(static_dir))
+    {
+        logger.log_warning(
+            std::format("[server] Static files directory not found: {}", static_dir));
     }
     logger.log(std::format("[server] Static files directory: {}", static_dir));
     mo2server::StaticFileHandler static_handler(static_dir);
@@ -258,8 +263,13 @@ int main()
             return static_handler.serve(path);
         });
 
+    // stream_threshold controls when Crow starts streaming request bodies instead
+    // of buffering them in memory. It does NOT enforce a hard body-size limit.
+    // The actual upload-size cap is enforced per-handler (see handle_upload).
+    static constexpr size_t kStreamThreshold = 512ULL * 1024 * 1024;
+
     logger.log("[server] Server starting on port 5000");
-    app.port(5000).multithreaded().run();
+    app.port(5000).multithreaded().stream_threshold(kStreamThreshold).run();
 
     return 0;
 }

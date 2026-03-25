@@ -1,7 +1,8 @@
 #include "MultipartHandler.h"
+#include "Utils.h"
+
 #include <filesystem>
 #include <fstream>
-#include <random>
 
 namespace fs = std::filesystem;
 
@@ -34,13 +35,16 @@ UploadedFile MultipartHandler::save_uploaded_file(const crow::multipart::message
             continue;
 
         result.original_extension = fs::path(result.filename).extension().string();
+        // Sanitize extension: remove any character that isn't alphanumeric, dot, or hyphen
+        // to prevent path traversal via crafted extensions (e.g., ".../../etc/foo")
+        std::erase_if(
+            result.original_extension,
+            [](char c)
+            { return !std::isalnum(static_cast<unsigned char>(c)) && c != '.' && c != '-'; });
 
-        // Temp filename uses a random 5-digit suffix to reduce collision risk.
-        // On collision the file is silently overwritten (no uniqueness guarantee).
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dist(10000, 99999);
-        auto temp_name = "mo2_upload_" + std::to_string(dist(gen)) + result.original_extension;
+        // Temp filename uses a 12-char random hex suffix for collision resistance
+        // (16^12 = 2.8e14 possibilities vs the old 90,000).
+        auto temp_name = "mo2_upload_" + mo2core::random_hex_string(12) + result.original_extension;
         result.temp_path = (fs::temp_directory_path() / temp_name).string();
 
         // Write the upload body to disk.
