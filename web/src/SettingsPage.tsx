@@ -1,60 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { getConfig, isFetchUnavailableError, putConfig } from './api'
-import Section from './components/Section'
+import Kicker from './comps/Kicker'
+import MIcon from './comps/MIcon'
+import ConfigSheet from './comps/settings/ConfigSheet'
 import type { AppConfig } from './types'
 
+const MONO = 'var(--font-mono)'
 const RETRY_DELAY_MS = 2000
 
-const inputStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '10px 14px',
-  border: '1px solid var(--rule)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--paper-2)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: 13,
-  color: 'var(--ink)',
-  outline: 'none',
-  letterSpacing: 0,
-  transition: 'border-color 150ms ease, background-color 150ms ease',
-}
-
-const inputReadonlyStyle: React.CSSProperties = {
-  ...inputStyle,
-  background: 'var(--paper-3)',
-  color: 'var(--ink-3)',
-  cursor: 'not-allowed',
-}
-
-function FieldRow({
-  label,
-  hint,
-  children,
-}: {
-  label: string
-  hint?: React.ReactNode
-  children: React.ReactNode
-}) {
-  return (
-    <div
-      className="grid"
-      style={{
-        gridTemplateColumns: '220px 1fr',
-        gap: 24,
-        padding: '20px 28px',
-        borderBottom: '1px solid var(--rule-soft)',
-        alignItems: 'flex-start',
-      }}
-    >
-      <div>
-        <p className="ui-label" style={{ marginBottom: 6 }}>{label}</p>
-        {hint && (
-          <p className="timestamp-print" style={{ fontSize: 11, lineHeight: 1.5 }}>{hint}</p>
-        )}
-      </div>
-      <div style={{ minWidth: 0 }}>{children}</div>
-    </div>
-  )
+// Syntactic validity: a non-empty path with no characters Windows forbids in a
+// directory. Gates the Save button and drives the sheet's header validity dot.
+function isPathValid(p: string): boolean {
+  return p.trim().length > 0 && !/[*?<>|]/.test(p)
 }
 
 export default function SettingsPage() {
@@ -66,7 +23,6 @@ export default function SettingsPage() {
   const [testArgs, setTestArgs] = useState(() => localStorage.getItem('salma_test_args') || '')
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const retryCountRef = useRef(0)
-  const isPathValid = (p: string) => p.trim().length > 0 && !/[*?<>|]/.test(p)
   const pathValid = isPathValid(modsPath)
 
   const clearRetryTimer = () => {
@@ -79,13 +35,13 @@ export default function SettingsPage() {
   const loadConfig = () => {
     setLoadError(null)
     getConfig()
-      .then(c => {
+      .then((c) => {
         setConfig(c)
         setModsPath(c.mo2ModsPath)
         retryCountRef.current = 0
         clearRetryTimer()
       })
-      .catch(e => {
+      .catch((e) => {
         retryCountRef.current++
         console.warn(`[settings] failed to load config (attempt ${retryCountRef.current})`, e)
         clearRetryTimer()
@@ -100,6 +56,7 @@ export default function SettingsPage() {
   useEffect(() => {
     loadConfig()
     return clearRetryTimer
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleSave = async () => {
@@ -123,220 +80,139 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="page-fill">
-      <header style={{ marginBottom: 28, flexShrink: 0 }}>
-        <p
-          className="reveal reveal-delay-1"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 10,
-            fontFamily: 'var(--font-mono)',
-            fontSize: 11,
-            letterSpacing: '0.18em',
-            textTransform: 'uppercase',
-            color: 'var(--ink-3)',
-            marginBottom: 18,
-          }}
-        >
-          <span
-            className="display-serif-italic"
-            style={{ fontSize: 12, color: 'var(--accent)', textTransform: 'none' }}
-          >
-            04.
-          </span>
-          <span>Sec. Configuration</span>
-        </p>
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      {/* 46px section header */}
+      <div
+        style={{
+          height: 46,
+          flexShrink: 0,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '0 18px',
+          borderBottom: '1px solid var(--rule-soft)',
+        }}
+      >
+        <Kicker num="04" label="Configuration" />
+      </div>
 
-        <h1
-          className="reveal reveal-delay-2 display-serif"
-          style={{ fontSize: 92, lineHeight: 0.92, color: 'var(--ink)', margin: 0 }}
-        >
-          Settings<span style={{ color: 'var(--accent)' }}>.</span>
-        </h1>
-
-        <p
-          className="reveal reveal-delay-3 display-serif-italic"
-          style={{
-            margin: '18px 0 0',
-            fontSize: 15,
-            color: 'var(--ink-3)',
-            maxWidth: 620,
-            lineHeight: 1.55,
-          }}
-        >
-          Configure MO2 integration paths and test runner arguments. Changes persist across sessions.
-        </p>
-      </header>
-
-      {loadError ? (
-        <div
-          className="reveal reveal-delay-4"
-          style={{
-            maxWidth: 620,
-            padding: '20px 24px',
-            background: 'var(--paper-3)',
-            border: '1px solid var(--rule)',
-            borderRadius: 'var(--radius-md)',
-          }}
-        >
-          <div className="flex items-center" style={{ gap: 10, marginBottom: 8 }}>
-            <span className="dot-status dot-status-error" />
-            <span
-              className="ui-label"
-              style={{ color: 'var(--accent)', fontSize: 10 }}
-            >
-              Connection failed
-            </span>
-          </div>
-          <p
-            className="display-serif-italic"
-            style={{ fontSize: 16, color: 'var(--ink)', marginBottom: 12 }}
-          >
-            {loadError}
-          </p>
-          <button
-            type="button"
-            className="tool-btn"
-            onClick={() => { retryCountRef.current = 0; loadConfig() }}
-          >
-            <i className="fa-duotone fa-solid fa-arrows-spin" style={{ fontSize: 12 }} />
-            <span>Retry</span>
-          </button>
-        </div>
-      ) : !config ? (
-        <div className="reveal reveal-delay-4" style={{ marginBottom: 28 }}>
-          <Section n="01" label="Paths" title="MO2 instance" corner="01" bodyPadding="none">
+      {/* Scrolling body */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          padding: 18,
+        }}
+      >
+        <div style={{ width: '100%', maxWidth: 960 }}>
+          {loadError ? (
             <div
-              className="grid"
               style={{
-                gridTemplateColumns: '220px 1fr',
-                gap: 24,
-                padding: '20px 28px',
-                borderBottom: '1px solid var(--rule-soft)',
-                alignItems: 'flex-start',
+                border: '1px solid var(--rule)',
+                borderRadius: 11,
+                padding: '24px 24px',
+                background: 'var(--sheet)',
+                boxShadow: 'var(--shadow-elevation-1)',
               }}
             >
-              <div>
-                <div className="skeleton-line" style={{ height: 10, width: 100, marginBottom: 8 }} />
-                <div className="skeleton-line" style={{ height: 11, width: 180 }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <span
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: 'var(--danger)',
+                  }}
+                />
+                <span
+                  style={{
+                    fontFamily: MONO,
+                    fontSize: 'var(--fs-micro)',
+                    letterSpacing: '0.14em',
+                    textTransform: 'uppercase',
+                    color: 'var(--danger)',
+                  }}
+                >
+                  Connection failed
+                </span>
               </div>
-              <div className="skeleton-line" style={{ height: 36, width: '100%' }} />
+              <p
+                style={{
+                  margin: '0 0 14px',
+                  fontSize: 'var(--fs-title)',
+                  lineHeight: 'var(--lh-body)',
+                  color: 'var(--ink-2)',
+                }}
+              >
+                {loadError}
+              </p>
+              <button
+                type="button"
+                className="tool-btn"
+                onClick={() => {
+                  retryCountRef.current = 0
+                  loadConfig()
+                }}
+              >
+                <MIcon name="sync" size={13} />
+                <span>Retry</span>
+              </button>
             </div>
-          </Section>
-        </div>
-      ) : (
-        <>
-          {/* Section 01 - Paths */}
-          <div className="reveal reveal-delay-4" style={{ marginBottom: 16, flexShrink: 0 }}>
-            <Section n="01" label="Paths" title="MO2 instance" corner="01" bodyPadding="none">
-              <FieldRow
-                label="Mods path"
-                hint={<>// e.g. <span style={{ color: 'var(--ink-2)' }}>D:\MO2\mods</span></>}
+          ) : !config ? (
+            <div
+              style={{
+                border: '1px solid var(--rule)',
+                borderRadius: 11,
+                overflow: 'hidden',
+                background: 'var(--sheet)',
+                boxShadow: 'var(--shadow-elevation-2)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 16px',
+                  background: 'var(--card)',
+                  borderBottom: '1px solid var(--rule-soft)',
+                }}
               >
-                <input
-                  type="text"
-                  value={modsPath}
-                  onChange={e => setModsPath(e.target.value)}
-                  placeholder="D:\MO2\mods"
-                  style={inputStyle}
-                  onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent)' }}
-                  onBlur={e => { e.currentTarget.style.borderColor = 'var(--rule)' }}
+                <span style={{ fontFamily: MONO, fontSize: 'var(--fs-label)', color: 'var(--ink-4)' }}>
+                  salma.json
+                </span>
+                <div
+                  className="skeleton-line"
+                  style={{ height: 22, width: 64, borderRadius: 7 }}
                 />
-                {config.mo2ModsPath && (
-                  <p
-                    className="flex items-center timestamp-print"
-                    style={{
-                      gap: 6,
-                      marginTop: 8,
-                      color: config.mo2ModsPathValid ? 'var(--moss)' : 'var(--danger)',
-                    }}
-                  >
-                    <span
-                      className={`dot-status ${config.mo2ModsPathValid ? 'dot-status-on' : 'dot-status-error'}`}
-                    />
-                    {config.mo2ModsPathValid
-                      ? 'path exists and is a directory'
-                      : 'path does not exist or is not a directory'}
-                  </p>
-                )}
-              </FieldRow>
-
-              {config.fomodOutputDir && (
-                <FieldRow
-                  label="FOMOD output"
-                  hint={<>// auto-generated from the mods path - read-only</>}
-                >
-                  <input
-                    type="text"
-                    value={config.fomodOutputDir}
-                    readOnly
-                    aria-readonly="true"
-                    style={inputReadonlyStyle}
-                  />
-                </FieldRow>
-              )}
-            </Section>
-          </div>
-
-          {/* Section 02 - Test runner */}
-          <div className="reveal reveal-delay-5" style={{ flexShrink: 0 }}>
-            <Section n="02" label="Test" title="Test runner" corner="02" bodyPadding="none">
-              <FieldRow
-                label="Script arguments"
-                hint={
-                  <>
-                    // passed to <span style={{ color: 'var(--ink-2)' }}>test_all.py</span>{' '}
-                    when running tests
-                  </>
-                }
-              >
-                <input
-                  type="text"
-                  value={testArgs}
-                  onChange={e => setTestArgs(e.target.value)}
-                  placeholder='--separator "My Separator" --limit 10'
-                  style={inputStyle}
-                  onFocus={e => { e.currentTarget.style.borderColor = 'var(--accent)' }}
-                  onBlur={e => { e.currentTarget.style.borderColor = 'var(--rule)' }}
-                />
-              </FieldRow>
-
-              <div className="atelier-section-toolbar">
-                {message && (
-                  <span
-                    className="flex items-center"
-                    style={{
-                      gap: 6,
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: 11,
-                      color: message.type === 'success' ? 'var(--moss)' : 'var(--danger)',
-                    }}
-                  >
-                    <span
-                      className={`dot-status ${message.type === 'success' ? 'dot-status-on' : 'dot-status-error'}`}
-                    />
-                    {message.text}
-                  </span>
-                )}
-                <div style={{ flex: 1 }} />
-                <button
-                  type="button"
-                  className="tool-btn tool-btn-primary"
-                  onClick={handleSave}
-                  disabled={saving || !pathValid}
-                >
-                  <i
-                    className={`fa-duotone fa-solid fa-floppy-disk${saving ? ' fa-beat' : ''}`}
-                    style={{ fontSize: 13 }}
-                  />
-                  <span>{saving ? 'Saving...' : 'Save configuration'}</span>
-                </button>
               </div>
-            </Section>
-          </div>
-        </>
-      )}
+              <div style={{ padding: '15px 18px' }}>
+                {[58, 28, 50, 66, 18, 28, 56].map((w, i) => (
+                  <div
+                    key={i}
+                    className="skeleton-line"
+                    style={{ height: 11, width: `${w}%`, margin: '8px 0' }}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <ConfigSheet
+              config={config}
+              modsPath={modsPath}
+              onModsPathChange={setModsPath}
+              testArgs={testArgs}
+              onTestArgsChange={setTestArgs}
+              valid={pathValid}
+              saving={saving}
+              onSave={handleSave}
+              saveMessage={message}
+            />
+          )}
+        </div>
+      </div>
     </div>
   )
 }
