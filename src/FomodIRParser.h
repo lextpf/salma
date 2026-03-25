@@ -32,8 +32,6 @@ namespace mo2core
  *    applying prefix
  * and destination resolution.
  * 4. `parse_group_type` - maps the XML type string to `FomodGroupType`.
- * 5.
- * `resolve_file_destination` - infers the destination when the XML omits it.
  */
 class FomodIRParser
 {
@@ -46,8 +44,6 @@ private:
     static FomodFileEntry parse_file_entry(const pugi::xml_node& node,
                                            const std::string& archive_prefix);
     static FomodGroupType parse_group_type(const std::string& type_str);
-    static std::string resolve_file_destination(const std::string& source,
-                                                const std::string& dest_raw);
 };
 
 }  // namespace mo2core

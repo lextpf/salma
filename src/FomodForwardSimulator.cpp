@@ -22,14 +22,40 @@ static void apply_atom(SimulatedTree& tree, const FomodAtom& atom)
     }
 }
 
-SimulatedTree simulate(const FomodInstaller& installer,
-                       const ExpandedAtoms& atoms,
-                       const std::vector<std::vector<std::vector<bool>>>& selections,
-                       const FomodDependencyContext* context,
-                       const InferenceOverrides* overrides)
+void simulate_into(SimulatedTree& tree,
+                   const FomodInstaller& installer,
+                   const ExpandedAtoms& atoms,
+                   const std::vector<std::vector<std::vector<bool>>>& selections,
+                   const FomodDependencyContext* context,
+                   const InferenceOverrides* overrides)
 {
-    SimulatedTree tree;
+    tree.files.clear();
     std::unordered_map<std::string, std::string> flags;
+
+    // Shared helpers to avoid duplicating step-visibility and flat_idx advancement.
+    auto compute_step_visibility = [&](size_t si, const FomodStep& step) -> bool
+    {
+        if (!step.visible)
+        {
+            return true;
+        }
+        if (overrides && si < overrides->step_visible.size())
+        {
+            return evaluate_condition_inferred(
+                *step.visible, flags, overrides->step_visible[si], context);
+        }
+        return evaluate_condition(*step.visible, flags, context);
+    };
+
+    auto count_step_plugins = [](const FomodStep& step) -> int
+    {
+        int count = 0;
+        for (const auto& group : step.groups)
+        {
+            count += static_cast<int>(group.plugins.size());
+        }
+        return count;
+    };
 
     // Phase 1: Required files
     for (const auto& atom : atoms.required)
@@ -39,22 +65,14 @@ SimulatedTree simulate(const FomodInstaller& installer,
 
     // Phase 2: Selected plugin files (normal, non-always) in step order.
     // Also accumulate flags. Auto-select Required-type plugins.
+
     int flat_idx = 0;
     for (size_t si = 0; si < installer.steps.size(); ++si)
     {
         const auto& step = installer.steps[si];
+        bool visible = compute_step_visibility(si, step);
 
-        // Check step visibility
-        bool step_visible_result = true;
-        if (step.visible)
-        {
-            if (overrides && si < overrides->step_visible.size())
-                step_visible_result = evaluate_condition_inferred(
-                    *step.visible, flags, overrides->step_visible[si], context);
-            else
-                step_visible_result = evaluate_condition(*step.visible, flags, context);
-        }
-        if (!step_visible_result)
+        if (!visible)
         {
             // Skip all groups in this invisible step, but still advance flat_idx
             for (const auto& group : step.groups)
@@ -84,7 +102,9 @@ SimulatedTree simulate(const FomodInstaller& installer,
                 {
                     // Accumulate flags
                     for (const auto& [name, value] : plugin.condition_flags)
+                    {
                         flags[name] = value;
+                    }
 
                     // Add normal (non-auto) atoms
                     if (flat_idx < static_cast<int>(atoms.per_plugin.size()))
@@ -92,7 +112,9 @@ SimulatedTree simulate(const FomodInstaller& installer,
                         for (const auto& atom : atoms.per_plugin[flat_idx])
                         {
                             if (!atom.always_install && !atom.install_if_usable)
+                            {
                                 apply_atom(tree, atom);
+                            }
                         }
                     }
                 }
@@ -101,7 +123,9 @@ SimulatedTree simulate(const FomodInstaller& installer,
         }
     }
 
-    // Phase 3: Always-install and installIfUsable atoms from ALL plugins
+    // Phase 3: Always-install and installIfUsable atoms from ALL plugins.
+    // These flags mean "install regardless of selection", so we must process
+    // every plugin including those in invisible steps.
     flat_idx = 0;
     for (const auto& step : installer.steps)
     {
@@ -154,7 +178,16 @@ SimulatedTree simulate(const FomodInstaller& installer,
             }
         }
     }
+}
 
+SimulatedTree simulate(const FomodInstaller& installer,
+                       const ExpandedAtoms& atoms,
+                       const std::vector<std::vector<std::vector<bool>>>& selections,
+                       const FomodDependencyContext* context,
+                       const InferenceOverrides* overrides)
+{
+    SimulatedTree tree;
+    simulate_into(tree, installer, atoms, selections, context, overrides);
     return tree;
 }
 

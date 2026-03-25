@@ -13,45 +13,10 @@ using json = nlohmann::json;
 namespace mo2core
 {
 
-// parse_plugin_type_string, plugin_type_to_string, and get_ordered_nodes are now in Utils.h
+// parse_plugin_type_string, plugin_type_to_string, get_ordered_nodes,
+// normalize_destination_for_join, and resolve_file_destination are now in Utils.h
 
-static std::string normalize_destination_for_join(std::string destination)
-{
-    // FOMOD destinations are mod-root-relative. Values like "\" or "/"
-    // mean "root", not an absolute filesystem path.
-    while (!destination.empty() && (destination.front() == '\\' || destination.front() == '/'))
-    {
-        destination.erase(destination.begin());
-    }
-    while (destination.starts_with("./") || destination.starts_with(".\\"))
-    {
-        destination = destination.substr(2);
-    }
-    return destination;
-}
-
-// Resolve a <file>/<folder> node's destination, handling empty destinations
-// and trailing-slash directory semantics, then normalize for filesystem join.
-// Shared by process_required_files and process_files_node.
-static std::string resolve_file_destination(const std::string& source,
-                                            const std::string& raw_destination,
-                                            bool is_file)
-{
-    std::string destination = raw_destination;
-    if (is_file && destination.empty())
-    {
-        auto slash = source.find_last_of("/\\");
-        destination = (slash != std::string::npos) ? source.substr(slash + 1) : source;
-    }
-    else if (is_file && !destination.empty() &&
-             (destination.back() == '/' || destination.back() == '\\'))
-    {
-        auto slash = source.find_last_of("/\\");
-        auto filename = (slash != std::string::npos) ? source.substr(slash + 1) : source;
-        destination += filename;
-    }
-    return normalize_destination_for_join(destination);
-}
+// is_safe_destination is now in Utils.h/cpp (shared with FomodInferenceAtoms)
 
 bool FomodService::check_module_dependencies(const pugi::xml_document& doc,
                                              const FomodDependencyContext* context)
@@ -82,7 +47,9 @@ bool FomodService::check_module_dependencies(const pugi::xml_document& doc,
 void FomodService::process_required_files(const pugi::xml_document& doc,
                                           const std::string& src_base,
                                           const std::string& dst_base,
-                                          const FomodDependencyContext* context)
+                                          const FomodDependencyContext* context,
+                                          std::vector<FileOperation>& ops,
+                                          int& next_doc_order)
 {
     auto& logger = Logger::instance();
     auto req_parent = doc.child("config").child("requiredInstallFiles");
@@ -127,6 +94,12 @@ void FomodService::process_required_files(const pugi::xml_document& doc,
 
         std::string name = node.name();
         destination = resolve_file_destination(source, destination, name == "file");
+        if (!is_safe_destination(destination))
+        {
+            logger.log_warning(
+                std::format("[fomod] Skipping path-traversal destination: {}", destination));
+            continue;
+        }
         auto src_path = (fs::path(src_base) / source).string();
         auto dst_path = (fs::path(dst_base) / destination).string();
         logger.log(std::format("[fomod] Mapped: {} -> {}", src_path, dst_path));
@@ -134,14 +107,12 @@ void FomodService::process_required_files(const pugi::xml_document& doc,
         int priority = get_priority(node);
         if (name == "file")
         {
-            file_operations_.push_back(
-                {FileOpType::File, src_path, dst_path, priority, next_document_order_++});
+            ops.push_back({FileOpType::File, src_path, dst_path, priority, next_doc_order++});
             file_count++;
         }
         else if (name == "folder")
         {
-            file_operations_.push_back(
-                {FileOpType::Folder, src_path, dst_path, priority, next_document_order_++});
+            ops.push_back({FileOpType::Folder, src_path, dst_path, priority, next_doc_order++});
             folder_count++;
         }
         else
@@ -247,7 +218,29 @@ bool FomodService::validate_group_selection(const pugi::xml_node& group_node,
     for (const auto& p : plugins_in_group)
     {
         if (selected_plugins.count(p))
+        {
             selected_in_group++;
+        }
+    }
+
+    for (const auto& sel : selected_plugins)
+    {
+        bool found = false;
+        for (const auto& p : plugins_in_group)
+        {
+            if (p == sel)
+            {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            logger.log_warning(
+                std::format("[fomod] Group \"{}\": selected plugin \"{}\" not found in XML group",
+                            group_name,
+                            sel));
+        }
     }
 
     bool valid = true;
@@ -263,7 +256,8 @@ bool FomodService::validate_group_selection(const pugi::xml_node& group_node,
     if (!valid)
     {
         logger.log(std::format(
-            "[fomod] WARNING: Group \"{}\" type \"{}\" validation failed: {} selected, {} total",
+            "[fomod] WARNING: Group \"{}\" type \"{}\" validation failed: {} selected, {} total "
+            "(note: Required plugins are auto-installed and may not appear in JSON selections)",
             group_name,
             group_type,
             selected_in_group,
@@ -280,15 +274,41 @@ bool FomodService::validate_group_selection(const pugi::xml_node& group_node,
     return valid;
 }
 
+// Optional file processing uses a three-pass strategy to match MO2 behavior:
+//
+//   Pass 1 (explicit):   Walk JSON step/group/plugin selections and enqueue
+//                         their <files> entries. Track processed plugins by
+//                         a composite key (step + group + plugin) so later
+//                         passes can skip them.
+//
+//   Pass 2 (auto-req):   For each visible step, auto-install any Required-type
+//                         plugins not already processed.  A catch-all call with
+//                         an empty step_name covers steps the JSON omitted.
+//
+//   Pass 3 (auto-attr):  Scan ALL unselected plugins for files marked
+//                         alwaysInstall="true" or installIfUsable="true" and
+//                         enqueue those individual file entries (not the entire
+//                         plugin).
+//
+// This multi-pass approach is needed because:
+//  - JSON may be partial (inferred or hand-edited), so Required plugins must
+//    be installed even when missing from the selection list.
+//  - alwaysInstall/installIfUsable are per-file attributes that apply even
+//    when the parent plugin is not selected.
 void FomodService::process_optional_files(const pugi::xml_document& doc,
                                           const json& config_json,
                                           const std::string& src_base,
                                           const std::string& dst_base,
-                                          const FomodDependencyContext* context)
+                                          const FomodDependencyContext* context,
+                                          std::vector<FileOperation>& ops,
+                                          int& next_doc_order)
 {
     auto& logger = Logger::instance();
+    const auto initial_ops_size = ops.size();
+    const int initial_doc_order = next_doc_order;
     bool has_steps = config_json.contains("steps") && config_json["steps"].is_array();
     std::unordered_set<std::string> processed_plugins;
+    std::unordered_set<std::string> covered_steps;
 
     if (!has_steps)
     {
@@ -296,198 +316,238 @@ void FomodService::process_optional_files(const pugi::xml_document& doc,
     }
     else
     {
-        auto& steps = config_json["steps"];
-        logger.log(std::format("[fomod] Processing optional files from JSON with {} step(s)",
-                               steps.size()));
-
-        // Build ordered XML step list for positional matching.
-        // This avoids XPath name-collision issues when multiple steps/groups
-        // share the same name.
-        auto steps_parent = doc.child("config").child("installSteps");
-        auto ordered_xml_steps = get_ordered_nodes(steps_parent, "installStep");
-
-        // Map step names to their ordered XML nodes for occurrence tracking.
-        std::unordered_map<std::string, std::vector<pugi::xml_node>> xml_steps_by_name;
-        for (const auto& sn : ordered_xml_steps)
-            xml_steps_by_name[sn.attribute("name").as_string()].push_back(sn);
-
-        std::unordered_map<std::string, int> step_occurrence;
-
-        for (const auto& step : steps)
+        try
         {
-            std::string step_name = step.value("name", "");
-            logger.log(std::format("[fomod] Processing step: \"{}\"", step_name));
+            process_explicit_selections(doc,
+                                        config_json["steps"],
+                                        src_base,
+                                        dst_base,
+                                        context,
+                                        ops,
+                                        next_doc_order,
+                                        processed_plugins,
+                                        covered_steps);
 
-            if (!step.contains("groups") || !step["groups"].is_array())
-            {
-                logger.log(std::format("[fomod] Step \"{}\" has no groups array", step_name));
-                step_occurrence[step_name]++;
-                continue;
-            }
+            // Catch-all: auto-install Required plugins for steps not covered by JSON
+            auto_install_required_for_step(doc,
+                                           "",
+                                           processed_plugins,
+                                           src_base,
+                                           dst_base,
+                                           context,
+                                           ops,
+                                           next_doc_order,
+                                           &covered_steps);
 
-            // Find the correct XML step node by name + occurrence
-            int occ = step_occurrence[step_name]++;
-            pugi::xml_node xml_step_node;
-            {
-                auto it = xml_steps_by_name.find(step_name);
-                if (it != xml_steps_by_name.end() && occ < static_cast<int>(it->second.size()))
-                    xml_step_node = it->second[occ];
-            }
-
-            if (!xml_step_node)
-            {
-                logger.log_warning(std::format(
-                    "[fomod] Could not find XML step \"{}\" occurrence {}", step_name, occ));
-                continue;
-            }
-
-            // Build ordered group list within this specific step
-            auto fg_parent = xml_step_node.child("optionalFileGroups");
-            auto ordered_xml_groups = get_ordered_nodes(fg_parent, "group");
-            std::unordered_map<std::string, std::vector<pugi::xml_node>> xml_groups_by_name;
-            for (const auto& gn : ordered_xml_groups)
-                xml_groups_by_name[gn.attribute("name").as_string()].push_back(gn);
-
-            std::unordered_map<std::string, int> group_occurrence;
-
-            logger.log(std::format("[fomod] Step has {} group(s)", step["groups"].size()));
-
-            for (const auto& group : step["groups"])
-            {
-                std::string group_name = group.value("name", "");
-                logger.log(std::format("[fomod] Processing group: \"{}\"", group_name));
-
-                // Check for deselected plugins
-                std::unordered_set<std::string> deselected;
-                if (group.contains("deselected") && group["deselected"].is_array())
-                {
-                    for (const auto& d : group["deselected"])
-                    {
-                        if (!d.is_string())
-                            continue;
-                        std::string dname = d.get<std::string>();
-                        if (!dname.empty())
-                        {
-                            deselected.insert(dname);
-                            logger.log(std::format(
-                                "[fomod] Plugin \"{}\" is marked as deselected, will skip", dname));
-                        }
-                    }
-                }
-
-                if (!group.contains("plugins") || !group["plugins"].is_array())
-                {
-                    logger.log(
-                        std::format("[fomod] Group \"{}\" has no plugins array", group_name));
-                    group_occurrence[group_name]++;
-                    continue;
-                }
-
-                // Find the correct XML group node by name + occurrence
-                int gocc = group_occurrence[group_name]++;
-                pugi::xml_node xml_group_node;
-                {
-                    auto it = xml_groups_by_name.find(group_name);
-                    if (it != xml_groups_by_name.end() &&
-                        gocc < static_cast<int>(it->second.size()))
-                        xml_group_node = it->second[gocc];
-                }
-
-                logger.log(std::format("[fomod] Group has {} plugin(s)", group["plugins"].size()));
-
-                // Build plugin list within this specific group for name matching
-                std::vector<pugi::xml_node> xml_plugins;
-                if (xml_group_node)
-                {
-                    auto plugins_parent = xml_group_node.child("plugins");
-                    for (auto pn = plugins_parent.child("plugin"); pn;
-                         pn = pn.next_sibling("plugin"))
-                        xml_plugins.push_back(pn);
-                }
-
-                std::unordered_map<std::string, int> plugin_occurrence;
-
-                for (const auto& plugin : group["plugins"])
-                {
-                    if (!plugin.is_string())
-                    {
-                        logger.log_warning("[fomod] Skipping non-string plugin entry in JSON");
-                        continue;
-                    }
-                    std::string plugin_name = plugin.get<std::string>();
-                    if (plugin_name.empty())
-                    {
-                        logger.log("[fomod] Skipping empty plugin name");
-                        continue;
-                    }
-
-                    if (deselected.count(plugin_name))
-                    {
-                        logger.log(
-                            std::format("[fomod] Skipping deselected plugin: \"{}\"", plugin_name));
-                        continue;
-                    }
-
-                    logger.log(std::format(
-                        "[fomod] Looking for plugin: \"{}\" in step \"{}\", group \"{}\"",
-                        plugin_name,
-                        step_name,
-                        group_name));
-
-                    // Find plugin by name + occurrence within this specific group
-                    int pocc = plugin_occurrence[plugin_name]++;
-                    pugi::xml_node matched_plugin;
-                    int seen = 0;
-                    for (const auto& pn : xml_plugins)
-                    {
-                        if (std::string(pn.attribute("name").as_string()) == plugin_name)
-                        {
-                            if (seen == pocc)
-                            {
-                                matched_plugin = pn;
-                                break;
-                            }
-                            seen++;
-                        }
-                    }
-
-                    if (matched_plugin)
-                    {
-                        logger.log(std::format("[fomod] Plugin \"{}\" (explicitly selected)",
-                                               plugin_name));
-                        process_plugin_node(matched_plugin, src_base, dst_base, context);
-                        processed_plugins.insert(
-                            make_plugin_key(step_name, group_name, plugin_name));
-                    }
-                    else
-                    {
-                        logger.log(std::format(
-                            "[fomod] ERROR: Could not find plugin \"{}\" in step/group XML node",
-                            plugin_name));
-                    }
-                }
-            }
-
-            // Auto-install Required plugins for this step (preserves document order)
-            auto_install_required_for_step(
-                doc, step_name, processed_plugins, src_base, dst_base, context);
+            // Auto-install alwaysInstall/installIfUsable files from unselected plugins
+            process_auto_install_plugins(
+                doc, processed_plugins, src_base, dst_base, context, ops, next_doc_order);
+        }
+        catch (const std::exception& ex)
+        {
+            ops.erase(ops.begin() + static_cast<std::ptrdiff_t>(initial_ops_size), ops.end());
+            next_doc_order = initial_doc_order;
+            logger.log_error(
+                std::format("[fomod] Exception during optional file processing, rolled back queued "
+                            "operations: {}",
+                            ex.what()));
+            throw;
         }
     }
 
-    // Ensure Required plugins are installed even when JSON is partial or missing steps.
-    auto_install_required_for_step(doc, "", processed_plugins, src_base, dst_base, context);
+    logger.log(
+        std::format("[fomod] Total file operations queued from optional files: {}", ops.size()));
+}
 
-    // Second pass: auto-install alwaysInstall/installIfUsable files from unselected plugins
-    process_auto_install_plugins(doc, processed_plugins, src_base, dst_base, context);
+void FomodService::process_explicit_selections(const pugi::xml_document& doc,
+                                               const json& steps_json,
+                                               const std::string& src_base,
+                                               const std::string& dst_base,
+                                               const FomodDependencyContext* context,
+                                               std::vector<FileOperation>& ops,
+                                               int& next_doc_order,
+                                               std::unordered_set<std::string>& processed_plugins,
+                                               std::unordered_set<std::string>& covered_steps)
+{
+    auto& logger = Logger::instance();
+    logger.log(std::format("[fomod] Processing optional files from JSON with {} step(s)",
+                           steps_json.size()));
 
-    logger.log(std::format("[fomod] Total file operations queued from optional files: {}",
-                           file_operations_.size()));
+    // Build ordered XML step list for positional matching.
+    // This avoids XPath name-collision issues when multiple steps/groups
+    // share the same name.
+    auto steps_parent = doc.child("config").child("installSteps");
+    auto ordered_xml_steps = get_ordered_nodes(steps_parent, "installStep");
+
+    // Map step names to their ordered XML nodes for occurrence tracking.
+    std::unordered_map<std::string, std::vector<pugi::xml_node>> xml_steps_by_name;
+    for (const auto& sn : ordered_xml_steps)
+        xml_steps_by_name[sn.attribute("name").as_string()].push_back(sn);
+
+    std::unordered_map<std::string, int> step_occurrence;
+
+    for (const auto& step : steps_json)
+    {
+        std::string step_name = step.value("name", "");
+        logger.log(std::format("[fomod] Processing step: \"{}\"", step_name));
+
+        if (!step.contains("groups") || !step["groups"].is_array())
+        {
+            logger.log(std::format("[fomod] Step \"{}\" has no groups array", step_name));
+            step_occurrence[step_name]++;
+            continue;
+        }
+
+        // Find the correct XML step node by name + occurrence
+        int occ = step_occurrence[step_name]++;
+        pugi::xml_node xml_step_node;
+        {
+            auto it = xml_steps_by_name.find(step_name);
+            if (it != xml_steps_by_name.end() && occ < static_cast<int>(it->second.size()))
+                xml_step_node = it->second[occ];
+        }
+
+        if (!xml_step_node)
+        {
+            logger.log_warning(std::format(
+                "[fomod] Could not find XML step \"{}\" occurrence {}", step_name, occ));
+            continue;
+        }
+
+        // Build ordered group list within this specific step
+        auto fg_parent = xml_step_node.child("optionalFileGroups");
+        auto ordered_xml_groups = get_ordered_nodes(fg_parent, "group");
+        std::unordered_map<std::string, std::vector<pugi::xml_node>> xml_groups_by_name;
+        for (const auto& gn : ordered_xml_groups)
+            xml_groups_by_name[gn.attribute("name").as_string()].push_back(gn);
+
+        std::unordered_map<std::string, int> group_occurrence;
+
+        logger.log(std::format("[fomod] Step has {} group(s)", step["groups"].size()));
+
+        for (const auto& group : step["groups"])
+        {
+            std::string group_name = group.value("name", "");
+            logger.log(std::format("[fomod] Processing group: \"{}\"", group_name));
+
+            // Track deselected names for logging. Do not use this as a hard
+            // skip list for selected entries because some installers reuse the
+            // same plugin name for multiple occurrences in one group.
+            std::unordered_set<std::string> deselected;
+            if (group.contains("deselected") && group["deselected"].is_array())
+            {
+                for (const auto& d : group["deselected"])
+                {
+                    if (!d.is_string())
+                        continue;
+                    std::string dname = d.get<std::string>();
+                    if (!dname.empty())
+                    {
+                        deselected.insert(dname);
+                        logger.log(std::format(
+                            "[fomod] Plugin \"{}\" is marked as deselected, will skip", dname));
+                    }
+                }
+            }
+
+            if (!group.contains("plugins") || !group["plugins"].is_array())
+            {
+                logger.log(std::format("[fomod] Group \"{}\" has no plugins array", group_name));
+                group_occurrence[group_name]++;
+                continue;
+            }
+
+            // Find the correct XML group node by name + occurrence
+            int gocc = group_occurrence[group_name]++;
+            pugi::xml_node xml_group_node;
+            {
+                auto it = xml_groups_by_name.find(group_name);
+                if (it != xml_groups_by_name.end() && gocc < static_cast<int>(it->second.size()))
+                    xml_group_node = it->second[gocc];
+            }
+
+            logger.log(std::format("[fomod] Group has {} plugin(s)", group["plugins"].size()));
+
+            // Build plugin list within this specific group for name matching
+            std::vector<pugi::xml_node> xml_plugins;
+            if (xml_group_node)
+            {
+                auto plugins_parent = xml_group_node.child("plugins");
+                for (auto pn = plugins_parent.child("plugin"); pn; pn = pn.next_sibling("plugin"))
+                    xml_plugins.push_back(pn);
+            }
+
+            std::unordered_map<std::string, int> plugin_occurrence;
+
+            for (const auto& plugin : group["plugins"])
+            {
+                if (!plugin.is_string())
+                {
+                    logger.log_warning("[fomod] Skipping non-string plugin entry in JSON");
+                    continue;
+                }
+                std::string plugin_name = plugin.get<std::string>();
+                if (plugin_name.empty())
+                {
+                    logger.log("[fomod] Skipping empty plugin name");
+                    continue;
+                }
+
+                logger.log(
+                    std::format("[fomod] Looking for plugin: \"{}\" in step \"{}\", group \"{}\"",
+                                plugin_name,
+                                step_name,
+                                group_name));
+
+                // Find plugin by name + occurrence within this specific group
+                int pocc = plugin_occurrence[plugin_name]++;
+                pugi::xml_node matched_plugin;
+                int seen = 0;
+                for (const auto& pn : xml_plugins)
+                {
+                    if (std::string(pn.attribute("name").as_string()) == plugin_name)
+                    {
+                        if (seen == pocc)
+                        {
+                            matched_plugin = pn;
+                            break;
+                        }
+                        seen++;
+                    }
+                }
+
+                if (matched_plugin)
+                {
+                    logger.log(
+                        std::format("[fomod] Plugin \"{}\" (explicitly selected)", plugin_name));
+                    process_plugin_node(
+                        matched_plugin, src_base, dst_base, context, ops, next_doc_order);
+                    processed_plugins.insert(make_plugin_key(step_name, group_name, plugin_name));
+                }
+                else
+                {
+                    logger.log_error(
+                        std::format("[fomod] Could not find plugin \"{}\" in step/group XML node",
+                                    plugin_name));
+                }
+            }
+        }
+
+        // Auto-install Required plugins for this step (preserves document order)
+        auto_install_required_for_step(
+            doc, step_name, processed_plugins, src_base, dst_base, context, ops, next_doc_order);
+
+        // Record this step as covered so the catch-all pass can skip it
+        covered_steps.insert(step_name);
+    }
 }
 
 void FomodService::process_conditional_files(const pugi::xml_document& doc,
                                              const std::string& src_base,
                                              const std::string& dst_base,
-                                             const FomodDependencyContext* context)
+                                             const FomodDependencyContext* context,
+                                             std::vector<FileOperation>& ops,
+                                             int& next_doc_order)
 {
     auto& logger = Logger::instance();
     auto patterns_parent = doc.child("config").child("conditionalFileInstalls").child("patterns");
@@ -529,7 +589,7 @@ void FomodService::process_conditional_files(const pugi::xml_document& doc,
         auto files_node = pattern.child("files");
         if (files_node)
         {
-            process_files_node(files_node, src_base, dst_base);
+            process_files_node(files_node, src_base, dst_base, ops, next_doc_order);
         }
     }
 
@@ -556,7 +616,9 @@ void FomodService::extract_flags(const pugi::xml_node& plugin_node)
 
 void FomodService::process_files_node(const pugi::xml_node& files_node,
                                       const std::string& src_base,
-                                      const std::string& dst_base)
+                                      const std::string& dst_base,
+                                      std::vector<FileOperation>& ops,
+                                      int& next_doc_order)
 {
     auto& logger = Logger::instance();
     int file_count = 0, folder_count = 0;
@@ -583,6 +645,12 @@ void FomodService::process_files_node(const pugi::xml_node& files_node,
 
         std::string name = file_node.name();
         destination = resolve_file_destination(source, destination, name == "file");
+        if (!is_safe_destination(destination))
+        {
+            logger.log_warning(
+                std::format("[fomod] Skipping path-traversal destination: {}", destination));
+            continue;
+        }
         auto src_path = (fs::path(src_base) / source).string();
         auto dst_path = (fs::path(dst_base) / destination).string();
         int priority = get_priority(file_node);
@@ -593,8 +661,7 @@ void FomodService::process_files_node(const pugi::xml_node& files_node,
                                    src_path,
                                    dst_path,
                                    priority));
-            file_operations_.push_back(
-                {FileOpType::File, src_path, dst_path, priority, next_document_order_++});
+            ops.push_back({FileOpType::File, src_path, dst_path, priority, next_doc_order++});
             file_count++;
         }
         else if (name == "folder")
@@ -603,8 +670,7 @@ void FomodService::process_files_node(const pugi::xml_node& files_node,
                                    src_path,
                                    dst_path,
                                    priority));
-            file_operations_.push_back(
-                {FileOpType::Folder, src_path, dst_path, priority, next_document_order_++});
+            ops.push_back({FileOpType::Folder, src_path, dst_path, priority, next_doc_order++});
             folder_count++;
         }
         else
@@ -620,7 +686,9 @@ void FomodService::process_files_node(const pugi::xml_node& files_node,
 void FomodService::process_plugin_node(const pugi::xml_node& plugin_node,
                                        const std::string& src_base,
                                        const std::string& dst_base,
-                                       const FomodDependencyContext* context)
+                                       const FomodDependencyContext* context,
+                                       std::vector<FileOperation>& ops,
+                                       int& next_doc_order)
 {
     auto& logger = Logger::instance();
     std::string plugin_name = plugin_node.attribute("name").as_string("unknown");
@@ -646,7 +714,8 @@ void FomodService::process_plugin_node(const pugi::xml_node& plugin_node,
     if (current)
     {
         auto visible_node = current.child("visible");
-        if (visible_node && !evaluator.are_dependencies_met(visible_node))
+        auto deps_child = visible_node.child("dependencies");
+        if (visible_node && !evaluator.are_dependencies_met(deps_child ? deps_child : visible_node))
         {
             logger.log(std::format(
                 "[fomod] Skipping plugin \"{}\" due to unmet step visibility dependencies",
@@ -662,9 +731,9 @@ void FomodService::process_plugin_node(const pugi::xml_node& plugin_node,
     if (files_node)
     {
         logger.log(std::format("[fomod] Plugin \"{}\" has files node, processing...", plugin_name));
-        int before = static_cast<int>(file_operations_.size());
-        process_files_node(files_node, src_base, dst_base);
-        int after = static_cast<int>(file_operations_.size());
+        int before = static_cast<int>(ops.size());
+        process_files_node(files_node, src_base, dst_base, ops, next_doc_order);
+        int after = static_cast<int>(ops.size());
         logger.log(std::format(
             "[fomod] Plugin \"{}\": Added {} file operation(s)", plugin_name, after - before));
     }
@@ -682,13 +751,13 @@ int FomodService::get_priority(const pugi::xml_node& node)
     return 0;  // MO2 default priority is 0
 }
 
-void FomodService::execute_file_operations()
+int FomodService::execute_file_operations(std::vector<FileOperation>& ops)
 {
     auto& logger = Logger::instance();
     // MO2 uses stable sort: priority ascending, then XML document order as tiebreaker
     // Higher priority processed later = overwrites lower priority (last write wins)
-    std::stable_sort(file_operations_.begin(),
-                     file_operations_.end(),
+    std::stable_sort(ops.begin(),
+                     ops.end(),
                      [](const FileOperation& a, const FileOperation& b)
                      {
                          if (a.priority != b.priority)
@@ -696,10 +765,11 @@ void FomodService::execute_file_operations()
                          return a.document_order < b.document_order;
                      });
 
-    logger.log(std::format("[fomod] Executing {} file operations in priority order...",
-                           file_operations_.size()));
+    logger.log(
+        std::format("[fomod] Executing {} file operations in priority order...", ops.size()));
 
-    for (const auto& op : file_operations_)
+    int failed = 0;
+    for (const auto& op : ops)
     {
         try
         {
@@ -714,14 +784,22 @@ void FomodService::execute_file_operations()
         }
         catch (const std::exception& ex)
         {
-            logger.log(std::format("[fomod] ERROR: Failed to execute file operation: {} -> {}: {}",
-                                   op.source,
-                                   op.destination,
-                                   ex.what()));
+            ++failed;
+            logger.log_error(std::format("[fomod] Failed to execute file operation: {} -> {}: {}",
+                                         op.source,
+                                         op.destination,
+                                         ex.what()));
         }
     }
 
-    file_operations_.clear();
+    if (failed > 0)
+    {
+        logger.log_warning(
+            std::format("[fomod] {} of {} file operations failed", failed, ops.size()));
+    }
+
+    ops.clear();
+    return failed;
 }
 
 std::string FomodService::normalize_string(const std::string& value)
@@ -738,22 +816,8 @@ std::string FomodService::normalize_string(const std::string& value)
         return "";
     result = result.substr(start, end - start + 1);
 
-    // Decode XML entities
-    auto replace_all = [&](const std::string& from, const std::string& to)
-    {
-        size_t pos = 0;
-        while ((pos = result.find(from, pos)) != std::string::npos)
-        {
-            result.replace(pos, from.length(), to);
-            pos += to.length();
-        }
-    };
-
-    replace_all("&quot;", "\"");
-    replace_all("&amp;", "&");
-    replace_all("&lt;", "<");
-    replace_all("&gt;", ">");
-    replace_all("&apos;", "'");
+    // pugixml already decodes XML entities during parsing (as_string()
+    // returns decoded text), so no manual entity decoding is needed here.
 
     return result;
 }
@@ -762,7 +826,9 @@ std::string FomodService::make_plugin_key(const std::string& step,
                                           const std::string& group,
                                           const std::string& plugin)
 {
-    return to_lower(step) + "|" + to_lower(group) + "|" + to_lower(plugin);
+    // Use ASCII Unit Separator (0x1F) which cannot appear in XML text content,
+    // eliminating the risk of key collisions from names containing the separator.
+    return to_lower(step) + "\x1f" + to_lower(group) + "\x1f" + to_lower(plugin);
 }
 
 PluginType FomodService::evaluate_plugin_type(const pugi::xml_node& plugin_node,
@@ -823,7 +889,10 @@ void FomodService::auto_install_required_for_step(const pugi::xml_document& doc,
                                                   std::unordered_set<std::string>& processed_keys,
                                                   const std::string& src_base,
                                                   const std::string& dst_base,
-                                                  const FomodDependencyContext* context)
+                                                  const FomodDependencyContext* context,
+                                                  std::vector<FileOperation>& ops,
+                                                  int& next_doc_order,
+                                                  const std::unordered_set<std::string>* skip_steps)
 {
     auto& logger = Logger::instance();
     FomodDependencyEvaluator evaluator(plugin_flags_, context);
@@ -834,20 +903,19 @@ void FomodService::auto_install_required_for_step(const pugi::xml_document& doc,
     {
         std::string xml_step_name = step_node.attribute("name").as_string();
 
-        // Match by step name (case-insensitive, normalized)
-        auto lower = [](std::string s)
-        {
-            std::transform(
-                s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
-            return s;
-        };
+        // When step_name is empty, match all visible steps (catch-all for partial JSON).
+        // Skip steps already covered by explicit selections to avoid redundant work.
         if (!step_name.empty() &&
-            lower(normalize_string(xml_step_name)) != lower(normalize_string(step_name)))
+            to_lower(normalize_string(xml_step_name)) != to_lower(normalize_string(step_name)))
+            continue;
+
+        if (step_name.empty() && skip_steps && skip_steps->count(xml_step_name))
             continue;
 
         // Check step visibility
         auto visible = step_node.child("visible");
-        if (visible && !evaluator.are_dependencies_met(visible))
+        auto visible_deps = visible.child("dependencies");
+        if (visible && !evaluator.are_dependencies_met(visible_deps ? visible_deps : visible))
             continue;
 
         auto fg_parent = step_node.child("optionalFileGroups");
@@ -871,7 +939,8 @@ void FomodService::auto_install_required_for_step(const pugi::xml_document& doc,
                 {
                     logger.log(std::format("[fomod] Auto-installing Required plugin: \"{}\"",
                                            plugin_name));
-                    process_plugin_node(plugin_node, src_base, dst_base, context);
+                    process_plugin_node(
+                        plugin_node, src_base, dst_base, context, ops, next_doc_order);
                     processed_keys.insert(key);
                 }
             }
@@ -884,7 +953,9 @@ void FomodService::process_auto_install_plugins(
     const std::unordered_set<std::string>& processed_keys,
     const std::string& src_base,
     const std::string& dst_base,
-    const FomodDependencyContext* context)
+    const FomodDependencyContext* context,
+    std::vector<FileOperation>& ops,
+    int& next_doc_order)
 {
     auto& logger = Logger::instance();
     FomodDependencyEvaluator evaluator(plugin_flags_, context);
@@ -898,7 +969,8 @@ void FomodService::process_auto_install_plugins(
 
         // Check step visibility
         auto visible = step_node.child("visible");
-        if (visible && !evaluator.are_dependencies_met(visible))
+        auto visible_deps = visible.child("dependencies");
+        if (visible && !evaluator.are_dependencies_met(visible_deps ? visible_deps : visible))
             continue;
 
         auto fg_parent = step_node.child("optionalFileGroups");
@@ -927,9 +999,10 @@ void FomodService::process_auto_install_plugins(
                 auto files_node = plugin_node.child("files");
                 if (files_node)
                 {
-                    int before = static_cast<int>(file_operations_.size());
-                    process_files_node_filtered(files_node, src_base, dst_base, type);
-                    auto_file_count += static_cast<int>(file_operations_.size()) - before;
+                    int before = static_cast<int>(ops.size());
+                    process_files_node_filtered(
+                        files_node, src_base, dst_base, type, ops, next_doc_order);
+                    auto_file_count += static_cast<int>(ops.size()) - before;
                 }
             }
         }
@@ -946,7 +1019,9 @@ void FomodService::process_auto_install_plugins(
 void FomodService::process_files_node_filtered(const pugi::xml_node& files_node,
                                                const std::string& src_base,
                                                const std::string& dst_base,
-                                               PluginType plugin_type)
+                                               PluginType plugin_type,
+                                               std::vector<FileOperation>& ops,
+                                               int& next_doc_order)
 {
     auto& logger = Logger::instance();
 
@@ -969,23 +1044,14 @@ void FomodService::process_files_node_filtered(const pugi::xml_node& files_node,
         if (source.empty())
             continue;
 
-        // For <file> with empty destination, use the source filename.
-        // Destination ending with / or \ means "into this directory".
         std::string name = file_node.name();
-        if (name == "file" && destination.empty())
+        destination = resolve_file_destination(source, destination, name == "file");
+        if (!is_safe_destination(destination))
         {
-            auto slash = source.find_last_of("/\\");
-            destination = (slash != std::string::npos) ? source.substr(slash + 1) : source;
+            logger.log_warning(
+                std::format("[fomod] Skipping path-traversal destination: {}", destination));
+            continue;
         }
-        else if (name == "file" && !destination.empty() &&
-                 (destination.back() == '/' || destination.back() == '\\'))
-        {
-            auto slash = source.find_last_of("/\\");
-            auto filename = (slash != std::string::npos) ? source.substr(slash + 1) : source;
-            destination += filename;
-        }
-
-        destination = normalize_destination_for_join(destination);
         auto src_path = (fs::path(src_base) / source).string();
         auto dst_path = (fs::path(dst_base) / destination).string();
         int priority = get_priority(file_node);
@@ -998,11 +1064,11 @@ void FomodService::process_files_node_filtered(const pugi::xml_node& files_node,
                                    src_path,
                                    dst_path,
                                    priority));
-            file_operations_.push_back({name == "file" ? FileOpType::File : FileOpType::Folder,
-                                        src_path,
-                                        dst_path,
-                                        priority,
-                                        next_document_order_++});
+            ops.push_back({name == "file" ? FileOpType::File : FileOpType::Folder,
+                           src_path,
+                           dst_path,
+                           priority,
+                           next_doc_order++});
         }
     }
 }
