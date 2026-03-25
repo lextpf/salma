@@ -71,7 +71,16 @@ void FileOperations::copy_file(const fs::path& src, const fs::path& dst)
         Logger::instance().log_warning(std::format("[install] Missing file: {}", src.string()));
         return;
     }
-    fs::create_directories(dst.parent_path());
+    try
+    {
+        fs::create_directories(dst.parent_path());
+    }
+    catch (const fs::filesystem_error& ex)
+    {
+        Logger::instance().log_error(std::format(
+            "[install] Failed to create directory {}: {}", dst.parent_path().string(), ex.what()));
+        return;
+    }
     try
     {
         // Always overwrites existing destination files.
@@ -91,28 +100,50 @@ void FileOperations::copy_folder(const fs::path& src, const fs::path& dst)
         Logger::instance().log_warning(std::format("[install] Missing folder: {}", src.string()));
         return;
     }
-    fs::create_directories(dst);
-    // Recursive traversal - overwrites existing files at each destination.
-    for (const auto& entry : fs::recursive_directory_iterator(src))
+    try
     {
-        auto relative = fs::relative(entry.path(), src);
-        auto dest_path = dst / relative;
-        try
+        fs::create_directories(dst);
+    }
+    catch (const fs::filesystem_error& ex)
+    {
+        Logger::instance().log_error(
+            std::format("[install] Failed to create directory {}: {}", dst.string(), ex.what()));
+        return;
+    }
+    try
+    {
+        // Recursive traversal - overwrites existing files at each destination.
+        // skip_permission_denied avoids throwing on inaccessible entries.
+        for (const auto& entry :
+             fs::recursive_directory_iterator(src, fs::directory_options::skip_permission_denied))
         {
-            if (fs::is_directory(entry))
+            if (fs::is_symlink(entry.symlink_status()))
+                continue;
+
+            auto relative = fs::relative(entry.path(), src);
+            auto dest_path = dst / relative;
+            try
             {
-                fs::create_directories(dest_path);
+                if (fs::is_directory(entry))
+                {
+                    fs::create_directories(dest_path);
+                }
+                else
+                {
+                    fs::create_directories(dest_path.parent_path());
+                    fs::copy_file(entry.path(), dest_path, fs::copy_options::overwrite_existing);
+                }
             }
-            else
+            catch (const fs::filesystem_error& ex)
             {
-                fs::create_directories(dest_path.parent_path());
-                fs::copy_file(entry.path(), dest_path, fs::copy_options::overwrite_existing);
+                Logger::instance().log_error(std::format("[install] Copy error: {}", ex.what()));
             }
         }
-        catch (const fs::filesystem_error& ex)
-        {
-            Logger::instance().log_error(std::format("[install] Copy error: {}", ex.what()));
-        }
+    }
+    catch (const fs::filesystem_error& ex)
+    {
+        Logger::instance().log_error(
+            std::format("[install] Failed to iterate directory {}: {}", src.string(), ex.what()));
     }
 }
 
@@ -120,17 +151,34 @@ void FileOperations::copy_directory_contents(const fs::path& src, const fs::path
 {
     // Copies immediate children of src into dst (one level for files,
     // recursive for subdirectories via copy_folder).
-    fs::create_directories(dst);
-    for (const auto& entry : fs::directory_iterator(src))
+    try
     {
-        if (fs::is_directory(entry))
+        fs::create_directories(dst);
+    }
+    catch (const fs::filesystem_error& ex)
+    {
+        Logger::instance().log_error(
+            std::format("[install] Failed to create directory {}: {}", dst.string(), ex.what()));
+        return;
+    }
+    try
+    {
+        for (const auto& entry : fs::directory_iterator(src))
         {
-            copy_folder(entry.path(), dst / entry.path().filename());
+            if (fs::is_directory(entry))
+            {
+                copy_folder(entry.path(), dst / entry.path().filename());
+            }
+            else
+            {
+                copy_file(entry.path(), dst / entry.path().filename());
+            }
         }
-        else
-        {
-            copy_file(entry.path(), dst / entry.path().filename());
-        }
+    }
+    catch (const fs::filesystem_error& ex)
+    {
+        Logger::instance().log_error(
+            std::format("[install] Failed to iterate directory {}: {}", src.string(), ex.what()));
     }
 }
 
