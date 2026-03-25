@@ -21,8 +21,12 @@ add_library(mo2-core SHARED
     src/FomodService.cpp
     src/FomodIRParser.cpp
     src/FomodForwardSimulator.cpp
+    src/FomodCSPPrecompute.cpp
+    src/FomodCSPOptions.cpp
     src/FomodCSPSolver.cpp
+    src/FomodCSPSolverPhases.cpp
     src/FomodPropagator.cpp
+    src/FomodInferenceAtoms.cpp
     src/FomodInferenceService.cpp
     src/InstallationService.cpp
     src/CApi.cpp
@@ -56,6 +60,12 @@ add_executable(mo2-server
     src/main.cpp
     src/InstallationController.cpp
     src/Mo2Controller.cpp
+    src/Mo2ConfigController.cpp
+    src/Mo2FomodController.cpp
+    src/Mo2LogController.cpp
+    src/Mo2TestController.cpp
+    src/Mo2PluginController.cpp
+    src/Mo2Helpers.cpp
     src/ConfigService.cpp
     src/MultipartHandler.cpp
     src/StaticFileHandler.cpp
