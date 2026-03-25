@@ -5,6 +5,7 @@
 
 #include <array>
 #include <expected>
+#include <filesystem>
 #include <optional>
 #include <pugixml.hpp>
 #include <string>
@@ -43,7 +44,8 @@ struct EnumStringMap
 MO2_API std::string to_lower(const std::string& s);
 
 /// Normalize an archive/mod path: lowercase, backslash-to-forward-slash,
-/// strip leading "./" and "/", strip trailing "/", collapse "//".
+/// strip leading "./" and "/", strip trailing "/", collapse "//",
+/// and remove "." and ".." path components.
 MO2_API std::string normalize_path(const std::string& p);
 
 /// Generate a random hex string of the given length using a thread-local RNG.
@@ -116,6 +118,24 @@ struct HashDispatch
         return std::nullopt;
     }
 };
+
+/// Strip leading slashes and "./" from FOMOD destinations so they are
+/// safe to join with a mod-root directory path.
+MO2_API std::string normalize_destination_for_join(std::string destination);
+
+/// Resolve a <file>/<folder> node's destination, handling empty destinations
+/// and trailing-slash directory semantics, then normalize for filesystem join.
+MO2_API std::string resolve_file_destination(const std::string& source,
+                                             const std::string& raw_destination,
+                                             bool is_file);
+
+/// Reject destination paths that would escape the mod directory via traversal
+/// or absolute paths.  Used by both FomodService and FomodInferenceAtoms to
+/// validate file/folder destinations before queuing file operations.
+MO2_API bool is_safe_destination(const std::string& dest);
+
+/// Validate that `child` is strictly inside `parent` (no traversal).
+MO2_API bool is_inside(const std::filesystem::path& parent, const std::filesystem::path& child);
 
 /// Typed error propagation alias.
 template <typename T>
