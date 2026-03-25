@@ -3,13 +3,29 @@
 #include <crow.h>
 #include <nlohmann/json.hpp>
 
-#include <atomic>
-#include <mutex>
+#include <optional>
 #include <string>
-#include <thread>
+
+#include "BackgroundJob.h"
 
 namespace mo2server
 {
+
+/**
+ * @struct InstallJobResult
+ * @brief Result payload stored by the background installation job.
+ *
+ * Separate from mo2core::InstallResult because the background job also
+ * tracks mod_name (derived from the upload filename or user input),
+ * which is not part of the core install result.
+ */
+struct InstallJobResult
+{
+    bool success = false;
+    std::string mod_path;
+    std::string mod_name;
+    std::string error;
+};
 
 /**
  * @class InstallationController
@@ -34,12 +50,15 @@ namespace mo2server
  *
  * | Route              | Status  | Body                                                        |
  * |--------------------|---------|-------------------------------------------------------------|
- * | `POST .../upload`  | **200** | `{ "success": true, "modPath": "...", "modName": "..." }`   |
+ * | `POST .../upload`  | **200** | `{ "started": true, "modName": "..." }`                     |
  * |                    | **400** | `{ "error": "No file uploaded or file is empty" }`          |
  * |                    | **400** | `{ "error": "No modPath provided and MO2 mods path is..." }`|
- * | `POST .../install` | **200** | `{ "success": true, "outputPath": "..." }`                  |
+ * |                    | **409** | `{ "error": "An installation is already running" }`         |
+ * | `POST .../install` | **200** | `{ "started": true }`                                       |
  * |                    | **400** | `{ "error": "ArchivePath and ModPath are required" }`       |
- * | `GET .../status/x` | **200** | `{ "status": "completed", "jobId": "..." }`                 |
+ * |                    | **409** | `{ "error": "An installation is already running" }`         |
+ * | `GET .../status/x` | **200** | `{ "running": bool, "success"?: bool, "modPath"?: "...",    |
+ * |                    |         |   "modName"?: "...", "error"?: "..." }`                     |
  * | *(any)*            | **500** | `{ "error": "..." }`                                        |
  *
  * ## :material-code-tags: Usage Example
@@ -66,13 +85,6 @@ class InstallationController
 {
 public:
     InstallationController() = default;
-    ~InstallationController()
-    {
-        if (install_thread_.joinable())
-        {
-            install_thread_.join();
-        }
-    }
     InstallationController(const InstallationController&) = delete;
     InstallationController& operator=(const InstallationController&) = delete;
     /**
@@ -112,14 +124,20 @@ public:
     crow::response handle_status(const std::string& job_id);
 
 private:
-    std::mutex install_mutex_;
-    std::atomic<bool> install_running_{false};
-    bool install_has_result_{false};
-    bool install_last_success_{false};
-    std::string install_result_mod_path_;
-    std::string install_result_mod_name_;
-    std::string install_last_error_;
-    std::thread install_thread_;
+    struct UploadContext
+    {
+        std::string temp_path;
+        std::string filename;
+        std::string mod_name;
+        std::string mod_path;
+        std::string json_path;
+        bool json_is_temp = false;
+    };
+
+    std::optional<UploadContext> parse_and_validate_upload(const crow::request& req,
+                                                           crow::response& error_out);
+
+    BackgroundJob<InstallJobResult> job_;
 };
 
 }  // namespace mo2server
