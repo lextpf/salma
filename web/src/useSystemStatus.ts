@@ -61,6 +61,8 @@ export function useSystemStatus() {
 
   // Always-current ref for use inside timers and external callbacks
   const refreshRef = useRef(refresh)
+  // Latest-ref pattern: keep the ref current without re-subscribing consumers.
+  // eslint-disable-next-line react-hooks/immutability
   useEffect(() => { refreshRef.current = refresh })
 
   // Initial fetch + cleanup
