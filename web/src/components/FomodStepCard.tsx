@@ -1,5 +1,7 @@
+import type { FomodStep } from '../types'
+
 interface FomodStepCardProps {
-  step: Record<string, unknown>
+  step: FomodStep
   index: number
 }
 
@@ -46,7 +48,7 @@ function normalizePlugins(value: unknown): NormalizedPlugin[] {
   return value.map((plugin, index) => normalizePlugin(plugin, index))
 }
 
-function normalizeGroups(step: Record<string, unknown>): NormalizedGroup[] {
+function normalizeGroups(step: FomodStep): NormalizedGroup[] {
   const rawGroups = step.optionalFileGroups ?? step.groups
   if (Array.isArray(rawGroups) && rawGroups.length > 0) {
     return rawGroups.map((group, gi) => {
@@ -70,7 +72,7 @@ function normalizeGroups(step: Record<string, unknown>): NormalizedGroup[] {
 }
 
 export default function FomodStepCard({ step, index }: FomodStepCardProps) {
-  const name = (step.name as string) || `Step ${index + 1}`
+  const name = step.name || `Step ${index + 1}`
   const groups = normalizeGroups(step)
 
   return (

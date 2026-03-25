@@ -4,6 +4,7 @@ import type { FomodEntry } from '../types'
 interface FomodListItemProps {
   fomod: FomodEntry
   onDelete: (name: string) => void
+  disabled?: boolean
 }
 
 function formatSize(bytes: number): string {
@@ -19,7 +20,7 @@ function formatDate(epochMs: number): string {
   })
 }
 
-export default function FomodListItem({ fomod, onDelete }: FomodListItemProps) {
+export default function FomodListItem({ fomod, onDelete, disabled }: FomodListItemProps) {
   return (
     <div className="group flex items-center gap-4 rounded-xl bg-surface-container p-4
                     transition-colors duration-150 hover:bg-surface-container-high fomod-entry-glow hover-intent">
@@ -47,8 +48,9 @@ export default function FomodListItem({ fomod, onDelete }: FomodListItemProps) {
       {/* Actions */}
       <button
         onClick={() => onDelete(fomod.name)}
-        className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-error/60 bg-transparent
-                   hover:bg-error/10 hover:text-error transition-colors opacity-0 group-hover:opacity-100"
+        disabled={disabled}
+        className={`shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100
+                   ${disabled ? 'text-outline/40 cursor-not-allowed' : 'text-error/60 bg-transparent hover:bg-error/10 hover:text-error'}`}
         title="Delete"
       >
         <i className="fa-duotone fa-solid fa-trash-can text-xs" />
