@@ -15,14 +15,23 @@
 namespace mo2core
 {
 
-/// Bidirectional constexpr enum <-> string mapping.
+/**
+ * @brief Bidirectional constexpr enum <-> string mapping.
+ * @tparam Enum  The enum type to map.
+ * @tparam N     Number of entries in the mapping table.
+ */
 template <typename Enum, std::size_t N>
 struct EnumStringMap
 {
-    std::array<std::pair<Enum, std::string_view>, N> entries;
-    Enum default_value;
-    std::string_view default_string = "Unknown";
+    std::array<std::pair<Enum, std::string_view>, N> entries;  ///< Enum/string pairs.
+    Enum default_value;                           ///< Returned by from_string() on lookup miss.
+    std::string_view default_string = "Unknown";  ///< Returned by to_string() on lookup miss.
 
+    /**
+     * @brief Look up an enum value by its string representation.
+     * @param s  String to search for (exact match).
+     * @return The matching enum value, or @c default_value if not found.
+     */
     [[nodiscard]] constexpr Enum from_string(std::string_view s) const noexcept
     {
         for (const auto& [e, str] : entries)
@@ -31,6 +40,11 @@ struct EnumStringMap
         return default_value;
     }
 
+    /**
+     * @brief Look up the string representation of an enum value.
+     * @param e  Enum value to search for.
+     * @return The matching string, or @c default_string if not found.
+     */
     [[nodiscard]] constexpr std::string_view to_string(Enum e) const noexcept
     {
         for (const auto& [val, str] : entries)
@@ -40,33 +54,130 @@ struct EnumStringMap
     }
 };
 
-/// Lowercase a string (safe for MSVC plain char via unsigned char cast).
+/**
+ * @brief Variable template providing the canonical EnumStringMap for each enum type.
+ *
+ * Specialize this for each enum that supports bidirectional string conversion.
+ * The primary template provides an empty map (always returns the zero-initialized
+ * enum / "Unknown").
+ *
+ * @code
+ * template <>
+ * inline constexpr auto enum_map<MyEnum> = EnumStringMap<MyEnum, 2>{
+ *     std::array<std::pair<MyEnum, std::string_view>, 2>{{
+ *         {MyEnum::A, "A"},
+ *         {MyEnum::B, "B"},
+ *     }},
+ *     MyEnum::A,  // default on lookup miss
+ * };
+ * @endcode
+ */
+template <typename Enum>
+inline constexpr auto enum_map = EnumStringMap<Enum, 0>{};
+
+/**
+ * @brief Parse a string into an enum value using the registered EnumStringMap.
+ * @tparam Enum  The enum type (must have an @c enum_map specialization visible).
+ * @param s  String to look up.
+ * @return Matching enum value, or the map's default on miss.
+ */
+template <typename Enum>
+[[nodiscard]] constexpr Enum parse_enum(std::string_view s) noexcept
+{
+    return enum_map<Enum>.from_string(s);
+}
+
+/**
+ * @brief Convert an enum value to its string representation.
+ * @tparam Enum  The enum type (must have an @c enum_map specialization visible).
+ * @param e  Enum value to look up.
+ * @return Matching string, or "Unknown" on miss.
+ */
+template <typename Enum>
+[[nodiscard]] constexpr std::string_view enum_to_string(Enum e) noexcept
+{
+    return enum_map<Enum>.to_string(e);
+}
+
+/** PluginType enum map specialization. */
+template <>
+inline constexpr auto enum_map<PluginType> = EnumStringMap<PluginType, 5>{
+    std::array<std::pair<PluginType, std::string_view>, 5>{{
+        {PluginType::Required, "Required"},
+        {PluginType::Recommended, "Recommended"},
+        {PluginType::Optional, "Optional"},
+        {PluginType::NotUsable, "NotUsable"},
+        {PluginType::CouldBeUsable, "CouldBeUsable"},
+    }},
+    PluginType::Optional,
+};
+
+/**
+ * @brief Lowercase a string (safe for MSVC plain char via unsigned char cast).
+ * @param s  Input string.
+ * @return A new string with all characters converted to lowercase.
+ */
 MO2_API std::string to_lower(const std::string& s);
 
-/// Normalize an archive/mod path: lowercase, backslash-to-forward-slash,
-/// strip leading "./" and "/", strip trailing "/", collapse "//",
-/// and remove "." and ".." path components.
+/**
+ * @brief Normalize an archive/mod path: lowercase, backslash-to-forward-slash,
+ *   strip leading "./" and "/", strip trailing "/", collapse "//",
+ *   and remove "." and ".." path components.
+ * @param p  Raw path string (e.g. from an archive entry or FOMOD node).
+ * @return Cleaned path string.
+ * @post Output is lowercase, uses forward slashes only, and has no
+ *   leading/trailing slashes.
+ */
 MO2_API std::string normalize_path(const std::string& p);
 
-/// Generate a random hex string of the given length using a thread-local RNG.
+/**
+ * @brief Generate a random hex string of the given length using a thread-local RNG.
+ * @param length  Number of hex characters (default 12).
+ * @return A lowercase hex string of exactly @p length characters.
+ */
 MO2_API std::string random_hex_string(size_t length = 12);
 
-/// Respect the FOMOD `order` attribute on installSteps, optionalFileGroups, and plugins.
-/// Values: "Ascending" (default, alphabetical by name), "Descending", "Explicit" (document order).
+/**
+ * @brief Respect the FOMOD `order` attribute on installSteps, optionalFileGroups, and plugins.
+ *
+ * Values: "Ascending" (default, alphabetical by name), "Descending", "Explicit" (document order).
+ * @param parent      XML node whose `order` attribute is read.
+ * @param child_name  Tag name of the child nodes to collect and sort.
+ * @return Sorted vector of child nodes.
+ */
 MO2_API std::vector<pugi::xml_node> get_ordered_nodes(const pugi::xml_node& parent,
                                                       const char* child_name);
 
-/// Parse an XML boolean attribute using XML Schema semantics.
-/// Returns true for "true"/"1" (case-insensitive), false otherwise.
+/**
+ * @brief Parse an XML boolean attribute using XML Schema semantics.
+ *
+ * Returns true for "true"/"1" (case-insensitive), false otherwise.
+ * A null/missing attribute returns false.
+ * @param attr  The XML attribute to evaluate.
+ * @return @c true if the attribute value is "true" or "1".
+ */
 MO2_API bool xml_bool_attribute_true(const pugi::xml_attribute& attr);
 
-/// Map a FOMOD plugin type name string to its PluginType enum value.
+/**
+ * @brief Map a FOMOD plugin type name string to its PluginType enum value.
+ * @param type_name  FOMOD type name (e.g. "Required", "Recommended").
+ * @return Corresponding PluginType, or PluginType::Optional if unrecognized.
+ */
 MO2_API PluginType parse_plugin_type_string(const std::string& type_name);
 
-/// Map a PluginType enum value to its FOMOD type name string.
+/**
+ * @brief Map a PluginType enum value to its FOMOD type name string.
+ * @param type  PluginType enum value.
+ * @return String representation (e.g. "Required"), or "Unknown" if not found.
+ */
 MO2_API std::string_view plugin_type_to_string(PluginType type);
 
-/// FNV-1a 64-bit hash.
+/**
+ * @brief FNV-1a 64-bit hash.
+ * @param data  Pointer to the byte sequence to hash.
+ * @param size  Number of bytes to hash.
+ * @return 64-bit FNV-1a hash value.
+ */
 MO2_API constexpr uint64_t fnv1a_hash(const char* data, size_t size)
 {
     uint64_t hash = 14695981039346656037ULL;
@@ -78,15 +189,30 @@ MO2_API constexpr uint64_t fnv1a_hash(const char* data, size_t size)
     return hash;
 }
 
-/// Compile-time string hash literal for switch-case dispatch.
-/// Usage: case "flagDependency"_h: ...
+/**
+ * @brief Compile-time string hash literal for switch-case dispatch.
+ *
+ * Usage:
+ * ```cpp
+ * case "flagDependency"_h: ...
+ * ```
+ * @param s  Pointer to the string literal.
+ * @param n  Length of the string literal.
+ * @return Compile-time FNV-1a hash of the string.
+ */
 consteval uint64_t operator""_h(const char* s, size_t n)
 {
     return fnv1a_hash(s, n);
 }
 
-/// Compile-time collision checker for hash dispatch tables.
-/// static_assert(no_hash_collisions(std::array{ "a"sv, "b"sv, "c"sv }));
+/**
+ * @brief Compile-time collision checker for hash dispatch tables.
+ *
+ * ```cpp
+ * static_assert(no_hash_collisions(std::array{ "a"sv, "b"sv, "c"sv }));
+ * ```
+ * @tparam N  Number of keys to check.
+ */
 template <std::size_t N>
 consteval bool no_hash_collisions(const std::array<std::string_view, N>& keys)
 {
@@ -98,17 +224,27 @@ consteval bool no_hash_collisions(const std::array<std::string_view, N>& keys)
     return true;
 }
 
-/// Compile-time hash dispatch table: maps string keys to values via FNV-1a.
+/**
+ * @brief Compile-time hash dispatch table: maps string keys to values via FNV-1a.
+ * @tparam T  Value type stored in each entry.
+ * @tparam N  Number of entries in the dispatch table.
+ */
 template <typename T, std::size_t N>
 struct HashDispatch
 {
+    /** @brief A single hash-to-value entry. */
     struct Entry
     {
-        uint64_t hash;
-        T value;
+        uint64_t hash;  ///< Precomputed FNV-1a hash of the key.
+        T value;        ///< Value associated with the key.
     };
-    std::array<Entry, N> entries;
+    std::array<Entry, N> entries;  ///< The dispatch table entries.
 
+    /**
+     * @brief Look up a value by its string key.
+     * @param key  String to hash and search for.
+     * @return The matching value, or @c std::nullopt on miss.
+     */
     [[nodiscard]] constexpr std::optional<T> lookup(std::string_view key) const noexcept
     {
         uint64_t h = fnv1a_hash(key.data(), key.size());
@@ -119,25 +255,46 @@ struct HashDispatch
     }
 };
 
-/// Strip leading slashes and "./" from FOMOD destinations so they are
-/// safe to join with a mod-root directory path.
+/**
+ * @brief Strip leading slashes and "./" from FOMOD destinations so they are
+ *   safe to join with a mod-root directory path.
+ * @param destination  Raw FOMOD destination string (taken by value).
+ * @return Cleaned destination with leading slashes and "./" removed.
+ */
 MO2_API std::string normalize_destination_for_join(std::string destination);
 
-/// Resolve a <file>/<folder> node's destination, handling empty destinations
-/// and trailing-slash directory semantics, then normalize for filesystem join.
+/**
+ * @brief Resolve a \<file\>/\<folder\> node's destination, handling empty destinations
+ *   and trailing-slash directory semantics, then normalize for filesystem join.
+ * @param source           Source path from the FOMOD node.
+ * @param raw_destination  Raw destination attribute value (may be empty).
+ * @param is_file          True for \<file\> nodes, false for \<folder\> nodes.
+ * @return Normalized destination path ready for filesystem join.
+ */
 MO2_API std::string resolve_file_destination(const std::string& source,
                                              const std::string& raw_destination,
                                              bool is_file);
 
-/// Reject destination paths that would escape the mod directory via traversal
-/// or absolute paths.  Used by both FomodService and FomodInferenceAtoms to
-/// validate file/folder destinations before queuing file operations.
+/**
+ * @brief Reject destination paths that would escape the mod directory via traversal
+ *   or absolute paths.
+ *
+ * Used by both FomodService and FomodInferenceAtoms to validate file/folder
+ * destinations before queuing file operations.
+ * @param dest  Destination path to validate.
+ * @return @c true if the destination is safe (no traversal or absolute path).
+ */
 MO2_API bool is_safe_destination(const std::string& dest);
 
-/// Validate that `child` is strictly inside `parent` (no traversal).
+/**
+ * @brief Validate that @p child is strictly inside @p parent (no traversal).
+ * @param parent  The directory that should contain the child.
+ * @param child   The path to test.
+ * @return @c true if @p child resolves to a location inside @p parent.
+ */
 MO2_API bool is_inside(const std::filesystem::path& parent, const std::filesystem::path& child);
 
-/// Typed error propagation alias.
+/** @brief Typed error propagation alias (@c std::expected with a string error). */
 template <typename T>
 using Result = std::expected<T, std::string>;
 
