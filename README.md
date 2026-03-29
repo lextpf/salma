@@ -5,7 +5,7 @@
 
 🎀 [Features](#features) | 💃 [Quick Start](#quick-start) | 📘 [Documentation](#documentation) | 🤝 [Contributing](./CONTRIBUTING.md)
 
-![ReactJS](https://img.shields.io/badge/React-TSX-61DAFB.svg?style=flat&logo=data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMjQgMjQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGcgaWQ9IlNWR1JlcG9fYmdDYXJyaWVyIiBzdHJva2Utd2lkdGg9IjAiPjwvZz48ZyBpZD0iU1ZHUmVwb190cmFjZXJDYXJyaWVyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjwvZz48ZyBpZD0iU1ZHUmVwb19pY29uQ2FycmllciI+IDxwYXRoIGQ9Ik0xMi4wMDAyIDEyVjE0QzEzLjEwNDggMTQgMTQuMDAwMiAxMy4xMDQ1IDE0LjAwMDIgMTJIMTIuMDAwMlpNMTIuMDAwMiAxMkgxMC4wMDAyQzEwLjAwMDIgMTMuMTA0NSAxMC44OTU2IDE0IDEyLjAwMDIgMTRWMTJaTTEyLjAwMDIgMTJWOS45OTk5NUMxMC44OTU2IDkuOTk5OTUgMTAuMDAwMiAxMC44OTU0IDEwLjAwMDIgMTJIMTIuMDAwMlpNMTIuMDAwMiAxMkgxNC4wMDAyQzE0LjAwMDIgMTAuODk1NCAxMy4xMDQ4IDkuOTk5OTUgMTIuMDAwMiA5Ljk5OTk1VjEyWk0xMi4wMDAyIDEzSDEyLjAxMDJWMTFIMTIuMDAwMlYxM1pNMTQuODI4NiAxNC44Mjg0QzEyLjc1NzkgMTYuODk5MSAxMC41MzQ1IDE4LjM1NjYgOC42NDkwNyAxOS4wNjM2QzYuNjcwNzYgMTkuODA1NSA1LjQ1NzY0IDE5LjU5OTUgNC45MjkxMyAxOS4wNzFMMy41MTQ5MiAyMC40ODUyQzQuOTM5MDIgMjEuOTA5MyA3LjIzNDg4IDIxLjcyOTkgOS4zNTEzMiAyMC45MzYzQzExLjU2MDYgMjAuMTA3OCAxNC4wMTc4IDE4LjQ2NzcgMTYuMjQyOCAxNi4yNDI2TDE0LjgyODYgMTQuODI4NFpNNC45MjkxMyAxOS4wNzFDNC40MDA2MSAxOC41NDI1IDQuMTk0NjYgMTcuMzI5NCA0LjkzNjUzIDE1LjM1MTFDNS42NDM1OCAxMy40NjU2IDcuMTAxMDYgMTEuMjQyMiA5LjE3MTc3IDkuMTcxNTJMNy43NTc1NiA3Ljc1NzMxQzUuNTMyNSA5Ljk4MjM3IDMuODkyMzUgMTIuNDM5NSAzLjA2Mzg3IDE0LjY0ODhDMi4yNzAyIDE2Ljc2NTMgMi4wOTA4MSAxOS4wNjExIDMuNTE0OTIgMjAuNDg1Mkw0LjkyOTEzIDE5LjA3MVpNOS4xNzE3NyA5LjE3MTUyQzExLjI0MjUgNy4xMDA4MiAxMy40NjU4IDUuNjQzMzMgMTUuMzUxMyA0LjkzNjI4QzE3LjMyOTYgNC4xOTQ0MSAxOC41NDI3IDQuNDAwMzcgMTkuMDcxMyA0LjkyODg4TDIwLjQ4NTUgMy41MTQ2N0MxOS4wNjE0IDIuMDkwNTYgMTYuNzY1NSAyLjI2OTk2IDE0LjY0OTEgMy4wNjM2MkMxMi40Mzk4IDMuODkyMSA5Ljk4MjYyIDUuNTMyMjUgNy43NTc1NiA3Ljc1NzMxTDkuMTcxNzcgOS4xNzE1MlpNMTkuMDcxMyA0LjkyODg4QzE5LjU5OTggNS40NTc0IDE5LjgwNTcgNi42NzA1MSAxOS4wNjM5IDguNjQ4ODNDMTguMzU2OCAxMC41MzQzIDE2Ljg5OTMgMTIuNzU3NyAxNC44Mjg2IDE0LjgyODRMMTYuMjQyOCAxNi4yNDI2QzE4LjQ2NzkgMTQuMDE3NSAyMC4xMDggMTEuNTYwNCAyMC45MzY1IDkuMzUxMDhDMjEuNzMwMiA3LjIzNDY0IDIxLjkwOTYgNC45Mzg3OCAyMC40ODU1IDMuNTE0NjdMMTkuMDcxMyA0LjkyODg4Wk0xNC44Mjg2IDkuMTcxNTJDMTYuODk5MyAxMS4yNDIyIDE4LjM1NjggMTMuNDY1NiAxOS4wNjM5IDE1LjM1MTFDMTkuODA1NyAxNy4zMjk0IDE5LjU5OTggMTguNTQyNSAxOS4wNzEzIDE5LjA3MUwyMC40ODU1IDIwLjQ4NTJDMjEuOTA5NiAxOS4wNjExIDIxLjczMDIgMTYuNzY1MyAyMC45MzY1IDE0LjY0ODhDMjAuMTA4IDEyLjQzOTUgMTguNDY3OSA5Ljk4MjM3IDE2LjI0MjggNy43NTczMUwxNC44Mjg2IDkuMTcxNTJaTTE5LjA3MTMgMTkuMDcxQzE4LjU0MjcgMTkuNTk5NSAxNy4zMjk2IDE5LjgwNTUgMTUuMzUxMyAxOS4wNjM2QzEzLjQ2NTggMTguMzU2NiAxMS4yNDI1IDE2Ljg5OTEgOS4xNzE3NyAxNC44Mjg0TDcuNzU3NTYgMTYuMjQyNkM5Ljk4MjYyIDE4LjQ2NzcgMTIuNDM5OCAyMC4xMDc4IDE0LjY0OTEgMjAuOTM2M0MxNi43NjU1IDIxLjcyOTkgMTkuMDYxNCAyMS45MDkzIDIwLjQ4NTUgMjAuNDg1MkwxOS4wNzEzIDE5LjA3MVpNOS4xNzE3NyAxNC44Mjg0QzcuMTAxMDYgMTIuNzU3NyA1LjY0MzU4IDEwLjUzNDMgNC45MzY1MyA4LjY0ODgzQzQuMTk0NjYgNi42NzA1MSA0LjQwMDYxIDUuNDU3NCA0LjkyOTEzIDQuOTI4ODhMMy41MTQ5MSAzLjUxNDY3QzIuMDkwODEgNC45Mzg3OCAyLjI3MDIgNy4yMzQ2NCAzLjA2Mzg3IDkuMzUxMDhDMy44OTIzNSAxMS41NjA0IDUuNTMyNSAxNC4wMTc1IDcuNzU3NTYgMTYuMjQyNkw5LjE3MTc3IDE0LjgyODRaTTQuOTI5MTMgNC45Mjg4OEM1LjQ1NzY0IDQuNDAwMzcgNi42NzA3NiA0LjE5NDQxIDguNjQ5MDcgNC45MzYyOEMxMC41MzQ1IDUuNjQzMzMgMTIuNzU3OSA3LjEwMDgyIDE0LjgyODYgOS4xNzE1MkwxNi4yNDI4IDcuNzU3MzFDMTQuMDE3OCA1LjUzMjI1IDExLjU2MDYgMy44OTIxIDkuMzUxMzIgMy4wNjM2MkM3LjIzNDg4IDIuMjY5OTYgNC45MzkwMiAyLjA5MDU2IDMuNTE0OTEgMy41MTQ2N0w0LjkyOTEzIDQuOTI4ODhaIiBmaWxsPSIjZmZmZmZmIj48L3BhdGg+IDwvZz48L3N2Zz4=)
+![ReactJS](https://img.shields.io/badge/React-TSX-149ECA.svg?style=flat&logo=data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMjQgMjQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGcgaWQ9IlNWR1JlcG9fYmdDYXJyaWVyIiBzdHJva2Utd2lkdGg9IjAiPjwvZz48ZyBpZD0iU1ZHUmVwb190cmFjZXJDYXJyaWVyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjwvZz48ZyBpZD0iU1ZHUmVwb19pY29uQ2FycmllciI+IDxwYXRoIGQ9Ik0xMi4wMDAyIDEyVjE0QzEzLjEwNDggMTQgMTQuMDAwMiAxMy4xMDQ1IDE0LjAwMDIgMTJIMTIuMDAwMlpNMTIuMDAwMiAxMkgxMC4wMDAyQzEwLjAwMDIgMTMuMTA0NSAxMC44OTU2IDE0IDEyLjAwMDIgMTRWMTJaTTEyLjAwMDIgMTJWOS45OTk5NUMxMC44OTU2IDkuOTk5OTUgMTAuMDAwMiAxMC44OTU0IDEwLjAwMDIgMTJIMTIuMDAwMlpNMTIuMDAwMiAxMkgxNC4wMDAyQzE0LjAwMDIgMTAuODk1NCAxMy4xMDQ4IDkuOTk5OTUgMTIuMDAwMiA5Ljk5OTk1VjEyWk0xMi4wMDAyIDEzSDEyLjAxMDJWMTFIMTIuMDAwMlYxM1pNMTQuODI4NiAxNC44Mjg0QzEyLjc1NzkgMTYuODk5MSAxMC41MzQ1IDE4LjM1NjYgOC42NDkwNyAxOS4wNjM2QzYuNjcwNzYgMTkuODA1NSA1LjQ1NzY0IDE5LjU5OTUgNC45MjkxMyAxOS4wNzFMMy41MTQ5MiAyMC40ODUyQzQuOTM5MDIgMjEuOTA5MyA3LjIzNDg4IDIxLjcyOTkgOS4zNTEzMiAyMC45MzYzQzExLjU2MDYgMjAuMTA3OCAxNC4wMTc4IDE4LjQ2NzcgMTYuMjQyOCAxNi4yNDI2TDE0LjgyODYgMTQuODI4NFpNNC45MjkxMyAxOS4wNzFDNC40MDA2MSAxOC41NDI1IDQuMTk0NjYgMTcuMzI5NCA0LjkzNjUzIDE1LjM1MTFDNS42NDM1OCAxMy40NjU2IDcuMTAxMDYgMTEuMjQyMiA5LjE3MTc3IDkuMTcxNTJMNy43NTc1NiA3Ljc1NzMxQzUuNTMyNSA5Ljk4MjM3IDMuODkyMzUgMTIuNDM5NSAzLjA2Mzg3IDE0LjY0ODhDMi4yNzAyIDE2Ljc2NTMgMi4wOTA4MSAxOS4wNjExIDMuNTE0OTIgMjAuNDg1Mkw0LjkyOTEzIDE5LjA3MVpNOS4xNzE3NyA5LjE3MTUyQzExLjI0MjUgNy4xMDA4MiAxMy40NjU4IDUuNjQzMzMgMTUuMzUxMyA0LjkzNjI4QzE3LjMyOTYgNC4xOTQ0MSAxOC41NDI3IDQuNDAwMzcgMTkuMDcxMyA0LjkyODg4TDIwLjQ4NTUgMy41MTQ2N0MxOS4wNjE0IDIuMDkwNTYgMTYuNzY1NSAyLjI2OTk2IDE0LjY0OTEgMy4wNjM2MkMxMi40Mzk4IDMuODkyMSA5Ljk4MjYyIDUuNTMyMjUgNy43NTc1NiA3Ljc1NzMxTDkuMTcxNzcgOS4xNzE1MlpNMTkuMDcxMyA0LjkyODg4QzE5LjU5OTggNS40NTc0IDE5LjgwNTcgNi42NzA1MSAxOS4wNjM5IDguNjQ4ODNDMTguMzU2OCAxMC41MzQzIDE2Ljg5OTMgMTIuNzU3NyAxNC44Mjg2IDE0LjgyODRMMTYuMjQyOCAxNi4yNDI2QzE4LjQ2NzkgMTQuMDE3NSAyMC4xMDggMTEuNTYwNCAyMC45MzY1IDkuMzUxMDhDMjEuNzMwMiA3LjIzNDY0IDIxLjkwOTYgNC45Mzg3OCAyMC40ODU1IDMuNTE0NjdMMTkuMDcxMyA0LjkyODg4Wk0xNC44Mjg2IDkuMTcxNTJDMTYuODk5MyAxMS4yNDIyIDE4LjM1NjggMTMuNDY1NiAxOS4wNjM5IDE1LjM1MTFDMTkuODA1NyAxNy4zMjk0IDE5LjU5OTggMTguNTQyNSAxOS4wNzEzIDE5LjA3MUwyMC40ODU1IDIwLjQ4NTJDMjEuOTA5NiAxOS4wNjExIDIxLjczMDIgMTYuNzY1MyAyMC45MzY1IDE0LjY0ODhDMjAuMTA4IDEyLjQzOTUgMTguNDY3OSA5Ljk4MjM3IDE2LjI0MjggNy43NTczMUwxNC44Mjg2IDkuMTcxNTJaTTE5LjA3MTMgMTkuMDcxQzE4LjU0MjcgMTkuNTk5NSAxNy4zMjk2IDE5LjgwNTUgMTUuMzUxMyAxOS4wNjM2QzEzLjQ2NTggMTguMzU2NiAxMS4yNDI1IDE2Ljg5OTEgOS4xNzE3NyAxNC44Mjg0TDcuNzU3NTYgMTYuMjQyNkM5Ljk4MjYyIDE4LjQ2NzcgMTIuNDM5OCAyMC4xMDc4IDE0LjY0OTEgMjAuOTM2M0MxNi43NjU1IDIxLjcyOTkgMTkuMDYxNCAyMS45MDkzIDIwLjQ4NTUgMjAuNDg1MkwxOS4wNzEzIDE5LjA3MVpNOS4xNzE3NyAxNC44Mjg0QzcuMTAxMDYgMTIuNzU3NyA1LjY0MzU4IDEwLjUzNDMgNC45MzY1MyA4LjY0ODgzQzQuMTk0NjYgNi42NzA1MSA0LjQwMDYxIDUuNDU3NCA0LjkyOTEzIDQuOTI4ODhMMy41MTQ5MSAzLjUxNDY3QzIuMDkwODEgNC45Mzg3OCAyLjI3MDIgNy4yMzQ2NCAzLjA2Mzg3IDkuMzUxMDhDMy44OTIzNSAxMS41NjA0IDUuNTMyNSAxNC4wMTc1IDcuNzU3NTYgMTYuMjQyNkw5LjE3MTc3IDE0LjgyODRaTTQuOTI5MTMgNC45Mjg4OEM1LjQ1NzY0IDQuNDAwMzcgNi42NzA3NiA0LjE5NDQxIDguNjQ5MDcgNC45MzYyOEMxMC41MzQ1IDUuNjQzMzMgMTIuNzU3OSA3LjEwMDgyIDE0LjgyODYgOS4xNzE1MkwxNi4yNDI4IDcuNzU3MzFDMTQuMDE3OCA1LjUzMjI1IDExLjU2MDYgMy44OTIxIDkuMzUxMzIgMy4wNjM2MkM3LjIzNDg4IDIuMjY5OTYgNC45MzkwMiAyLjA5MDU2IDMuNTE0OTEgMy41MTQ2N0w0LjkyOTEzIDQuOTI4ODhaIiBmaWxsPSIjZmZmZmZmIj48L3BhdGg+IDwvZz48L3N2Zz4=)
 ![Crow](https://img.shields.io/badge/Crow-HTTP-D97706.svg?style=flat&logo=data:image/svg+xml;base64,PHN2ZyBmaWxsPSIjZmZmZmZmIiB2aWV3Qm94PSIwIC02NCA2NDAgNjQwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxnIGlkPSJTVkdSZXBvX2JnQ2FycmllciIgc3Ryb2tlLXdpZHRoPSIwIj48L2c+PGcgaWQ9IlNWR1JlcG9fdHJhY2VyQ2FycmllciIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48L2c+PGcgaWQ9IlNWR1JlcG9faWNvbkNhcnJpZXIiPjxwYXRoIGQ9Ik01NDQgMzJoLTE2LjM2QzUxMy4wNCAxMi42OCA0OTAuMDkgMCA0NjQgMGMtNDQuMTggMC04MCAzNS44Mi04MCA4MHYyMC45OEwxMi4wOSAzOTMuNTdBMzAuMjE2IDMwLjIxNiAwIDAgMCAwIDQxNy43NGMwIDIyLjQ2IDIzLjY0IDM3LjA3IDQzLjczIDI3LjAzTDE2NS4yNyAzODRoOTYuNDlsNDQuNDEgMTIwLjFjMi4yNyA2LjIzIDkuMTUgOS40NCAxNS4zOCA3LjE3bDIyLjU1LTguMjFjNi4yMy0yLjI3IDkuNDQtOS4xNSA3LjE3LTE1LjM4TDMxMi45NCAzODRIMzUyYzEuOTEgMCAzLjc2LS4yMyA1LjY2LS4yOWw0NC41MSAxMjAuMzhjMi4yNyA2LjIzIDkuMTUgOS40NCAxNS4zOCA3LjE3bDIyLjU1LTguMjFjNi4yMy0yLjI3IDkuNDQtOS4xNSA3LjE3LTE1LjM4bC00MS4yNC0xMTEuNTNDNDg1Ljc0IDM1Mi44IDU0NCAyNzkuMjYgNTQ0IDE5MnYtODBsOTYtMTZjMC0zNS4zNS00Mi45OC02NC05Ni02NHptLTgwIDcyYy0xMy4yNSAwLTI0LTEwLjc1LTI0LTI0IDAtMTMuMjYgMTAuNzUtMjQgMjQtMjRzMjQgMTAuNzQgMjQgMjRjMCAxMy4yNS0xMC43NSAyNC0yNCAyNHoiPjwvcGF0aD48L2c+PC9zdmc+)
 ![Mo2](https://img.shields.io/badge/%20-MO2_Plugin-64748B.svg?style=flat&logo=data:image/svg+xml;base64,PHN2ZyBmaWxsPSIjZmZmZmZmIiB2ZXJzaW9uPSIxLjEiIGlkPSJDYXBhXzEiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgeG1sbnM6eGxpbms9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkveGxpbmsiIHZpZXdCb3g9Ii0xMjIuNCAtMTIyLjQgODU2LjgwIDg1Ni44MCIgeG1sOnNwYWNlPSJwcmVzZXJ2ZSI+PGcgaWQ9IlNWR1JlcG9fYmdDYXJyaWVyIiBzdHJva2Utd2lkdGg9IjAiPjwvZz48ZyBpZD0iU1ZHUmVwb190cmFjZXJDYXJyaWVyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjwvZz48ZyBpZD0iU1ZHUmVwb19pY29uQ2FycmllciI+IDxnPiA8cGF0aCBkPSJNNDgyLjE4OCw4My4zMzNMMTg0LjYyMiwyMjMuMjI1djg5LjgzMmwtNTEuOTEtMjMuMDgydi04OS44MzJMNDMwLjI3OCw2MC4yNTJsLTk5Ljk0Ni00NC40MzkgYy0xMy4zODMtNS45NS0zNS4yODEtNS45NS00OC42NjQsMEwzNS41NTcsMTI1LjI0M0MxNS45NSwxMzMuOTYxLTAuMDUsMTU4LjY0OSwwLDE4MC4xMDdsMC42MDYsMjU2LjUzNCBjMC4wNTEsMjEuNjg2LDE2LjQwOCw0Ni40MDEsMzYuMzQ4LDU0LjkyNkwyODIuNDIsNTk2LjQ5OWMxMi45NDUsNS41MzQsMzQuMTI5LDUuNTM0LDQ3LjA3NSwwLjAwM2wyNDUuNTUtMTA0LjkzNiBjMTkuOTM5LTguNTIxLDM2LjI5Ny0zMy4yMzQsMzYuMzQ4LTU0LjkxOUw2MTIsMTgwLjEwN2MwLjA1MS0yMS40NTgtMTUuOTQ5LTQ2LjE0Ni0zNS41NTctNTQuODY0TDQ4Mi4xODgsODMuMzMzeiBNNTU2LjM5OCwyODguNjc1bC0xNC40MDMsNi42ODNsLTAuMjkyLDEwMS4zNTNjLTAuMDEzLDQuNDI5LTMuOTI1LDkuNzAxLTguNzI3LDExLjc3M2wtMjEuNTYzLDkuMzA5IGMtNC43MjcsMi4wNDEtOC41NTEsMC4xNDktOC41NTQtNC4yMjNsLTAuMDczLTEwMC4wMjFsLTEzLjk1MSw2LjQ3MmMtNi41NjIsMy4wNDQtMTAuNjY5LTEuNzI5LTcuNDExLTguNjAxbDMzLjM0OC03MC4zNTYgYzMuMzY2LTcuMTAyLDExLjgwNi0xMS4xOTksMTUuMTg0LTcuMzQ3bDM0LjIyMSwzOS4wMTJDNTY3LjU5MywyNzYuNjIzLDU2My4yNTcsMjg1LjQ5NCw1NTYuMzk4LDI4OC42NzV6IE00MTUuNTk2LDQ1MS40NDMgYzAuMDM3LDQuMjQzLTMuNTUsOS4yNC04LjAwMSwxMS4xNjJsLTE5Ljk5Niw4LjYzMmMtNC4zODUsMS44OTMtNy45NzIsMC4wMjktOC4wMjItNC4xNmwtMS4xNzEtOTUuODI2bC0xMi45MzgsNi4wMDIgYy02LjA4NSwyLjgyMy05Ljk2OC0xLjgwOC03LjAwNi04LjM0NGwzMC4zMS02Ni44ODFjMy4wNTctNi43NDcsMTAuODczLTEwLjU0MSwxNC4wNjItNi44MDVsMzIuMzAxLDM3LjgzNiBjMy4yMjYsMy43NzctMC43MTIsMTIuMjAyLTcuMDYyLDE1LjE0N2wtMTMuMzM4LDYuMTg4TDQxNS41OTYsNDUxLjQ0M3ogTTU4MC4yMDEsNDIzLjYxOWMtMC4wMTUsMi4yMjYtMi4wMTYsNC44NjUtNC40NjgsNS44OTYgbC0yMjguMzk1LDk1Ljk1Yy0yLjEzMSwwLjg5Ni0zLjg4NC0wLjA0My0zLjkxNS0yLjA5NmwtMC4xNzUtMTEuMTYyYy0wLjAzMi0yLjA1OCwxLjY3LTQuNDYzLDMuODA1LTUuMzcybDIyOC44MDItOTcuNDY3IGMyLjQ1NS0xLjA0Niw0LjQzOC0wLjA4Niw0LjQyMywyLjE0Nkw1ODAuMjAxLDQyMy42MTl6Ij48L3BhdGg+IDwvZz4gPC9nPjwvc3ZnPg==)
 ![Tailwind](https://img.shields.io/badge/Tailwind-CSS-2DD4BF.svg?style=flat&logo=data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSItMS41IC0xLjUgMTguMDAgMTguMDAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGcgaWQ9IlNWR1JlcG9fYmdDYXJyaWVyIiBzdHJva2Utd2lkdGg9IjAiPjwvZz48ZyBpZD0iU1ZHUmVwb190cmFjZXJDYXJyaWVyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjwvZz48ZyBpZD0iU1ZHUmVwb19pY29uQ2FycmllciI+IDxwYXRoIGQ9Ik03LjUwMDA2IDIuNUM2LjQ3NDA5IDIuNSA1LjU5MjAzIDIuNzc2OTEgNC44OTk2NiAzLjM3MDM3QzQuMjEyMjcgMy45NTk1NiAzLjc2MjU5IDQuODE3MjkgMy41MTMxNCA1Ljg4NjM4QzMuNDU4NjkgNi4xMTk3IDMuNTc3NDIgNi4zNTg4NSAzLjc5NjE5IDYuNDU2NTRDNC4wMTQ5NiA2LjU1NDIzIDQuMjcyMjggNi40ODMgNC40MDk2NyA2LjI4NjcyQzQuNzI2MyA1LjgzNDQgNS4wNDI0NCA1LjU2MjYxIDUuMzQ2MiA1LjQyMzEzQzUuNjQwMzggNS4yODgwNSA1Ljk1NzQ4IDUuMjYwNjggNi4zMjA2OSA1LjM1Nzk3QzYuNjg3MjMgNS40NTYxNSA2Ljk3MDk3IDUuNzQzNjkgNy40MTY0MyA2LjIyODE2TDcuNDMwODIgNi4yNDM4MkM3Ljc2NjYxIDYuNjA5MDUgOC4xNzYyMyA3LjA1NDYgOC43MzY0OSA3LjQwMDI4QzkuMzE3ODUgNy43NTg5OCAxMC4wNDEzIDcuOTk5OTkgMTEuMDAwMSA3Ljk5OTk5QzEyLjAyNiA3Ljk5OTk5IDEyLjkwODEgNy43MjMwNyAxMy42MDA1IDcuMTI5NjJDMTQuMjg3OCA2LjU0MDQzIDE0LjczNzUgNS42ODI3IDE0Ljk4NyA0LjYxMzYxQzE1LjA0MTQgNC4zODAyOSAxNC45MjI3IDQuMTQxMTQgMTQuNzAzOSA0LjA0MzQ1QzE0LjQ4NTIgMy45NDU3NiAxNC4yMjc4IDQuMDE2OTggMTQuMDkwNCA0LjIxMzI2QzEzLjc3MzggNC42NjU1OSAxMy40NTc3IDQuOTM3MzcgMTMuMTUzOSA1LjA3Njg2QzEyLjg1OTcgNS4yMTE5NCAxMi41NDI2IDUuMjM5MzEgMTIuMTc5NCA1LjE0MjAyQzExLjgxMjkgNS4wNDM4NCAxMS41MjkxIDQuNzU2MyAxMS4wODM3IDQuMjcxODJMMTEuMDY5MyA0LjI1NjE2QzEwLjczMzUgMy44OTA5MyAxMC4zMjM5IDMuNDQ1MzggOS43NjM2MiAzLjA5OTcxQzkuMTgyMjcgMi43NDEwMSA4LjQ1ODgzIDIuNSA3LjUwMDA2IDIuNVoiIGZpbGw9IiNmZmZmZmYiPjwvcGF0aD4gPHBhdGggZD0iTTQuMDAwMDYgNi45OTk5OUMyLjk3NDA5IDYuOTk5OTkgMi4wOTIwMyA3LjI3NjkgMS4zOTk2NiA3Ljg3MDM2QzAuNzEyMjcxIDguNDU5NTUgMC4yNjI1OTIgOS4zMTcyNyAwLjAxMzEzNjUgMTAuMzg2NEMtMC4wNDEzMDU3IDEwLjYxOTcgMC4wNzc0MTYyIDEwLjg1ODggMC4yOTYxODYgMTAuOTU2NUMwLjUxNDk1NiAxMS4wNTQyIDAuNzcyMjc2IDEwLjk4MyAwLjkwOTY3MyAxMC43ODY3QzEuMjI2MyAxMC4zMzQ0IDEuNTQyNDQgMTAuMDYyNiAxLjg0NjIgOS45MjMxMkMyLjE0MDM4IDkuNzg4MDQgMi40NTc0NyA5Ljc2MDY3IDIuODIwNjkgOS44NTc5NkMzLjE4NzIzIDkuOTU2MTQgMy40NzA5NyAxMC4yNDM3IDMuOTE2NDMgMTAuNzI4MkwzLjkzMDgyIDEwLjc0MzhDNC4yNjY2IDExLjEwOSA0LjY3NjI0IDExLjU1NDYgNS4yMzY0OSAxMS45MDAzQzUuODE3ODUgMTIuMjU5IDYuNTQxMjggMTIuNSA3LjUwMDA2IDEyLjVDOC41MjYwMiAxMi41IDkuNDA4MDggMTIuMjIzMSAxMC4xMDA1IDExLjYyOTZDMTAuNzg3OCAxMS4wNDA0IDExLjIzNzUgMTAuMTgyNyAxMS40ODcgOS4xMTM2QzExLjU0MTQgOC44ODAyNyAxMS40MjI3IDguNjQxMTMgMTEuMjAzOSA4LjU0MzQzQzEwLjk4NTIgOC40NDU3NCAxMC43Mjc4IDguNTE2OTcgMTAuNTkwNCA4LjcxMzI1QzEwLjI3MzggOS4xNjU1OCA5Ljk1NzY4IDkuNDM3MzYgOS42NTM5MSA5LjU3Njg0QzkuMzU5NzQgOS43MTE5MiA5LjA0MjY0IDkuNzM5MyA4LjY3OTQyIDkuNjQyMDFDOC4zMTI4OSA5LjU0MzgzIDguMDI5MTUgOS4yNTYyOCA3LjU4MzY5IDguNzcxODFMNy41NjkyOSA4Ljc1NjE1QzcuMjMzNTEgOC4zOTA5MiA2LjgyMzg4IDcuOTQ1MzcgNi4yNjM2MiA3LjU5OTY5QzUuNjgyMjcgNy4yNDEgNC45NTg4MyA2Ljk5OTk5IDQuMDAwMDYgNi45OTk5OVoiIGZpbGw9IiNmZmZmZmYiPjwvcGF0aD4gPC9nPjwvc3ZnPg==)
@@ -16,6 +16,7 @@
 [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=lextpf_salma&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=lextpf_salma)
 [![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_salma&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_salma)
 [![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=lextpf_salma&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=lextpf_salma)
+[![Codacy Badge](https://app.codacy.com/project/badge/Grade/021d06d4d8de4b8185a4743065e04c4a)](https://app.codacy.com/gh/lextpf/salma/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 <br/>
 [![build](https://github.com/lextpf/salma/actions/workflows/build.yml/badge.svg)](https://github.com/lextpf/salma/actions/workflows/build.yml)
 [![tests](https://github.com/lextpf/salma/actions/workflows/test.yml/badge.svg)](https://github.com/lextpf/salma/actions/workflows/test.yml)
@@ -53,6 +54,97 @@ salma is intentionally scoped to FOMODs. It is useful for reproducing existing F
  *                              << F O M O D   E N G I N E >>
  *
  * ============================================================================================== */
+```
+
+```
+salma/
+|-- .github/                              # GitHub config
+|   |-- workflows/                        # build.yml, test.yml, sonar.yml, lint.yaml
+|   +-- ISSUE_TEMPLATE/                   # Bug / feature / task issue forms
+|-- src/                                  # C++ source code
+|   |-- main.cpp                          # Crow HTTP server entry point
+|   |-- CApi.hpp/cpp                      # C-linkage DLL API (ctypes)
+|   |-- Export.hpp                        # MO2_API export macro
+|   |-- Types.hpp                         # Shared type definitions
+|   |-- Utils.hpp/cpp                     # Shared string/path helpers
+|   |-- BackgroundJob.hpp                 # Async job runner
+|   |-- Logger.hpp/cpp                    # Thread-safe logging
+|   |-- ArchiveService.hpp/cpp            # Archive extraction
+|   |-- FileOperations.hpp/cpp            # Queued file operations
+|   |-- ModStructureDetector.hpp/cpp      # Archive content-root detection
+|   |-- FomodArchiveResolver.hpp/cpp      # Resolves mod source archive paths
+|   |-- FomodService.hpp/cpp              # FOMOD processing and install replay
+|   |-- FomodDependencyEvaluator.hpp/cpp  # FOMOD dependency evaluation
+|   |-- FomodInferenceService.hpp/cpp     # Selection inference engine (orchestrator)
+|   |-- FomodIR.hpp                       # FOMOD IR types (header-only)
+|   |-- FomodIRParser.hpp/cpp             # XML to IR parser
+|   |-- FomodCSP*.hpp/cpp                 # CSP solver: phases, options, precompute, types
+|   |-- FomodPropagator.hpp/cpp           # Constraint propagator
+|   |-- FomodForwardSimulator.hpp/cpp     # Forward-simulates installs against the IR
+|   |-- FomodInferenceAtoms.hpp/cpp       # Atom-level inference helpers
+|   |-- FomodAtom.hpp                     # Atom type definitions
+|   |-- InferenceDiagnostics.hpp/cpp      # Per-decision inference reason codes
+|   |-- InstallationService.hpp/cpp       # Main orchestrator
+|   |-- InstallationController.hpp/cpp    # REST endpoint handlers
+|   |-- Mo2Controller.hpp/cpp             # MO2 dashboard controller (shared state)
+|   |-- Mo2...Controller.cpp              # Per-subsystem endpoints (config/fomod/log/plugin/test)
+|   |-- Mo2Helpers.hpp/cpp                # Shared helpers for MO2 controllers
+|   |-- ConfigService.hpp/cpp             # Configuration management
+|   |-- MultipartHandler.hpp/cpp          # Form data parsing
+|   |-- StaticFileHandler.hpp/cpp         # SPA serving
+|   |-- SecurityContext.hpp/cpp           # CSRF token + Origin allowlist (mo2-core)
+|   +-- SecurityMiddleware.hpp/cpp        # Crow Origin/CSRF enforcement
+|-- web/                                  # React frontend (Vite + TypeScript)
+|   |-- src/                              # TSX pages, hooks, and comps/ components
+|   |-- dist/                             # Built SPA (served by Crow)
+|   |-- index.html                        # Vite entry HTML
+|   |-- package.json                      # Dependencies and scripts
+|   |-- tsconfig.json                     # TypeScript config
+|   |-- eslint.config.js                  # ESLint config (max-warnings 0)
+|   +-- vite.config.ts                    # Dev proxy to :5000
+|-- tests/                                # GoogleTest C++ unit tests
+|   |-- fomod_inference_test.cpp          # Inference engine tests
+|   |-- inference_diagnostics_test.cpp    # Diagnostics reason-code tests
+|   |-- security_context_test.cpp         # CSRF / Origin allowlist tests
+|   +-- utils_test.cpp                    # Shared utility tests
+|-- scripts/                              # MO2 plugin & utilities
+|   |-- mo2-salma.py                      # MO2 Python plugin
+|   |-- setup-env.bat                     # Persist SALMA_* env vars (one-time setup)
+|   |-- common.py                         # Shared utilities
+|   |-- install.py                        # Installation helper
+|   |-- compare.py                        # Round-trip diff utility
+|   |-- scan.py                           # Mod scanning utility
+|   |-- _clean_docs.py                    # Doc post-processing
+|   +-- _promote_subgroups.py             # FOMOD subgroup promotion tool
+|-- cmake/                                # vcpkg overlay triplet
+|   +-- x64-windows-static-md.cmake       # Static-md triplet definition
+|-- docs/                                 # Generated API docs (only main.html is checked in)
+|   +-- main.html                         # MkDocs theme override
+|-- .clang-format                         # clang-format rules (Google-based)
+|-- .clang-tidy                           # clang-tidy rules (local build gate)
+|-- .clangd                               # clangd language-server config
+|-- .gitattributes                        # Git attributes
+|-- .gitignore                            # Git ignore rules
+|-- .env.example                          # Sample environment variables
+|-- CMakeLists.txt                        # Build configuration (mo2-core + mo2-server targets)
+|-- CMakePresets.json                     # Build presets (vcpkg)
+|-- vcpkg.json                            # Dependency manifest
+|-- sonar-project.properties              # SonarCloud configuration
+|-- doxide.yml                            # API doc config
+|-- mkdocs.yml                            # Documentation site config
+|-- build.bat                             # Build pipeline
+|-- deploy.bat                            # Deploy to MO2
+|-- purge.bat                             # Remove plugin & clean output
+|-- test.bat                              # Run C++ unit tests (salma_tests.exe)
+|-- test_all.py                           # Round-trip test runner (Python)
+|-- test_one.py                           # Round-trip test for a single mod
+|-- fomod_archives.txt                    # Test archive manifest
+|-- AGENTS.md                             # Agent/contributor working notes
+|-- CLAUDE.md                             # Claude Code project instructions
+|-- CONTRIBUTING.md                       # Contributor guide
+|-- LICENSE.md                            # License
+|-- README.md                             # This file
++-- PREVIEW.png                           # README banner image
 ```
 
 ## Features
@@ -257,7 +349,7 @@ salma reads a small set of environment variables at runtime. None are required f
 |------------------------|---------------------------------------------------------------------------------|--------------------------------------|
 | `VCPKG_ROOT`           | vcpkg toolchain path used by the default CMake preset.                          | `CMakePresets.json`                  |
 | `SALMA_BIND_ADDR`      | Override the default loopback bind. Non-loopback values log a security warning. | `main.cpp`                           |
-| `SALMA_MODS_PATH`      | MO2 mods directory. Used by the deploy fallback chain and the round-trip tests. | `Mo2Helpers.cpp`, `test_all.py`          |
+| `SALMA_MODS_PATH`      | MO2 mods directory. Used by the deploy fallback chain and the round-trip tests. | `Mo2Helpers.cpp`, `test_all.py`      |
 | `SALMA_DEPLOY_PATH`    | Override the `<MO2 instance>/MO2/plugins` deploy target used by `deploy.bat`.   | `Mo2Helpers.cpp`, `deploy.bat`       |
 | `SALMA_DOWNLOADS_PATH` | Lookup root for `resolve_mod_archive` when `installationFile` is relative.      | `FomodArchiveResolver.cpp`           |
 
@@ -284,7 +376,7 @@ Builds the `salma_tests` target and runs `salma_tests.exe`. Sources live under `
 ### Round-trip integration tests (Python)
 
 ```powershell
-python test_all.py                       # walks every mod under SALMA_MODS_PATH
+python test_all.py                   # walks every mod under SALMA_MODS_PATH
 python test_one.py <archive> <mod>   # single-mod variant for debugging
 ```
 
@@ -393,82 +485,6 @@ Both paths converge in `mo2-core`. The DLL exposes it as a flat C ABI; the serve
 |                `Logger`    | Thread-safe logging with callback support        |
 |         `ConfigService`    | Configuration management                         |
 
-## Project Structure
-
-```
-salma/
-|-- .github/                            # CI workflows
-|   +-- workflows/                      # build.yml, sonar.yml, test.yml
-|-- src/                                # C++ source code
-|   |-- main.cpp                        # Crow HTTP server entry point
-|   |-- CApi.hpp/cpp                    # C-linkage DLL API (ctypes)
-|   |-- Export.hpp                      # MO2_API export macro
-|   |-- Types.hpp                       # Shared type definitions
-|   |-- Utils.hpp/cpp                   # Shared string/path helpers
-|   |-- BackgroundJob.hpp               # Async job runner
-|   |-- Logger.hpp/cpp                  # Thread-safe logging
-|   |-- ArchiveService.hpp/cpp          # Archive extraction
-|   |-- FileOperations.hpp/cpp          # Queued file operations
-|   |-- ModStructureDetector.hpp/cpp    # Archive content-root detection
-|   |-- FomodArchiveResolver.hpp/cpp    # Resolves mod source archive paths
-|   |-- FomodService.hpp/cpp            # FOMOD processing and install replay
-|   |-- FomodDependencyEvaluator.hpp/cpp # FOMOD dependency evaluation
-|   |-- FomodInferenceService.hpp/cpp   # Selection inference engine (orchestrator)
-|   |-- FomodIR.hpp                     # FOMOD IR types (header-only)
-|   |-- FomodIRParser.hpp/cpp           # XML to IR parser
-|   |-- FomodCSP*.hpp/cpp               # CSP solver, options, precompute, types
-|   |-- FomodPropagator.hpp/cpp         # Constraint propagator
-|   |-- FomodForwardSimulator.hpp/cpp   # Forward-simulates installs against the IR
-|   |-- FomodInferenceAtoms.hpp/cpp     # Atom-level inference helpers
-|   |-- FomodAtom.hpp                   # Atom type definitions
-|   |-- InstallationService.hpp/cpp     # Main orchestrator
-|   |-- InstallationController.hpp/cpp  # REST endpoint handlers
-|   |-- Mo2Controller.hpp/cpp           # MO2 dashboard controller (shared state)
-|   |-- Mo2...Controller.cpp            # Per-subsystem endpoints
-|   |-- Mo2Helpers.hpp/cpp              # Shared helpers for MO2 controllers
-|   |-- ConfigService.hpp/cpp           # Configuration management
-|   |-- MultipartHandler.hpp/cpp        # Form data parsing
-|   +-- StaticFileHandler.hpp/cpp       # SPA serving
-|-- web/                                # React frontend
-|   |-- src/                            # TypeScript source
-|   |-- dist/                           # Built SPA (served by Crow)
-|   |-- package.json                    # Dependencies
-|   +-- vite.config.ts                  # Dev proxy to :5000
-|-- tests/                              # GoogleTest C++ unit tests
-|-- scripts/                            # MO2 plugin & utilities
-|   |-- mo2-salma.py                    # MO2 Python plugin
-|   |-- setup-env.bat                   # Persist SALMA_* env vars (one-time setup)
-|   |-- common.py                       # Shared utilities
-|   |-- install.py                      # Installation helper
-|   |-- compare.py                      # Round-trip diff utility
-|   |-- scan.py                         # Mod scanning utility
-|   |-- _clean_docs.py                  # Doc post-processing
-|   +-- _promote_subgroups.py           # FOMOD subgroup promotion tool
-|-- triplets/                           # Custom vcpkg triplet (x64-windows-static-md)
-|-- overrides/                          # MkDocs theme overrides
-|-- logs/                               # Runtime logs
-|   +-- salma.log                       # Application log
-|-- .clang-format                       # Code formatting rules
-|-- .gitignore                          # Git ignore rules
-|-- CMakeLists.txt                      # Build configuration (mo2-core + mo2-server targets)
-|-- CMakePresets.json                   # Build presets (vcpkg)
-|-- vcpkg.json                          # Dependency manifest
-|-- sonar-project.properties            # SonarCloud configuration
-|-- build.bat                           # Build pipeline
-|-- deploy.bat                          # Deploy to MO2
-|-- purge.bat                           # Remove plugin & clean output
-|-- test.bat                            # Run C++ unit tests (salma_tests.exe)
-|-- test_all.py                         # Round-trip test runner (Python)
-|-- test_one.py                         # Round-trip test for a single mod
-|-- test.log                            # Round-trip test output
-|-- fomod_archives.txt                  # Test archive manifest
-|-- doxide.yml                          # API doc config
-|-- mkdocs.yml                          # Documentation site config
-|-- LICENSE                             # License
-|-- CONTRIBUTING.md                     # Contributor guide
-+-- PREVIEW.png                         # README banner image
-```
-
 ## Documentation
 
 API documentation is generated via a three-stage pipeline:
@@ -501,7 +517,7 @@ Contributions are welcome! Please read the [Contributing Guidelines](CONTRIBUTIN
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE.md) file for details.
 
 ## Acknowledgments
 
