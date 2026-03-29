@@ -1,10 +1,11 @@
-import { useLayoutEffect, useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 
 const LINE_HEIGHT = 26
 const OVERSCAN = 20
 
 export interface VirtualScrollState {
-  scrollRef: React.RefObject<HTMLDivElement>
+  scrollRef: (node: HTMLDivElement | null) => void
+  scrollEl: React.RefObject<HTMLDivElement | null>
   handleScroll: () => void
   isAtBottomRef: React.MutableRefObject<boolean>
   resetScroll: () => void
@@ -13,27 +14,37 @@ export interface VirtualScrollState {
 }
 
 export function useVirtualScroll(): VirtualScrollState {
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const elRef = useRef<HTMLDivElement | null>(null)
+  const obsRef = useRef<ResizeObserver | null>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [containerHeight, setContainerHeight] = useState(600)
   const isAtBottomRef = useRef(true)
   const rafRef = useRef(0)
 
-  useLayoutEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
-    setContainerHeight(el.clientHeight)
+  // Callback ref: fires whenever the DOM node is attached or detached,
+  // so the ResizeObserver is always connected - even when the element is
+  // conditionally rendered (e.g. hidden behind a loading skeleton).
+  const scrollRef = useCallback((node: HTMLDivElement | null) => {
+    if (elRef.current === node) return
+    // Tear down old observer
+    if (obsRef.current) { obsRef.current.disconnect(); obsRef.current = null }
+    elRef.current = node
+    if (!node) return
+    setContainerHeight(node.clientHeight)
     const obs = new ResizeObserver(([e]) => setContainerHeight(e.contentRect.height))
-    obs.observe(el)
-    return () => obs.disconnect()
+    obs.observe(node)
+    obsRef.current = obs
   }, [])
+
+  // Clean up observer on unmount
+  useEffect(() => () => { obsRef.current?.disconnect() }, [])
 
   useEffect(() => () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
   }, [])
 
   const handleScroll = useCallback(() => {
-    const el = scrollRef.current
+    const el = elRef.current
     if (!el) return
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
     rafRef.current = requestAnimationFrame(() => {
@@ -57,6 +68,7 @@ export function useVirtualScroll(): VirtualScrollState {
 
   return {
     scrollRef,
+    scrollEl: elRef,
     handleScroll,
     isAtBottomRef,
     resetScroll,
