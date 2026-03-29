@@ -10,6 +10,17 @@
 namespace mo2core
 {
 
+/**
+ * @brief Function pointer type for external log callbacks.
+ *
+ * The callback receives a null-terminated UTF-8 string containing the
+ * raw log message (no timestamp or level prefix -- those are only added
+ * to file output). The callback may be invoked from **any** thread that
+ * calls a Logger method, and multiple threads may invoke it concurrently
+ * without serialization. Implementations **must** be thread-safe.
+ *
+ * @see Logger::set_callback
+ */
 using LogCallback = void (*)(const char*);
 
 /**

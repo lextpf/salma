@@ -40,6 +40,13 @@ struct SimulatedTree
  * FomodService::execute_file_operations, but produces an in-memory file tree
  * instead of writing to disk. Conditional install patterns are evaluated when
  * a `context` and/or `overrides` are provided; otherwise they are skipped.
+ *
+ * @pre @p selections is a 3-D boolean grid indexed as
+ *      `selections[step_index][group_index][plugin_index]`. Dimensions must
+ *      match or exceed the installer's step/group/plugin counts; out-of-bounds
+ *      indices are treated as false (deselected). An empty vector is valid and
+ *      means no plugins are explicitly selected.
+ * @throw std::bad_alloc if the SimulatedTree or internal flag map allocation fails.
  */
 MO2_API SimulatedTree simulate(const FomodInstaller& installer,
                                const ExpandedAtoms& atoms,
@@ -47,9 +54,19 @@ MO2_API SimulatedTree simulate(const FomodInstaller& installer,
                                const FomodDependencyContext* context = nullptr,
                                const InferenceOverrides* overrides = nullptr);
 
-/// In-place version of simulate() that reuses an existing SimulatedTree's
-/// allocation. The tree's file map is cleared before simulation begins,
-/// but the underlying hash-map capacity is preserved across calls.
+/**
+ * In-place version of simulate() that reuses an existing SimulatedTree's
+ * allocation. The tree's file map is cleared before simulation begins,
+ * but the underlying hash-map capacity is preserved across calls.
+ *
+ * @pre @p selections is a 3-D boolean grid indexed as
+ *      `selections[step_index][group_index][plugin_index]`. Dimensions must
+ *      match or exceed the installer's step/group/plugin counts; out-of-bounds
+ *      indices are treated as false (deselected). An empty vector is valid and
+ *      means no plugins are explicitly selected.
+ * @post @p tree.files is cleared and repopulated with the simulation result.
+ * @throw std::bad_alloc if internal flag map or tree insertion allocation fails.
+ */
 MO2_API void simulate_into(SimulatedTree& tree,
                            const FomodInstaller& installer,
                            const ExpandedAtoms& atoms,

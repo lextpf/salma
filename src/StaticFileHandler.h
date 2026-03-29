@@ -82,6 +82,9 @@ public:
      *
      * @param path Relative path within the static directory.
      * @return Crow response with file contents or error status.
+     * @throw std::filesystem::filesystem_error if `weakly_canonical()`
+     *        fails (e.g. broken symlink, I/O error). Crow's internal
+     *        handler converts uncaught exceptions to a 500 response.
      */
     crow::response serve(const std::string& path);
 

@@ -158,24 +158,140 @@ public:
     Mo2Controller(const Mo2Controller&) = delete;
     Mo2Controller& operator=(const Mo2Controller&) = delete;
 
+    /**
+     * @brief Returns current configuration (MO2 mods path, FOMOD output dir, path validity).
+     * @return 200 with config object.
+     */
     crow::response get_config();
+
+    /**
+     * @brief Validates and persists a new MO2 mods path, then returns the updated config.
+     * @param req JSON body with `"mo2ModsPath"`. Rejects empty values, `..` segments, and
+     * non-existent directories.
+     * @return 200 with updated config, or 400/500 on validation/persistence failure.
+     */
     crow::response put_config(const crow::request& req);
+
+    /**
+     * @brief Reports MO2 integration health: whether paths are configured, JSON/mod counts, and
+     * plugin install state.
+     * @return 200 with status object. Cached for 5 seconds.
+     */
     crow::response get_status();
+
+    /**
+     * @brief Lists all FOMOD JSON files in the output directory with metadata (size, modified
+     * time, step count).
+     * @return 200 with JSON array of FOMOD summaries. Returns empty array if the output directory
+     * is missing. Cached for 5 seconds.
+     */
     crow::response list_fomods();
+
+    /**
+     * @brief Kicks off an async background scan that infers FOMOD selections for every mod under
+     * the MO2 mods path.
+     * @return 200 if the scan started, 400 if paths are misconfigured, 409 if a scan is already
+     * running, 500 on mkdir failure.
+     */
     crow::response scan_fomods();
+
+    /**
+     * @brief Polls the running/completed state of the last FOMOD scan job.
+     * @return 200 with `running` flag; includes full scan summary (counts, duration) once
+     * finished.
+     */
     crow::response get_scan_status();
+
+    /**
+     * @brief Returns the parsed contents of a single FOMOD JSON file by mod name.
+     * @param name URL-encoded mod name (without `.json` extension).
+     * @return 200 with raw JSON content, 403 on path traversal, 404 if not found.
+     */
     crow::response get_fomod(const std::string& name);
+
+    /**
+     * @brief Deletes a single FOMOD JSON file from the output directory.
+     * @param name URL-encoded mod name (without `.json` extension).
+     * @return 200 on success, 403 on path traversal, 404 if not found.
+     */
     crow::response delete_fomod(const std::string& name);
+
+    /**
+     * @brief Runs the `deploy.bat` script in the background to install the Salma MO2 plugin.
+     * @return 200 if started, 400 if mods path unconfigured or contains shell metacharacters, 404
+     * if script missing, 409 if busy, 501 on non-Windows.
+     */
     crow::response deploy_plugin();
+
+    /**
+     * @brief Runs the `purge.bat` script in the background to uninstall the Salma MO2 plugin.
+     * @return 200 if started, 400 if mods path unconfigured or contains shell metacharacters, 404
+     * if script missing, 409 if busy, 501 on non-Windows.
+     */
     crow::response purge_plugin();
+
+    /**
+     * @brief Polls the running/completed state of the last plugin deploy or purge action.
+     * @return 200 with `running` flag; includes exit code, install state, and action name once
+     * finished.
+     */
     crow::response get_plugin_action_status();
 
+    /**
+     * @brief Shared implementation for deploy_plugin() and purge_plugin(). Validates paths, then
+     * launches the corresponding batch script via BackgroundJob.
+     * @param action Must be `"deploy"` or `"purge"`; any other value returns 400.
+     * @return 200 if started, 400/404/409/501 on error (see deploy_plugin/purge_plugin docs).
+     */
     crow::response run_plugin_action(const std::string& action);
+
+    /**
+     * @brief Returns the tail of `logs/salma.log`. Supports incremental reads via `offset` query
+     * param.
+     * @param req Query params: `?lines=N` (default 100, max 5000), `?offset=B` for incremental
+     * mode.
+     * @return 200 with `lines` array, keyword counts (errors/warnings/passes), and `nextOffset`
+     * for polling.
+     */
     crow::response get_logs(const crow::request& req);
+
+    /**
+     * @brief Returns the tail of `test.log`. Supports incremental reads via `offset` query param.
+     * @param req Query params: `?lines=N` (default 100, max 5000), `?offset=B` for incremental
+     * mode.
+     * @return 200 with `lines` array, keyword counts (errors/warnings/passes), and `nextOffset`
+     * for polling.
+     */
     crow::response get_test_logs(const crow::request& req);
+
+    /**
+     * @brief Truncates `logs/salma.log` via Logger::clear_log() to coordinate with the persistent
+     * file handle.
+     * @return 200 on success, 500 if truncation fails.
+     */
     crow::response clear_logs();
+
+    /**
+     * @brief Truncates `test.log` by opening it in trunc mode.
+     * @return 200 on success, 500 if truncation fails.
+     */
     crow::response clear_test_logs();
+
+    /**
+     * @brief Spawns `test.py` as a detached Win32 process. Only one test run may be active at a
+     * time.
+     * @param req Optional JSON body with `"args"` (whitelist-sanitized: alphanumeric, space,
+     * underscore, hyphen, dot).
+     * @return 200 with PID on success, 400 on bad args, 404 if test.py missing, 409 if already
+     * running, 500 on CreateProcess failure, 501 on non-Windows.
+     */
     crow::response run_tests(const crow::request& req);
+
+    /**
+     * @brief Checks whether the test.py process is still running. Cleans up the process handle on
+     * completion.
+     * @return 200 with `running` flag; includes `exitCode` once the process has finished.
+     */
     crow::response get_test_status();
 
 private:
@@ -186,7 +302,7 @@ private:
     HANDLE test_process_{nullptr};  // Win32 process handle for test.py
 #endif
 
-    /// Result of a FOMOD scan job.
+    /** Result of a FOMOD scan job. */
     struct ScanResult
     {
         bool success = false;
@@ -202,7 +318,7 @@ private:
         std::string output_dir;
     };
 
-    /// Result of a plugin deploy/purge action.
+    /** Result of a plugin deploy/purge action. */
     struct PluginActionResult
     {
         bool success = false;

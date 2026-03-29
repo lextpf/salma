@@ -19,7 +19,12 @@
 namespace mo2server
 {
 
-/// Build a crow::response with JSON body and Content-Type header.
+/**
+ * @brief Build a crow::response with JSON body and Content-Type header.
+ * @param code HTTP status code.
+ * @param j JSON body to serialize via `dump()`.
+ * @return Crow response with `Content-Type: application/json`.
+ */
 inline crow::response json_response(int code, const nlohmann::json& j)
 {
     crow::response res(code, j.dump());
@@ -27,7 +32,14 @@ inline crow::response json_response(int code, const nlohmann::json& j)
     return res;
 }
 
-/// Percent-decode a URL-encoded string (%XX sequences).
+/**
+ * @brief Percent-decode a URL-encoded string (%XX sequences).
+ *
+ * Also converts `+` to space. Null bytes (`%00`) are silently dropped.
+ *
+ * @param src URL-encoded input string.
+ * @return Decoded string.
+ */
 inline std::string url_decode(const std::string& src)
 {
     std::string out;
@@ -55,7 +67,11 @@ inline std::string url_decode(const std::string& src)
     return out;
 }
 
-/// Trim leading and trailing whitespace from a string.
+/**
+ * @brief Trim leading and trailing whitespace from a string.
+ * @param s Input string.
+ * @return A new string with leading/trailing whitespace removed.
+ */
 inline std::string trim_copy(const std::string& s)
 {
     size_t start = 0;
@@ -72,7 +88,7 @@ inline std::string trim_copy(const std::string& s)
 }
 
 #ifdef _WIN32
-/// RAII wrapper for Win32 HANDLEs to prevent leaks on early return/exception.
+/** RAII wrapper for Win32 HANDLEs to prevent leaks on early return/exception. */
 struct HandleGuard
 {
     HANDLE h = nullptr;
@@ -93,11 +109,26 @@ struct HandleGuard
 };
 #endif
 
-/// Resolve the MO2 plugin deploy path from config/env.
+/**
+ * @brief Resolve the MO2 plugin deploy path from config/env.
+ *
+ * Checks `SALMA_DEPLOY_PATH` env var first, then derives from
+ * @p mo2_mods_path as `{instance_root}/MO2/plugins`.
+ *
+ * @param mo2_mods_path Configured MO2 mods directory (may be empty).
+ * @return Resolved deploy path, or empty path if resolution fails.
+ */
 std::filesystem::path resolve_deploy_path(const std::string& mo2_mods_path);
 
-/// Check whether the Salma plugin is installed at the given deploy path.
-/// Returns false if an exception occurs (e.g., permissions error).
+/**
+ * @brief Check whether the Salma plugin is installed at the given deploy path.
+ *
+ * Looks for `salma/mo2-salma.dll` and `mo2-salma.py` under @p deploy_path.
+ *
+ * @param deploy_path Path to the MO2 plugins directory.
+ * @return `true` if both plugin files exist, `false` otherwise
+ *         (including on exceptions such as permissions errors).
+ */
 bool plugin_installed_at(const std::filesystem::path& deploy_path);
 
 }  // namespace mo2server

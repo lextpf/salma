@@ -46,12 +46,24 @@ struct SolverResult
  * the caller force individual conditional patterns or step visibility
  * conditions to true, false, or unknown so the solver can prune or explore
  * branches accordingly.
+ *
+ * Each element is an `ExternalConditionOverride` tri-state:
+ * - `Unknown` -- the solver treats the condition as ambiguous and explores
+ *   both branches (default when no external context is available).
+ * - `ForceTrue` -- the condition is assumed to hold.
+ * - `ForceFalse` -- the condition is assumed to not hold.
  */
 struct InferenceOverrides
 {
-    // Per conditional pattern: tri-state external dependency override.
+    /**
+     * Per conditional pattern: tri-state external dependency override.
+     * Indexed by the conditional-pattern index in `FomodInstaller::conditional_patterns`.
+     */
     std::vector<ExternalConditionOverride> conditional_active;
-    // Per step visibility condition: tri-state external dependency override.
+    /**
+     * Per step visibility condition: tri-state external dependency override.
+     * Indexed by the step index in `FomodInstaller::steps`.
+     */
     std::vector<ExternalConditionOverride> step_visible;
 };
 
@@ -67,6 +79,20 @@ struct PropagationResult;
  * found, or an exact match if one exists. Optional `overrides` pin external
  * dependency results, and `propagation` supplies pre-computed constraint
  * propagation data to accelerate the search.
+ *
+ * @param installer  Parsed FOMOD installer containing steps, groups, and plugins.
+ * @param atoms      Expanded file-install atoms indexed per-plugin and per-conditional.
+ * @param atom_index Reverse index mapping destination paths to the atoms that produce them.
+ * @param target     Target file tree the solver tries to reproduce (dest -> size/hash).
+ * @param excluded_dests Destination paths to ignore during scoring (e.g. metadata files).
+ * @param overrides  Optional tri-state overrides for external conditions the solver
+ *                   cannot evaluate. Pass `nullptr` to leave all external conditions as Unknown.
+ * @param propagation Optional pre-computed constraint propagation result. When non-null,
+ *                    narrowed domains are used to prune the option space before search.
+ * @return A `SolverResult` containing the best plugin selections found, inferred flag
+ *         values, match quality metrics (`missing`, `extra`, `size_mismatch`,
+ *         `hash_mismatch`), and `exact_match` indicating a perfect reproduction.
+ * @pre `installer` must contain at least one step with at least one group.
  */
 MO2_API SolverResult solve_fomod_csp(const FomodInstaller& installer,
                                      const ExpandedAtoms& atoms,

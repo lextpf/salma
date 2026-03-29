@@ -141,25 +141,29 @@ struct SolverState
  */
 struct SolverStats
 {
-    /// @name Option-generation counters
-    /// @{
+    /**
+     * @name Option-generation counters
+     * @{
+     */
     int dropped_extra_only_options = 0;  ///< Options dropped because they only produce extra files.
     int collapsed_equivalent_options = 0;  ///< Options collapsed due to identical destination sets.
     int forced_unique_options = 0;         ///< Groups forced to a single option (unique evidence).
     int capped_select_any_options = 0;     ///< Options trimmed by the SelectAny cap.
-    /// @}
+    /** @} */
 
-    /// @name Search-tree pruning counters
-    /// @{
+    /**
+     * @name Search-tree pruning counters
+     * @{
+     */
     int pruned_extra_only = 0;   ///< Subtrees pruned because all options are extra-only.
     int pruned_lower_bound = 0;  ///< Subtrees pruned by lower-bound comparison against best.
     int pruned_memo = 0;         ///< Subtrees pruned by memoization hit.
     int skipped_invisible = 0;   ///< Groups skipped because their step is not visible.
     int pruned_node_limit = 0;   ///< Subtrees abandoned after exceeding the per-pass node limit.
-    /// @}
+    /** @} */
 
     std::vector<bool> logged_group_options;  ///< Tracks which groups have had their options logged
-                                             ///< (avoids duplicate log output).
+                                             /** < (avoids duplicate log output). */
 };
 
 /**
@@ -212,8 +216,10 @@ struct CachedOptions
  */
 struct Precompute
 {
-    /// @name Input references (non-owning)
-    /// @{
+    /**
+     * @name Input references (non-owning)
+     * @{
+     */
     const FomodInstaller* installer = nullptr;
     const ExpandedAtoms* atoms = nullptr;
     const AtomIndex* atom_index = nullptr;
@@ -221,23 +227,29 @@ struct Precompute
     const std::unordered_set<std::string>* excluded = nullptr;
     const InferenceOverrides* overrides = nullptr;
     const PropagationResult* propagation = nullptr;
-    /// @}
+    /** @} */
 
-    /// @name Flattened group list and per-plugin evidence
-    /// @{
+    /**
+     * @name Flattened group list and per-plugin evidence
+     * @{
+     */
     std::vector<GroupRef> groups;  ///< All groups across all steps, in installer order.
     std::vector<int> evidence;  ///< Per-flat-plugin evidence score (higher = more likely needed).
-    /// @}
+    /** @} */
 
-    /// @name Per-plugin reverse indices
-    /// @{
+    /**
+     * @name Per-plugin reverse indices
+     * @{
+     */
     std::vector<int> plugin_to_group;  ///< Maps flat plugin index to its group index.
     std::vector<int>
         plugin_unique_support;  ///< Count of target dests uniquely supplied by this plugin.
-    /// @}
+    /** @} */
 
-    /// @name Flag dependency graph
-    /// @{
+    /**
+     * @name Flag dependency graph
+     * @{
+     */
     std::unordered_set<std::string>
         needed_flags;  ///< All flags read by step-visibility or plugin-type conditions.
     std::vector<std::unordered_set<std::string>>
@@ -252,32 +264,40 @@ struct Precompute
         memo_flags;  ///< Sorted union of needed and written flags, used for memoization signatures.
     std::vector<std::unordered_set<std::string>>
         group_dests;  ///< Per-group: destination paths any plugin in the group can produce.
-    /// @}
+    /** @} */
 
-    /// @name Destination reverse indices (for lower-bound pruning and repair)
-    /// @{
+    /**
+     * @name Destination reverse indices (for lower-bound pruning and repair)
+     * @{
+     */
     std::unordered_map<std::string, std::vector<int>>
         dest_to_groups;  ///< Groups that can produce each destination.
     std::unordered_map<std::string, std::vector<int>>
         dest_to_plugins;  ///< Flat plugin indices that can produce each destination.
     std::unordered_map<std::string, std::vector<int>>
         dest_to_size_match_groups;  ///< Groups that can produce a size-matching file for the
-                                    ///< destination.
+                                    /** < destination. */
     std::unordered_map<std::string, std::vector<int>>
         dest_to_hash_capable_groups;  ///< Groups that can produce a hash-matching file for the
-                                      ///< destination.
-    /// @}
+                                      /**
+                                       * < destination.
+                                       * @}
+                                       */
 
-    /// @name Contested destinations and component decomposition
-    /// @{
+    /**
+     * @name Contested destinations and component decomposition
+     * @{
+     */
     std::unordered_set<std::string>
         conditional_dests;  ///< Destinations whose production depends on flags or conditions.
     std::vector<int> contested_plugins;  ///< Flat plugin indices that appear in multiple
-                                         ///< destination-conflict sets.
+                                         /** < destination-conflict sets. */
     std::vector<std::vector<int>>
         components;  ///< Independent group components (groups sharing no destinations or flags),
-                     ///< for parallel backtracking.
-    /// @}
+                     /**
+                      * < for parallel backtracking.
+                      * @}
+                      */
 
     Precompute() = default;
     Precompute(Precompute&&) noexcept = default;
@@ -304,7 +324,11 @@ struct OptionCacheKey
     }
 };
 
-/// @brief Hash functor for `OptionCacheKey`.
+/**
+ * @brief Hash functor for `OptionCacheKey`.
+ * Uses an FNV-1a-inspired combine pattern: each field is mixed into the hash
+ * with XOR, the golden-ratio constant `0x9e3779b97f4a7c15`, and bit shifts.
+ */
 struct OptionCacheKeyHash
 {
     size_t operator()(const OptionCacheKey& k) const
@@ -339,7 +363,11 @@ struct MemoKey
     }
 };
 
-/// @brief Hash functor for `MemoKey`.
+/**
+ * @brief Hash functor for `MemoKey`.
+ * Uses an FNV-1a-inspired combine pattern: each field is mixed into the hash
+ * with XOR, the golden-ratio constant `0x9e3779b97f4a7c15`, and bit shifts.
+ */
 struct MemoKeyHash
 {
     size_t operator()(const MemoKey& k) const

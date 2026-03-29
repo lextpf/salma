@@ -84,21 +84,30 @@ public:
      * @param archive_path Path to the mod archive.
      * @param mod_path Path to the installed mod directory.
      * @return JSON selections string, or empty string on failure.
+     * @throw Does not throw. All exceptions from the inference pipeline
+     *        (archive I/O, XML parsing, solver) are caught internally, logged,
+     *        and result in an empty string return.
      */
     std::string infer_selections(const std::string& archive_path, const std::string& mod_path);
 
-    /// Cached content hash for an archive entry.
+    /** Cached content hash for an archive entry. */
     struct CachedHash
     {
-        uint64_t hash = 0;
-        uint64_t size = 0;
+        uint64_t hash = 0;  ///< FNV-1a content hash of the archive entry's data.
+        uint64_t size = 0;  ///< Uncompressed size of the archive entry in bytes.
     };
 
-    /// Maximum cache entries before clearing.
+    /**
+     * @brief Upper bound on cache entries before the entire cache is cleared.
+     *
+     * Prevents unbounded memory growth in long-running server processes.
+     * When exceeded, the cache is cleared under the lock so that subsequent
+     * calls re-populate only the entries they need.
+     */
     static constexpr size_t kMaxCacheEntries = 100000;
 
 private:
-    /// Bundled pipeline state for infer_selections.
+    /** Bundled pipeline state for infer_selections. */
     struct InferenceContext
     {
         // Step 1 outputs
@@ -152,8 +161,10 @@ private:
                                                 const TargetTree& target,
                                                 const std::unordered_set<std::string>& excluded);
 
-    /// Instance-scoped hash cache for contested archive entries.
-    /// Bounded to kMaxCacheEntries; cleared when exceeded.
+    /**
+     * Instance-scoped hash cache for contested archive entries.
+     * Bounded to kMaxCacheEntries; cleared when exceeded.
+     */
     std::mutex cache_mutex_;
     std::unordered_map<std::string, CachedHash> archive_entry_hash_cache_;
 };

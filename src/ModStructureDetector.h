@@ -67,6 +67,9 @@ public:
      *
      * @param dir Directory to inspect.
      * @return `true` if any recognized mod subfolder exists.
+     * @throw std::filesystem::filesystem_error if the directory cannot
+     *        be accessed (e.g. permissions error). Propagated from
+     *        `std::filesystem::exists()`.
      */
     static bool has_mod_structure(const std::filesystem::path& dir);
 
@@ -78,6 +81,8 @@ public:
      *
      * @param archive_root Extracted archive directory to scan.
      * @return Paths to candidate mod folders (may be empty).
+     *         Returns empty on filesystem iteration errors (caught
+     *         internally and logged).
      */
     static std::vector<std::filesystem::path> find_main_mod_folders(
         const std::filesystem::path& archive_root);

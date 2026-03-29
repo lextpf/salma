@@ -131,9 +131,11 @@ private:
                                      const std::string& temp_dir,
                                      const std::string& json_path);
 
-    /// Resolve the JSON selections path: use json_path if non-empty,
-    /// otherwise derive from the archive stem. Validates with is_inside.
-    /// Returns the resolved path or empty string if invalid/missing.
+    /**
+     * Resolve the JSON selections path: use json_path if non-empty,
+     * otherwise derive from the archive stem. Validates with is_inside.
+     * Returns the resolved path or empty string if invalid/missing.
+     */
     std::string resolve_json_path(const std::string& json_path, const std::string& archive_path);
 };
 

@@ -36,13 +36,36 @@ namespace mo2core
 class FomodIRParser
 {
 public:
+    /**
+     * @brief Parse a ModuleConfig.xml DOM into a fully populated FomodInstaller IR.
+     *
+     * Walks the pugixml document tree, extracting module dependencies, required
+     * files, ordered install steps (with groups, plugins, type descriptors, and
+     * condition flags), and conditional file install patterns. All source paths
+     * in the resulting IR are prefixed with @p archive_prefix and normalized.
+     *
+     * @param doc        Parsed pugixml document of a FOMOD ModuleConfig.xml.
+     * @param archive_prefix  Path prefix prepended to every `source` attribute
+     *                        (e.g. the subdirectory within the archive that
+     *                        contains the mod files). May be empty.
+     * @return A fully populated FomodInstaller. Returns a default-constructed
+     *         (empty) installer if the document has no `<config>` root element.
+     * @pre @p doc must be a successfully parsed pugixml document (not empty/failed).
+     * @throw Does not throw. Malformed or unknown XML elements are logged and skipped.
+     *        Excessively deep condition trees are truncated to prevent stack overflow.
+     */
     static MO2_API FomodInstaller parse(const pugi::xml_document& doc,
                                         const std::string& archive_prefix);
 
 private:
+    /** @brief Recursively convert a `<dependencies>` XML node into a FomodCondition tree. */
     static FomodCondition compile_condition(const pugi::xml_node& deps_node);
+
+    /** @brief Convert a single `<file>` or `<folder>` element into a FomodFileEntry. */
     static FomodFileEntry parse_file_entry(const pugi::xml_node& node,
                                            const std::string& archive_prefix);
+
+    /** @brief Map a group type string (e.g. "SelectExactlyOne") to the FomodGroupType enum. */
     static FomodGroupType parse_group_type(const std::string& type_str);
 };
 
