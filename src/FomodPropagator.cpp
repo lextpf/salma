@@ -42,9 +42,19 @@ PropagationResult propagate(const FomodInstaller& installer,
 
     std::unordered_map<std::string, std::string> flags;
 
-    // Iterate until fixpoint (no changes) or a safety limit is reached.
-    // 3 iterations suffice for the vast majority of FOMOD installers; the limit
-    // prevents runaway loops on pathological circular dependencies.
+    // Fixpoint iteration: repeat until no domain changes occur.
+    //
+    // Why fixpoint iteration instead of topological ordering or single-pass?
+    // FOMOD flag dependencies can form cycles (group A sets a flag that group B
+    // reads, and B sets a flag that A reads). A single forward pass misses
+    // backward propagation. Topological ordering requires acyclicity. Fixpoint
+    // iteration handles arbitrary dependency shapes correctly.
+    //
+    // Cap at 16 iterations: empirically, 2-3 iterations suffice for all known
+    // FOMOD installers (flag chains are typically short). 16 provides a wide
+    // safety margin for pathological circular dependencies without risking
+    // unbounded loops. The theoretical upper bound is N (number of groups) but
+    // that is unreachable in practice.
     static constexpr int MAX_ITERATIONS = 16;
     int total_resolved = 0;
 
