@@ -33,9 +33,9 @@
 </div>
 
 > [!IMPORTANT]
-> **Early release** - salma is under active development and has been tested against
-> **Nolvus Ascension 6.0.20** with 350 FOMODs (see `TESTS.png`).
-> Other modlists may work but are not yet validated.
+> **Early release** - salma is under active development and has been tested against:
+> - **Nolvus Ascension 6.0.20** with **350 FOMODs** (see `TESTS.png`).
+> - Other mods should work without issues - if you run into a problem, please report it.
 
 <div align="center">
 <br>
