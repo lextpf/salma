@@ -25,9 +25,12 @@ static crow::response json_response(int status, const json& body)
     return res;
 }
 
+// Strip the Nexus Mods download suffix from an archive filename stem.
+// Nexus appends "-{ModID}-{Version}-{FileID}" to downloads, e.g.
+// "SkyUI-1234-5.2-9876". The regex captures everything before the
+// final three numeric/version segments separated by hyphens.
 static std::string strip_nexus_suffix(const std::string& stem)
 {
-    // Nexus-style suffix: Name-ModID-Version-FileID
     static const std::regex nexus(R"(^(.*)-\d+-[\d\.\-]+-\d+$)");
     std::smatch m;
     if (std::regex_match(stem, m, nexus) && m.size() > 1)
@@ -37,6 +40,22 @@ static std::string strip_nexus_suffix(const std::string& stem)
     return stem;
 }
 
+// Locate a previously saved FOMOD JSON config that matches this mod/archive.
+//
+// Matching algorithm:
+//   1. Exact match: try "{mod_name}.json", "{archive_stem}.json", and
+//      "{archive_base}.json" (with Nexus suffix stripped) in that order.
+//   2. Fuzzy match: scan all .json files in the output directory, sorted
+//      longest-stem-first (greediest match wins). A candidate matches if
+//      its lowercase stem is a prefix of the mod name, archive stem, or
+//      stripped archive base AND:
+//        - Stem length >= 5 chars -- prevents short stems like "a.json"
+//          from matching unrelated mods. 5 was chosen as the minimum
+//          meaningful mod name length (e.g. "SkyUI").
+//        - Stem length >= 50% of the target string length -- ensures the
+//          match covers a significant portion, not just a trivial prefix.
+//        - The character immediately after the prefix is a separator
+//          (-, _, space, dot) -- prevents "Sky" from matching "Skyrim".
 static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
                                             const std::string& mod_name,
                                             const std::string& archive_filename)
@@ -77,8 +96,6 @@ static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
               [](const fs::path& a, const fs::path& b)
               { return a.stem().string().size() > b.stem().string().size(); });
 
-    // Require a minimum stem length of 5 and at least 50% of the target length
-    // to prevent short stems like "a.json" from matching unrelated mods.
     for (const auto& candidate : candidates)
     {
         const std::string stem_lower = mo2core::to_lower(candidate.stem().string());
@@ -374,7 +391,25 @@ crow::response InstallationController::handle_install(const crow::request& req)
         {
             auto mods_path = mo2server::ConfigService::instance().mo2_mods_path();
             const char* downloads_env = std::getenv("SALMA_DOWNLOADS_PATH");
-            std::string downloads_path = (downloads_env && *downloads_env) ? downloads_env : "";
+            std::string downloads_path;
+            if (downloads_env && *downloads_env)
+            {
+                auto dp = fs::path(downloads_env);
+                // Reject root paths (e.g. "/" or "C:\") that would make the
+                // containment check a no-op, and non-absolute paths that could
+                // be resolved relative to an attacker-chosen CWD.
+                if (dp.is_absolute() && dp.has_relative_path())
+                {
+                    downloads_path = downloads_env;
+                }
+                else
+                {
+                    logger.log_warning(
+                        std::format("[install] Ignoring SALMA_DOWNLOADS_PATH \"{}\": "
+                                    "must be a non-root absolute path",
+                                    downloads_env));
+                }
+            }
 
             bool archive_contained = false;
             if (!mods_path.empty() &&
@@ -427,9 +462,16 @@ crow::response InstallationController::handle_install(const crow::request& req)
             }
 
             auto mods_path_j = mo2server::ConfigService::instance().mo2_mods_path();
-            const char* downloads_env_j = std::getenv("SALMA_DOWNLOADS_PATH");
-            std::string downloads_path_j =
-                (downloads_env_j && *downloads_env_j) ? downloads_env_j : "";
+            std::string downloads_path_j;
+            if (const char* downloads_env_j = std::getenv("SALMA_DOWNLOADS_PATH");
+                downloads_env_j && *downloads_env_j)
+            {
+                auto dp = fs::path(downloads_env_j);
+                if (dp.is_absolute() && dp.has_relative_path())
+                {
+                    downloads_path_j = downloads_env_j;
+                }
+            }
             auto fomod_output = mo2server::ConfigService::instance().fomod_output_dir();
 
             bool json_contained = false;

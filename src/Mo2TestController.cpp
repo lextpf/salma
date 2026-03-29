@@ -70,8 +70,10 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
     }
 
     // Sanitize args: whitelist approach to prevent command injection.
-    // Only alphanumeric, space, underscore, hyphen, dot, and forward-slash are allowed.
-    static const std::regex kAllowedArgs(R"(^[a-zA-Z0-9 _\-\./"]*$)");
+    // Only alphanumeric, space, underscore, hyphen, and dot are allowed.
+    // Quotes and path separators are deliberately excluded to prevent
+    // argument-boundary escape and path traversal.
+    static const std::regex kAllowedArgs(R"(^[a-zA-Z0-9 _\-\.]*$)");
     if (!std::regex_match(args, kAllowedArgs))
     {
         return json_response(400, {{"error", "Invalid characters in test arguments"}});
