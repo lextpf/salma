@@ -49,7 +49,8 @@ struct SolverConfig
     /** @brief Maximum nodes explored during focused backtrack in Phase 4. (node count) */
     int focused_node_limit = 6'000'000;
 
-    /** @brief Search space estimate cap for exact-match focused fallback in Phase 4. (combinations) */
+    /** @brief Search space estimate cap for exact-match focused fallback in Phase 4. (combinations)
+     */
     uint64_t exact_focused_space_cap = 12'000'000ULL;
     /** @brief Maximum nodes explored during exact-match focused backtrack. (node count) */
     int exact_focused_node_limit = 8'000'000;
