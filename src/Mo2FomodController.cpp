@@ -301,14 +301,15 @@ static ModResult process_single_mod(const fs::path& mod_folder,
             return ModResult::NoFomod;
         }
 
-        std::ofstream ofs(choices_file);
+        // Write to a temporary file first, then atomically rename to prevent
+        // corrupted JSON if the process crashes or is interrupted mid-write.
+        auto tmp_file = choices_file;
+        tmp_file += ".tmp";
+        std::ofstream ofs(tmp_file);
         if (!ofs)
         {
-            logger.log_error(
-                infer_status(index,
-                             mod_name,
-                             "ERROR",
-                             std::format("(failed to open {})", choices_file.string())));
+            logger.log_error(infer_status(
+                index, mod_name, "ERROR", std::format("(failed to open {})", tmp_file.string())));
             return ModResult::Error;
         }
 
@@ -316,11 +317,27 @@ static ModResult process_single_mod(const fs::path& mod_folder,
         ofs.flush();
         if (!ofs.good())
         {
-            logger.log_error(
-                infer_status(index,
-                             mod_name,
-                             "ERROR",
-                             std::format("(failed to write {})", choices_file.string())));
+            logger.log_error(infer_status(
+                index, mod_name, "ERROR", std::format("(failed to write {})", tmp_file.string())));
+            std::error_code rm_ec;
+            fs::remove(tmp_file, rm_ec);
+            return ModResult::Error;
+        }
+        ofs.close();
+
+        std::error_code rename_ec;
+        fs::rename(tmp_file, choices_file, rename_ec);
+        if (rename_ec)
+        {
+            logger.log_error(infer_status(index,
+                                          mod_name,
+                                          "ERROR",
+                                          std::format("(failed to rename {} -> {}: {})",
+                                                      tmp_file.string(),
+                                                      choices_file.string(),
+                                                      rename_ec.message())));
+            std::error_code rm_ec;
+            fs::remove(tmp_file, rm_ec);
             return ModResult::Error;
         }
 

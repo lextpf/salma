@@ -137,7 +137,8 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
         }
 
         // Apply max_lines limit: keep only the last max_lines entries
-        if (max_lines >= 0 && static_cast<int>(lines_deque.size()) > max_lines)
+        // (max_lines == 0 means "all" - no trimming, consistent with full mode)
+        if (max_lines > 0 && static_cast<int>(lines_deque.size()) > max_lines)
         {
             lines_deque.erase(
                 lines_deque.begin(),

@@ -1,17 +1,21 @@
 #include "CApi.h"
-#include <cstdlib>
-#include <cstring>
-#include <mutex>
-#include <string>
 #include "FomodInferenceService.h"
 #include "InstallationService.h"
 #include "Logger.h"
 
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <string>
+
 // Mutex-guarded global so that installSucceeded() works correctly even when
 // install() and installSucceeded() are called from different threads (common
 // with Python ctypes).  A thread_local would silently return the wrong value.
+// The atomic type provides an additional safety net against accidental
+// unsynchronised reads outside the mutex.
 static std::mutex g_install_mutex;
-static bool g_last_install_success = false;
+static std::atomic<bool> g_last_install_success{false};
 
 namespace CApi
 {
