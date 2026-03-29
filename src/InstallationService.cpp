@@ -1,6 +1,7 @@
 #include "InstallationService.h"
 #include "ArchiveService.h"
 #include "FileOperations.h"
+#include "FomodIRParser.h"
 #include "FomodService.h"
 #include "Logger.h"
 #include "ModStructureDetector.h"
@@ -385,10 +386,11 @@ std::string InstallationService::handle_fomod_install(const fs::path& fomod_fold
     }
 
     FomodService fomod_service;
+    fomod_service.set_installer(FomodIRParser::parse(doc, ""));
 
     // Check module-level dependencies
     logger.log("[install] Checking module-level dependencies...");
-    if (!fomod_service.check_module_dependencies(doc, &context))
+    if (!fomod_service.check_module_dependencies(&context))
     {
         throw std::runtime_error("Module-level dependencies not met - installation cannot proceed");
     }
@@ -397,7 +399,7 @@ std::string InstallationService::handle_fomod_install(const fs::path& fomod_fold
     if (!config_json.is_null())
     {
         logger.log("[install] Validating JSON selections...");
-        if (!fomod_service.validate_json_selections(doc, config_json))
+        if (!fomod_service.validate_json_selections(config_json))
         {
             logger.log_warning(
                 "[install] WARNING: JSON selections have group-type constraint violations");
@@ -412,20 +414,18 @@ std::string InstallationService::handle_fomod_install(const fs::path& fomod_fold
 
     // Process required files
     logger.log("[install] Processing required install files...");
-    fomod_service.process_required_files(
-        doc, src_base, dst_base, &context, file_ops, next_doc_order);
+    fomod_service.process_required_files(src_base, dst_base, file_ops, next_doc_order);
 
     // Process optional files and auto-install behavior.
     // Even when selections are missing, this still installs Required plugins and
     // alwaysInstall/installIfUsable entries from unselected plugins.
     logger.log("[install] Processing optional install files...");
     fomod_service.process_optional_files(
-        doc, config_json, src_base, dst_base, &context, file_ops, next_doc_order);
+        config_json, src_base, dst_base, &context, file_ops, next_doc_order);
 
     // Process conditional files
     logger.log("[install] Processing conditional file installs...");
-    fomod_service.process_conditional_files(
-        doc, src_base, dst_base, &context, file_ops, next_doc_order);
+    fomod_service.process_conditional_files(src_base, dst_base, &context, file_ops, next_doc_order);
 
     // Execute all file operations in a single priority-sorted pass
     int file_op_failures = FomodService::execute_file_operations(file_ops);

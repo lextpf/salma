@@ -1,10 +1,10 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
-#include <pugixml.hpp>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "FomodIR.h"
 #include "Types.h"
 
 namespace mo2core
@@ -112,36 +112,45 @@ class FomodService
 {
 public:
     /**
+     * @brief Set the parsed FOMOD IR for this installation.
+     *
+     * Must be called before any other method. The caller is responsible
+     * for parsing the XML via FomodIRParser::parse() and passing the result.
+     *
+     * @param installer Parsed FOMOD IR.
+     * @throw Does not throw.
+     */
+    void set_installer(FomodInstaller installer);
+
+    /**
      * @brief Evaluate top-level `<moduleDependencies>`.
      *
-     * @param doc Parsed ModuleConfig.xml.
      * @param context Dependency context (installed files, game version, etc.).
      * @return `true` if dependencies are met or absent.
+     * @pre set_installer() has been called.
+     * @throw Does not throw. Dependency evaluation is non-throwing.
      */
-    bool check_module_dependencies(const pugi::xml_document& doc,
-                                   const FomodDependencyContext* context);
+    bool check_module_dependencies(const FomodDependencyContext* context);
 
     /**
      * @brief Enqueue files from `<requiredInstallFiles>`.
      *
      * These are always installed regardless of user selections.
      *
-     * @param doc Parsed ModuleConfig.xml.
      * @param src_base Source base path (extracted archive root).
      * @param dst_base Destination mod directory.
-     * @param context Dependency context.
      * @param ops Accumulated file operations vector (caller-owned).
      * @param next_doc_order Monotonic counter for XML document order tiebreaker (caller-owned).
+     * @pre set_installer() has been called.
+     * @throw Does not throw. Unsafe destinations are logged and skipped.
      */
-    void process_required_files(const pugi::xml_document& doc,
-                                const std::string& src_base,
+    void process_required_files(const std::string& src_base,
                                 const std::string& dst_base,
-                                const FomodDependencyContext* context,
                                 std::vector<FileOperation>& ops,
                                 int& next_doc_order);
 
     /**
-     * @brief Validate JSON selections against the XML schema.
+     * @brief Validate JSON selections against the IR schema.
      *
      * Checks that group-type constraints (SelectExactlyOne,
      * SelectAtMostOne, etc.) are satisfied for each group containing
@@ -153,26 +162,18 @@ public:
      * @return `true` if all groups pass validation, `false` if any
      *         constraint is violated.
      *
-     * @note Callers are expected to log the result but **not** abort
-     *       the installation on failure. Partial or inferred JSON
-     *       may legitimately violate cardinality constraints (e.g.
-     *       Required plugins are auto-installed and may not appear
-     *       in the JSON selection list). InstallationService logs a
-     *       warning and proceeds.
-     *
-     * @param doc Parsed ModuleConfig.xml.
      * @param config_json User or inferred selections.
+     * @pre set_installer() has been called.
+     * @throw Does not throw. Malformed JSON structures are handled gracefully.
      */
-    bool validate_json_selections(const pugi::xml_document& doc, const nlohmann::json& config_json);
+    bool validate_json_selections(const nlohmann::json& config_json);
 
     /**
      * @brief Process selected plugins: extract flags and enqueue file operations.
      *
      * Walks the JSON config's step -> group -> plugin selections,
-     * locates each plugin in the XML using a cascading XPath strategy
-     * (full path -> step+plugin -> group+plugin -> plugin-only ->
-     * case-insensitive value match), collects `<conditionFlags>`,
-     * and enqueues file/folder operations with their priorities.
+     * matches against the IR, collects condition flags, and enqueues
+     * file/folder operations with their priorities.
      *
      * Also auto-installs Required-type plugins not explicitly listed
      * in the JSON. After processing all steps, a second pass enqueues
@@ -180,16 +181,21 @@ public:
      * attributes from unselected plugins (skipping NotUsable plugins
      * for installIfUsable).
      *
-     * @param doc Parsed ModuleConfig.xml.
      * @param config_json User or inferred selections.
      * @param src_base Source base path (extracted archive root).
      * @param dst_base Destination mod directory.
      * @param context Dependency context.
      * @param ops Accumulated file operations vector (caller-owned).
      * @param next_doc_order Monotonic counter for XML document order tiebreaker (caller-owned).
+     * @pre set_installer() has been called.
+     * @pre process_required_files() should be called first to establish correct
+     *      document_order sequencing.
+     * @throw std::exception (re-thrown) if JSON traversal encounters a type error
+     *        (e.g. a non-string entry in a plugins array). On exception, all
+     *        operations enqueued by this call are rolled back from @p ops and
+     *        @p next_doc_order is restored to its original value.
      */
-    void process_optional_files(const pugi::xml_document& doc,
-                                const nlohmann::json& config_json,
+    void process_optional_files(const nlohmann::json& config_json,
                                 const std::string& src_base,
                                 const std::string& dst_base,
                                 const FomodDependencyContext* context,
@@ -197,21 +203,23 @@ public:
                                 int& next_doc_order);
 
     /**
-     * @brief Evaluate `<conditionalFileInstalls>` patterns.
+     * @brief Evaluate `<conditionalFileInstalls>` patterns from the IR.
      *
-     * Iterates `<pattern>` nodes, evaluates their `<dependencies>`
+     * Iterates conditional patterns, evaluates their conditions
      * against the current flag state, and enqueues matching file
      * operations.
      *
-     * @param doc Parsed ModuleConfig.xml.
      * @param src_base Source base path.
      * @param dst_base Destination mod directory.
      * @param context Dependency context.
      * @param ops Accumulated file operations vector (caller-owned).
      * @param next_doc_order Monotonic counter for XML document order tiebreaker (caller-owned).
+     * @pre set_installer() has been called.
+     * @pre process_optional_files() should be called first so that plugin flags
+     *      are populated for condition evaluation.
+     * @throw Does not throw. Condition evaluation and file enqueuing are non-throwing.
      */
-    void process_conditional_files(const pugi::xml_document& doc,
-                                   const std::string& src_base,
+    void process_conditional_files(const std::string& src_base,
                                    const std::string& dst_base,
                                    const FomodDependencyContext* context,
                                    std::vector<FileOperation>& ops,
@@ -226,64 +234,33 @@ public:
      *
      * @param ops File operations to sort and execute (cleared after execution).
      * @return Number of failed file operations (0 = all succeeded).
+     * @post @p ops is cleared after execution regardless of individual failures.
+     * @throw Does not throw. Individual copy failures are caught, counted, and
+     *        logged; the return value indicates how many operations failed.
      */
     static int execute_file_operations(std::vector<FileOperation>& ops);
 
 private:
-    void extract_flags(const pugi::xml_node& plugin_node);
-    void process_files_node(const pugi::xml_node& files_node,
-                            const std::string& src_base,
-                            const std::string& dst_base,
-                            std::vector<FileOperation>& ops,
-                            int& next_doc_order);
-    void process_plugin_node(const pugi::xml_node& plugin_node,
-                             const std::string& src_base,
-                             const std::string& dst_base,
-                             const FomodDependencyContext* context,
-                             std::vector<FileOperation>& ops,
-                             int& next_doc_order);
-    int get_priority(const pugi::xml_node& node);
-    std::string normalize_string(const std::string& value);
-    bool validate_group_selection(const pugi::xml_node& group_node,
-                                  const std::unordered_set<std::string>& selected_plugins);
-    PluginType evaluate_plugin_type(const pugi::xml_node& plugin_node,
-                                    const FomodDependencyContext* context);
-    void process_explicit_selections(const pugi::xml_document& doc,
-                                     const nlohmann::json& steps_json,
-                                     const std::string& src_base,
-                                     const std::string& dst_base,
-                                     const FomodDependencyContext* context,
-                                     std::vector<FileOperation>& ops,
-                                     int& next_doc_order,
-                                     std::unordered_set<std::string>& processed_plugins,
-                                     std::unordered_set<std::string>& covered_steps);
-    void auto_install_required_for_step(
-        const pugi::xml_document& doc,
-        const std::string& step_name,
-        std::unordered_set<std::string>& processed_keys,
-        const std::string& src_base,
-        const std::string& dst_base,
-        const FomodDependencyContext* context,
-        std::vector<FileOperation>& ops,
-        int& next_doc_order,
-        const std::unordered_set<std::string>* skip_steps = nullptr);
-    void process_auto_install_plugins(const pugi::xml_document& doc,
-                                      const std::unordered_set<std::string>& processed_keys,
-                                      const std::string& src_base,
-                                      const std::string& dst_base,
-                                      const FomodDependencyContext* context,
-                                      std::vector<FileOperation>& ops,
-                                      int& next_doc_order);
-    void process_files_node_filtered(const pugi::xml_node& files_node,
-                                     const std::string& src_base,
-                                     const std::string& dst_base,
-                                     PluginType plugin_type,
-                                     std::vector<FileOperation>& ops,
-                                     int& next_doc_order);
-    std::string make_plugin_key(const std::string& step,
-                                const std::string& group,
-                                const std::string& plugin);
+    /** Convert an IR file entry into a FileOperation with absolute paths. */
+    void enqueue_entry(const FomodFileEntry& entry,
+                       const std::string& src_base,
+                       const std::string& dst_base,
+                       std::vector<FileOperation>& ops,
+                       int& next_doc_order);
 
+    /** Enqueue all file entries from a plugin. */
+    void enqueue_plugin_files(const FomodPlugin& plugin,
+                              const std::string& src_base,
+                              const std::string& dst_base,
+                              std::vector<FileOperation>& ops,
+                              int& next_doc_order);
+
+    /** Build a composite key for plugin dedup tracking (step\x1fgroup\x1fplugin, lowercased). */
+    static std::string make_plugin_key(const std::string& step,
+                                       const std::string& group,
+                                       const std::string& plugin);
+
+    FomodInstaller installer_;  ///< Parsed FOMOD IR (set by parse_ir)
     std::unordered_map<std::string, std::string>
         plugin_flags_;  ///< Accumulated condition flags from selected plugins
 };
