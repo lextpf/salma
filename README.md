@@ -40,7 +40,7 @@
 <div align="center">
 <br>
 
-<img src="TESTS.png" alt="Preview" width="325"/>
+<img src="TESTS.png" alt="Preview" width="450"/>
 
 </div>
 
