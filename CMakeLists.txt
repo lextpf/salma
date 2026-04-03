@@ -208,6 +208,14 @@ if(NOT DEFINED SALMA_7Z_DLL OR NOT EXISTS "${SALMA_7Z_DLL}")
     set(SALMA_7Z_DLL "")
 endif()
 
+# Normalize to forward slashes regardless of source (-DSALMA_7Z_DLL override,
+# SEVENZIP_PATH env, or Program Files). A backslash path from a Windows shell
+# (e.g. D:\a\salma\salma\7z\7z.dll) serializes verbatim into cmake_install.cmake
+# and trips CMake's string escape parser on tokens like \a at install/cpack time.
+if(SALMA_7Z_DLL)
+    file(TO_CMAKE_PATH "${SALMA_7Z_DLL}" SALMA_7Z_DLL)
+endif()
+
 # MO2_PLUGIN component
 install(FILES "${CMAKE_SOURCE_DIR}/scripts/mo2-salma.py"
         DESTINATION plugins
