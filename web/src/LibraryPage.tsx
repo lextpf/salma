@@ -155,7 +155,7 @@ export default function LibraryPage() {
             type="text"
             placeholder="Filter mods..."
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e => { setSearch(e.target.value); }}
             aria-label="Filter mods"
             style={{
               width: '100%',
