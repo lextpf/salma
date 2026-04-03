@@ -104,7 +104,7 @@ export default function WhyPanel({ confidence, reasons, title }: WhyPanelProps) 
     <div style={{ marginTop: 8 }}>
       <button
         type="button"
-        onClick={() => setOpen(v => !v)}
+        onClick={() => { setOpen(v => !v); }}
         className="tool-btn"
         style={{ padding: '4px 10px', fontSize: 'var(--fs-micro)', gap: 6 }}
       >
