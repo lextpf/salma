@@ -68,7 +68,7 @@ export default function JobLine({ job, index }: JobLineProps) {
   }
 
   return (
-    <div onClick={e => e.stopPropagation()} style={{ margin: '2px -10px 0' }}>
+    <div onClick={e => { e.stopPropagation(); }} style={{ margin: '2px -10px 0' }}>
       <div
         role={canExpand ? 'button' : undefined}
         tabIndex={canExpand ? 0 : undefined}
