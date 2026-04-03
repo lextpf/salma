@@ -35,8 +35,8 @@ web/.vite/
 .env
 .env.local
 
-# Logs
-logs/
+# Logs (runtime output only; anchored so it does not swallow web/src/comps/logs)
+/logs/
 *.log
 .tmp/
 
