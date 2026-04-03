@@ -34,7 +34,7 @@ export default function Tabs({ items, active, onChange, variant = 'underline' }:
               type="button"
               role="tab"
               aria-selected={on}
-              onClick={() => onChange(it.id)}
+              onClick={() => { onChange(it.id); }}
               style={{
                 padding: '5px 12px',
                 borderRadius: 6,
