@@ -31,7 +31,7 @@ export function useVirtualScroll(): VirtualScrollState {
     elRef.current = node
     if (!node) return
     setContainerHeight(node.clientHeight)
-    const obs = new ResizeObserver(([e]) => setContainerHeight(e.contentRect.height))
+    const obs = new ResizeObserver(([e]) => { setContainerHeight(e.contentRect.height); })
     obs.observe(node)
     obsRef.current = obs
   }, [])
