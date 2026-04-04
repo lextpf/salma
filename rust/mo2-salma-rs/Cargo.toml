@@ -1,0 +1,13 @@
+[package]
+name = "mo2_salma_rs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Rust port of the salma mo2-core FOMOD engine, exposing the flat C ABI as mo2_salma_rs.dll."
+publish = false
+
+[lib]
+name = "mo2_salma_rs"
+# cdylib -> the mo2_salma_rs.dll the MO2 plugin loads via ctypes.
+# rlib   -> lets `cargo test` link the boundary helpers as a normal library.
+crate-type = ["cdylib", "rlib"]
