@@ -438,7 +438,8 @@ def cmd_generate(args) -> int:
             "error": error,
         }
         fixture_path.write_text(
-            json.dumps(fixture, ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps(fixture, ensure_ascii=False, indent=2), encoding="utf-8",
+            newline="\n")
         fixtures.append({"mod_name": mod_name,
                          "fixture_file": fixture_path.name, "status": status})
 
@@ -470,7 +471,8 @@ def cmd_generate(args) -> int:
     }
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8",
+        newline="\n")
 
     _print_summary(counts, total_time, manifest_path)
     return 0
@@ -814,7 +816,7 @@ def cmd_curate(args) -> int:
     entries_sorted = sorted(entries, key=lambda e: e["path"].lower())
     (case_dir / "archive_entries.json").write_text(
         json.dumps(entries_sorted, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8")
+        encoding="utf-8", newline="\n")
 
     # ModuleConfig.xml
     mc = find_module_config(entries)
@@ -829,7 +831,8 @@ def cmd_curate(args) -> int:
     mod_folder = mods_dir / args.mod_name
     tree = scan_target_tree(mod_folder) if mod_folder.is_dir() else []
     (case_dir / "target_tree.json").write_text(
-        json.dumps(tree, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        json.dumps(tree, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        newline="\n")
 
     # case.json
     group_types = sorted(_parse_group_types(mc_bytes)) if has_module_config else []
@@ -858,7 +861,7 @@ def cmd_curate(args) -> int:
     }
     (case_dir / "case.json").write_text(
         json.dumps(case_meta, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8")
+        encoding="utf-8", newline="\n")
 
     total = sum(p.stat().st_size for p in case_dir.iterdir() if p.is_file())
     print(f"Curated case {case_name!r} -> {case_dir}")
