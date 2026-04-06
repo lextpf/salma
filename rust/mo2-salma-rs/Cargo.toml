@@ -11,3 +11,11 @@ name = "mo2_salma_rs"
 # cdylib -> the mo2_salma_rs.dll the MO2 plugin loads via ctypes.
 # rlib   -> lets `cargo test` link the boundary helpers as a normal library.
 crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(windows)'.dependencies]
+# Minimal Win32 surface for utils::module_directory / executable_directory
+# (GetModuleHandleExW + GetModuleFileNameW), mirroring src/Utils.cpp.
+windows-sys = { version = "0.60", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+] }
