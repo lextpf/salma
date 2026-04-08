@@ -1,0 +1,395 @@
+//! Shared fixture-loading harness for the golden-case integration tests.
+//!
+//! Hoisted from the Task 5 atom-expansion test (`fomod_atoms_fixtures.rs`) so
+//! the Task 6 forward-simulator fixtures (`fomod_forward_simulator_fixtures.rs`)
+//! drive the SAME caller input-prep the engine uses
+//! (`FomodInferenceService.cpp` steps 1-2): build `sorted_norm_entries` /
+//! `norm_entry_sizes` from the archive listing, derive the fomod prefix from
+//! the shallowest `fomod/ModuleConfig.xml` entry, parse the XML, then run
+//! `expand_all_atoms` -> `build_atom_index` -> `compute_excluded_dests` ->
+//! `build_target_tree`. See PARITY-NOTES "Task 5"/"Task 6" for the derivation.
+//!
+//! `#![allow(dead_code)]`: cargo compiles this module separately into each
+//! `tests/*.rs` crate, and no single test binary exercises every helper.
+#![allow(dead_code)]
+
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use mo2_salma_rs::fomod_atom::{AtomIndex, ExpandedAtoms, TargetTree};
+use mo2_salma_rs::fomod_inference_atoms::{
+    build_atom_index, build_target_tree, compute_excluded_dests, expand_all_atoms,
+};
+use mo2_salma_rs::fomod_ir::FomodInstaller;
+use mo2_salma_rs::fomod_ir_parser::parse_module_config;
+use mo2_salma_rs::utils::normalize_path;
+
+/// Absolute path to the committed golden-case corpus.
+pub fn golden_cases_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/golden/cases")
+}
+
+/// Sorted names of every committed fixture case that ships a ModuleConfig.xml.
+pub fn committed_cases() -> Vec<String> {
+    let mut cases: Vec<String> = fs::read_dir(golden_cases_dir())
+        .expect("golden cases dir")
+        .filter_map(|e| {
+            let e = e.unwrap();
+            e.path()
+                .join("ModuleConfig.xml")
+                .exists()
+                .then(|| e.file_name().to_string_lossy().into_owned())
+        })
+        .collect();
+    cases.sort();
+    cases
+}
+
+/// Just-enough JSON reader for the machine-generated fixture files
+/// (`archive_entries.json`, `target_tree.json`, `expected.json`): avoids a JSON
+/// crate dependency; any shape surprise panics, which is the right failure mode
+/// in a test.
+pub mod minijson {
+    #[derive(Debug)]
+    pub enum Value {
+        Null,
+        Bool(bool),
+        Number(f64),
+        String(String),
+        Array(Vec<Value>),
+        Object(Vec<(String, Value)>),
+    }
+
+    impl Value {
+        pub fn member(&self, key: &str) -> Option<&Value> {
+            match self {
+                Value::Object(pairs) => pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+                other => panic!("member({key:?}) on non-object {other:?}"),
+            }
+        }
+
+        pub fn as_array(&self) -> &[Value] {
+            match self {
+                Value::Array(items) => items,
+                other => panic!("as_array on {other:?}"),
+            }
+        }
+
+        pub fn as_str(&self) -> &str {
+            match self {
+                Value::String(s) => s,
+                other => panic!("as_str on {other:?}"),
+            }
+        }
+
+        pub fn as_u64(&self) -> u64 {
+            match self {
+                // Fixture sizes stay far below 2^53; f64 is exact there.
+                Value::Number(n) => *n as u64,
+                other => panic!("as_u64 on {other:?}"),
+            }
+        }
+
+        pub fn as_bool(&self) -> bool {
+            match self {
+                Value::Bool(b) => *b,
+                other => panic!("as_bool on {other:?}"),
+            }
+        }
+    }
+
+    pub fn parse(text: &str) -> Value {
+        let mut p = Parser {
+            bytes: text.as_bytes(),
+            pos: 0,
+        };
+        let value = p.value();
+        p.skip_ws();
+        assert_eq!(p.pos, p.bytes.len(), "trailing JSON content");
+        value
+    }
+
+    struct Parser<'a> {
+        bytes: &'a [u8],
+        pos: usize,
+    }
+
+    impl Parser<'_> {
+        fn skip_ws(&mut self) {
+            while matches!(self.bytes.get(self.pos), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+                self.pos += 1;
+            }
+        }
+
+        fn expect(&mut self, b: u8) {
+            assert_eq!(self.bytes.get(self.pos), Some(&b), "at byte {}", self.pos);
+            self.pos += 1;
+        }
+
+        fn value(&mut self) -> Value {
+            self.skip_ws();
+            match *self.bytes.get(self.pos).expect("unexpected JSON end") {
+                b'{' => self.object(),
+                b'[' => self.array(),
+                b'"' => Value::String(self.string()),
+                b't' => self.literal("true", Value::Bool(true)),
+                b'f' => self.literal("false", Value::Bool(false)),
+                b'n' => self.literal("null", Value::Null),
+                _ => self.number(),
+            }
+        }
+
+        fn literal(&mut self, word: &str, value: Value) -> Value {
+            assert!(
+                self.bytes[self.pos..].starts_with(word.as_bytes()),
+                "bad literal at byte {}",
+                self.pos
+            );
+            self.pos += word.len();
+            value
+        }
+
+        fn object(&mut self) -> Value {
+            self.expect(b'{');
+            let mut pairs = Vec::new();
+            self.skip_ws();
+            if self.bytes.get(self.pos) == Some(&b'}') {
+                self.pos += 1;
+                return Value::Object(pairs);
+            }
+            loop {
+                self.skip_ws();
+                let key = self.string();
+                self.skip_ws();
+                self.expect(b':');
+                pairs.push((key, self.value()));
+                self.skip_ws();
+                match self.bytes.get(self.pos) {
+                    Some(b',') => self.pos += 1,
+                    Some(b'}') => {
+                        self.pos += 1;
+                        return Value::Object(pairs);
+                    }
+                    other => panic!("bad object separator {other:?} at byte {}", self.pos),
+                }
+            }
+        }
+
+        fn array(&mut self) -> Value {
+            self.expect(b'[');
+            let mut items = Vec::new();
+            self.skip_ws();
+            if self.bytes.get(self.pos) == Some(&b']') {
+                self.pos += 1;
+                return Value::Array(items);
+            }
+            loop {
+                items.push(self.value());
+                self.skip_ws();
+                match self.bytes.get(self.pos) {
+                    Some(b',') => self.pos += 1,
+                    Some(b']') => {
+                        self.pos += 1;
+                        return Value::Array(items);
+                    }
+                    other => panic!("bad array separator {other:?} at byte {}", self.pos),
+                }
+            }
+        }
+
+        fn string(&mut self) -> String {
+            self.expect(b'"');
+            let mut out = String::new();
+            loop {
+                match *self.bytes.get(self.pos).expect("unterminated JSON string") {
+                    b'"' => {
+                        self.pos += 1;
+                        return out;
+                    }
+                    b'\\' => {
+                        self.pos += 1;
+                        let esc = *self.bytes.get(self.pos).expect("truncated escape");
+                        self.pos += 1;
+                        match esc {
+                            b'"' => out.push('"'),
+                            b'\\' => out.push('\\'),
+                            b'/' => out.push('/'),
+                            b'b' => out.push('\u{8}'),
+                            b'f' => out.push('\u{c}'),
+                            b'n' => out.push('\n'),
+                            b'r' => out.push('\r'),
+                            b't' => out.push('\t'),
+                            b'u' => {
+                                let s = std::str::from_utf8(&self.bytes[self.pos..self.pos + 4])
+                                    .unwrap();
+                                self.pos += 4;
+                                let code = u32::from_str_radix(s, 16).expect("bad \\u escape");
+                                out.push(char::from_u32(code).expect("bad \\u code point"));
+                            }
+                            other => panic!("unsupported escape \\{}", other as char),
+                        }
+                    }
+                    b => {
+                        let len = match b {
+                            0..=0x7f => 1,
+                            0xc0..=0xdf => 2,
+                            0xe0..=0xef => 3,
+                            _ => 4,
+                        };
+                        out.push_str(
+                            std::str::from_utf8(&self.bytes[self.pos..self.pos + len]).unwrap(),
+                        );
+                        self.pos += len;
+                    }
+                }
+            }
+        }
+
+        fn number(&mut self) -> Value {
+            let start = self.pos;
+            while matches!(
+                self.bytes.get(self.pos),
+                Some(b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9')
+            ) {
+                self.pos += 1;
+            }
+            let s = std::str::from_utf8(&self.bytes[start..self.pos]).unwrap();
+            Value::Number(s.parse().unwrap_or_else(|_| panic!("bad number {s:?}")))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Caller input prep, replicating FomodInferenceService.cpp:833-886.
+// ---------------------------------------------------------------------------
+
+/// Raw archive listing in document order: (path, size) pairs from
+/// `archive_entries.json` (order matters for last-write-wins size collisions).
+pub fn load_archive_entries(case_dir: &Path) -> Vec<(String, u64)> {
+    let text = fs::read_to_string(case_dir.join("archive_entries.json"))
+        .expect("archive_entries.json readable");
+    minijson::parse(&text)
+        .as_array()
+        .iter()
+        .map(|e| {
+            (
+                e.member("path").expect("path").as_str().to_string(),
+                e.member("size").expect("size").as_u64(),
+            )
+        })
+        .collect()
+}
+
+/// Installed-file map from `target_tree.json` (path -> size).
+pub fn load_installed_files(case_dir: &Path) -> HashMap<String, u64> {
+    let text =
+        fs::read_to_string(case_dir.join("target_tree.json")).expect("target_tree.json readable");
+    minijson::parse(&text)
+        .as_array()
+        .iter()
+        .map(|e| {
+            (
+                e.member("path").expect("path").as_str().to_string(),
+                e.member("size").expect("size").as_u64(),
+            )
+        })
+        .collect()
+}
+
+/// Load and parse a fixture's `expected.json` (the authoritative C++ output).
+pub fn load_expected(case: &str) -> minijson::Value {
+    let text = fs::read_to_string(golden_cases_dir().join(case).join("expected.json"))
+        .expect("expected.json readable");
+    minijson::parse(&text)
+}
+
+/// Mirror of the engine's entry-index prep (`FomodInferenceService.cpp:836`):
+/// skip directory markers (trailing "/" or "\\"), normalize each survivor
+/// (keeping duplicates), byte-wise sort; sizes keyed by normalized path with
+/// the value looked up by the ORIGINAL path, last-write-wins on collisions.
+pub fn prep_entries(raw: &[(String, u64)]) -> (Vec<String>, HashMap<String, u64>) {
+    let mut sorted_norm = Vec::with_capacity(raw.len());
+    let mut norm_sizes = HashMap::new();
+    for (path, size) in raw {
+        if path.ends_with('/') || path.ends_with('\\') {
+            continue;
+        }
+        let norm = normalize_path(path);
+        sorted_norm.push(norm.clone());
+        norm_sizes.insert(norm, *size);
+    }
+    sorted_norm.sort();
+    (sorted_norm, norm_sizes)
+}
+
+/// Mirror of the engine's fomod-prefix derivation
+/// (`FomodInferenceService.cpp:850-882`): candidates are normalized entries
+/// equal to `fomod/moduleconfig.xml` or ending with `/fomod/moduleconfig.xml`
+/// (path-boundary check); pick the shallowest by '/' count, ties broken by
+/// shorter total length keeping the first otherwise; then strip the suffix and
+/// its joining slash.
+pub fn derive_prefix(raw: &[(String, u64)]) -> Option<String> {
+    const SUFFIX: &str = "fomod/moduleconfig.xml";
+    let mut best = String::new();
+    let mut best_depth = usize::MAX;
+    for (path, _) in raw {
+        let norm = normalize_path(path);
+        let is_candidate =
+            norm == SUFFIX || (norm.len() > SUFFIX.len() && norm.ends_with(&format!("/{SUFFIX}")));
+        if !is_candidate {
+            continue;
+        }
+        let depth = norm.matches('/').count();
+        if depth < best_depth
+            || (depth == best_depth && (best.is_empty() || norm.len() < best.len()))
+        {
+            best = norm;
+            best_depth = depth;
+        }
+    }
+    if best.is_empty() {
+        return None;
+    }
+    let mut suffix_pos = best.len() - SUFFIX.len();
+    if suffix_pos > 0 && best.as_bytes()[suffix_pos - 1] == b'/' {
+        suffix_pos -= 1;
+    }
+    Some(best[..suffix_pos].to_string())
+}
+
+/// Fully-prepared inputs for a fixture case: the derived prefix, the parsed IR,
+/// and the Task 5 pipeline outputs.
+pub struct CaseRun {
+    pub prefix: String,
+    pub installer: FomodInstaller,
+    pub atoms: ExpandedAtoms,
+    pub index: AtomIndex,
+    pub excluded: HashSet<String>,
+    pub target: TargetTree,
+}
+
+/// Prepare a fixture case end to end: load archive listing + installed files,
+/// derive the prefix, parse the XML, then run the Task 5 pipeline.
+pub fn run_case(case: &str) -> CaseRun {
+    let case_dir = golden_cases_dir().join(case);
+    let raw = load_archive_entries(&case_dir);
+    let (sorted_entries, entry_sizes) = prep_entries(&raw);
+    let prefix = derive_prefix(&raw).unwrap_or_else(|| panic!("{case}: no fomod prefix found"));
+    let bytes = fs::read(case_dir.join("ModuleConfig.xml"))
+        .unwrap_or_else(|e| panic!("read fixture {case}: {e}"));
+    let installer = parse_module_config(&bytes, &prefix)
+        .unwrap_or_else(|e| panic!("parse fixture {case}: {e}"));
+    let atoms = expand_all_atoms(&installer, &sorted_entries, &entry_sizes);
+    let index = build_atom_index(&atoms);
+    let excluded = compute_excluded_dests(&index);
+    let target = build_target_tree(&load_installed_files(&case_dir));
+    CaseRun {
+        prefix,
+        installer,
+        atoms,
+        index,
+        excluded,
+        target,
+    }
+}

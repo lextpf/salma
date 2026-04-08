@@ -1104,3 +1104,235 @@ Each site carries a source comment naming the dropped C++ log line.
   functions instead of the `LeafEvaluator` template, `for_each`/`for_each_mut`
   instead of const/non-const overloads, and dropped log lines (Task 17), all
   documented above.
+
+## Task 6 - Forward simulator + repro metrics
+
+Ported `src/FomodForwardSimulator.hpp`/`.cpp` and, from `src/FomodCSPSolver.cpp`,
+`compare_trees_impl`/`compare_trees`/`collect_mismatched_dests`, plus the two
+`FomodCSPTypes.hpp`/`FomodCSPSolver.hpp` datatypes the simulator needs
+(`ReproMetrics`, `InferenceOverrides`).
+
+### API mapping
+
+| C++ (mo2core)                        | Rust                                                  |
+|--------------------------------------|-------------------------------------------------------|
+| `struct SimulatedTree`               | `fomod_forward_simulator::SimulatedTree`              |
+| `simulate(...)`                      | `fomod_forward_simulator::simulate`                   |
+| `simulate_into(...)`                 | `fomod_forward_simulator::simulate_into`              |
+| `compare_trees_impl<..>(...)` (tmpl) | `compare_trees_impl(.., impl FnMut(&str)->bool x3)`   |
+| `compare_trees(...)`                 | `compare_trees` (always-true predicate wrapper)       |
+| `collect_mismatched_dests(...)`      | `collect_mismatched_dests -> Vec<String>` (sorted)    |
+| `struct ReproMetrics`                | `fomod_csp_types::ReproMetrics` (five `i32`)          |
+| `struct InferenceOverrides`          | `fomod_csp_types::InferenceOverrides`                 |
+
+- The nullable `const FomodDependencyContext*` / `const InferenceOverrides*`
+  become `Option<&_>`. `const std::vector<...>&` selections become
+  `&[Vec<Vec<bool>>]`.
+- `compare_trees_impl`'s three C++ template predicates become three
+  `impl FnMut(&str) -> bool` parameters. Task 9's `lower_bound` MUST reuse this
+  generic function for its predicate-gated variant rather than reimplement the
+  else-chain (the task's stated constraint).
+- `InferenceOverrides` is declared in `FomodCSPSolver.hpp` in C++, not
+  `FomodCSPTypes.hpp`; the Rust port places it in `fomod_csp_types` with a doc
+  note so the simulator can consume it without the full solver header. Task 8
+  EXTENDS `fomod_csp_types` with the rest of `FomodCSPTypes.hpp`.
+
+### Phase-2 / phase-3 split and why visibility is re-evaluated
+
+The simulator runs four phases (required -> selected/Required-typed plugins ->
+auto atoms of unselected plugins -> conditional installs), mirroring
+`FomodService::process_optional_files`'s Pass 1 / Pass 3 split. Phase 2 evaluates
+`evaluate_plugin_type` and step visibility against the flag state accumulated
+SO FAR (the C++ phase-2 comment: "eff_type is evaluated against the flag state at
+this plugin's position ... matches the real installer, which detects
+Required-type plugins per step using flags accumulated up to that step"). Phase 3
+recomputes `flat_idx` from 0 and RE-EVALUATES step visibility against the now
+FINAL flag map (the C++ phase-3 comment: "evaluate eff_type against the FINAL
+flag state and apply auto atoms accordingly"). Because the flag map grows during
+phase 2, the same step's visibility can differ between phase 2 and phase 3, so
+the port does NOT cache visibility across phases; `compute_step_visibility` reads
+`flags` at call time in both passes. Both directions of the flip are covered by
+tests (`phase3_step_becomes_visible_...`, `phase3_step_becomes_invisible_...`).
+
+### The `>=` overwrite rule vs `execute_file_operations` stable-sort
+
+`should_overwrite(existing, new) = new.priority >= existing.priority` (note `>=`,
+so among equal priorities the LATER-applied atom wins). This is equivalent to the
+real installer `FomodService::execute_file_operations`, which collects ALL file
+operations then `std::stable_sort`s them by `(priority ascending, document_order
+ascending)` and applies in that order so the LAST write to a destination wins
+(verified against `src/FomodService.cpp:686-698`). The equivalence holds for two
+reasons. (1) For DISTINCT priorities the `>=` test makes the maximum-priority atom
+win irrespective of application order: a lower-priority atom fails `>=` and cannot
+displace a higher-priority incumbent, and a higher-priority atom always passes,
+which matches the installer applying the highest-priority op last. (2) For EQUAL
+priorities `>=` lets the later-applied atom win, and the simulator applies atoms
+in increasing `document_order` - required (lowest doc range) then plugin normal
+then plugin auto then conditional (highest), exactly the enqueue order
+`expand_all_atoms` assigns (Task 5) and the phase sequence 1->2->3->4 - so the
+last-applied equal-priority atom is the one with the greatest `document_order`,
+which is precisely the tail of the installer's stable-sorted run for that
+destination. Hence identical winners. (Caveat, inherited verbatim from the C++
+simulator and therefore replicated, not a divergence: the phase-2/phase-3 split
+applies a selected plugin's atoms in phase 2 and an unselected plugin's auto
+atoms in phase 3, so for a same-destination EQUAL-priority conflict between a
+selected atom and an unselected auto atom the phase-3 atom is applied later and
+wins even if its document_order is lower than the installer's global sort would
+pick. This does not manifest in any of the 15 fixtures - all reproduce the C++
+`outputTree` winning sources exactly.)
+
+### compare_trees else-chain
+
+Per destination in `target` (skipping `excluded`): absent from sim ->
+`missing`; else IF `target.size != 0 && atom.file_size != 0 && sizes differ` ->
+`size_mismatch` (and the hash check is SUPPRESSED); else IF `target.hash != 0 &&
+atom.content_hash != 0 && hashes differ` -> `hash_mismatch`; else `reproduced`.
+A zero size or zero hash on either side falls through toward `reproduced`. The
+second loop counts sim destinations absent from `target` (skipping `excluded`) as
+`extra`. Each mismatch increment is gated by the corresponding predicate. The
+port keeps the nested `if predicate { ++ }` inside the size/hash else-chain
+(clippy does not flag it because the outer `if/else if/else` carries an else);
+this is byte-faithful to the C++. `ReproMetrics::exact()` ignores `reproduced`;
+`better_than` is the lexicographic `(missing, extra, size_mismatch,
+hash_mismatch)` ascending then `reproduced` descending, all-equal -> false.
+
+### collect_mismatched_dests ordering decision
+
+The C++ collects missing/size-mismatch/hash-mismatch/extra destinations into an
+`unordered_set` (unspecified order) then `std::sort`s the resulting vector before
+returning. The Rust port mirrors this: collect into a `HashSet<String>`, then
+`.into_iter().collect::<Vec<_>>()` and `.sort()`, yielding the same deterministic
+byte-wise ascending order. Return type `Vec<String>` (not a set) matches the C++
+`std::vector<std::string>`. The only Task 9 consumer, `groups_for_mismatches`,
+iterates the result and looks up `dest_to_groups`; it depends on determinism, not
+on any particular order, so the sorted vector is safe. Task 9 may re-home these
+three functions next to the solver; if so it MUST reuse the generic
+`compare_trees_impl` for its `lower_bound` predicate variant.
+
+### Fixture oracle: overrides = None, context = None (trap (n))
+
+The C++ golden runs scored candidates via `evaluate_candidate` ->
+`simulate_into(..., context=nullptr, overrides=real)` where the overrides came
+from `compute_overrides` (`FomodInferenceService.cpp:1126/1311`, Task 12, NOT
+ported). Those overrides affect ONLY step-visibility conditions and
+conditional-install patterns, and ONLY when those conditions contain
+external-dependency leaves. `evaluate_plugin_type` takes a context, not overrides,
+and the C++ golden simulate passed `context=nullptr`, so plugin type_patterns are
+evaluated in inferred-Unknown mode in BOTH the golden run and the Rust fixture
+run regardless of overrides (no divergence there).
+
+Per-fixture scan of all 15 committed `ModuleConfig.xml` for external-dependency
+leaves (`gameDependency`/`fileDependency`/`pluginDependency`/`fomodDependency`/
+`fommDependency`/`foseDependency`) inside `<installStep>/<visible>` blocks and
+`<conditionalFileInstalls>/<pattern>/<dependencies>`:
+
+| fixture                          | steps | cond patterns | visible ext | conditional ext |
+|----------------------------------|-------|---------------|-------------|-----------------|
+| rar_7step_sos                    | 7     | 0             | none        | none            |
+| rar_exactlyone_heel_volume       | 1     | 0             | none        | none            |
+| rar_selectall_cbpc_config        | 1     | 0             | none        | none            |
+| sevenz_2step_nec_feet            | 2     | 0             | none        | none            |
+| sevenz_3step_tk_dodge            | 3     | 0             | none        | none            |
+| sevenz_3step_yorha_patches       | 3     | 0             | none        | none            |
+| sevenz_4step_lewdmarks           | 4     | 10            | none        | none            |
+| sevenz_9step_the_pure            | 9     | 0             | none        | none            |
+| sevenz_atmostone_slavetats_riek  | 1     | 0             | none        | none            |
+| sevenz_selectall_hh_walk         | 1     | 0             | none        | none            |
+| sevenz_selectany_racemenu_plugins| 1     | 0             | none        | none            |
+| zip_11step_cbbe_3ba              | 11    | 97            | none        | none            |
+| zip_atmostone_heels_srd          | 1     | 0             | none        | none            |
+| zip_exactlyone_mu_joint_fix      | 1     | 0             | none        | none            |
+| zip_exactlyone_racecompat        | 1     | 2             | none        | none            |
+
+ALL 15 fixtures are flag-only in visibility and conditional blocks. Since a flag
+leaf evaluates identically in normal and inferred-with-any-override mode, running
+the fixture tests with `overrides = None` (normal evaluation) reproduces the C++
+golden simulate. The premise of trap (n) is therefore VERIFIED for every fixture;
+no fixture needed a constructed override vector.
+
+### Selection-grid reconstruction and step alignment
+
+The fixture tests rebuild the C++ solver's winning `[step][group][plugin]` grid
+from `expected.json`: each step emits `groups`, each group emits `plugins`
+(selected) and `deselected`. IR is walked by position; `expected.json` emits one
+entry per IR step (the `<installSteps>` container inflates a raw `<installStep`
+grep by exactly 1, so the emitted step count equals the IR step count; all 15
+verified) and per IR group; a plugin is selected iff its name is in that group's
+`plugins` array, consuming name matches in order so duplicate names resolve
+positionally. Alignment asserts (`step count`, `group count`, `selected +
+deselected == IR plugin count`) guard the reconstruction and passed for all 15.
+
+### Metrics oracle and the archive-listing size discrepancy (IMPORTANT)
+
+TWO fixtures are non-exact in the C++ output, not one: `rar_exactlyone_heel_volume`
+(missing=35, reproduced=1 - the documented pre-existing-mod-folder case) AND
+`rar_7step_sos` (size_mismatch=5, reproduced=139). `rar_7step_sos` has no
+external-dependency conditions (table above), so overrides are irrelevant and the
+C++ pipeline is non-exact regardless - task option (1). Investigating it surfaced
+a fixture-DATA inconsistency that also affects `sevenz_2step_nec_feet` and
+`zip_11step_cbbe_3ba`:
+
+- `outputTree.size` IS `atom->file_size` (`FomodInferenceService.cpp:495`). The
+  golden inference run recorded `file_size = 0` for many output atoms (e.g.
+  120 of 144 in `rar_7step_sos`, all with nonzero size in `archive_entries.json`);
+  its live archive listing did not populate uncompressed sizes for those entries,
+  while the committed `archive_entries.json` snapshots carry populated sizes. This
+  is the libarchive/bit7z size-reporting split that CLAUDE.md warns about, between
+  the Task 2 fixture snapshot and the golden inference run.
+- When `atom.file_size == 0`, `compare_trees`'s size check is skipped and the file
+  falls through to `reproduced`. So the golden run reproduced files whose sizes it
+  never populated. A faithful end-to-end run over the FIXTURE atoms (nonzero sizes)
+  instead reports `size_mismatch` for exactly those destinations whose fixture
+  size differs from the installed target size. Three fixtures have such
+  differences: `rar_7step_sos` (10 vs 5), `sevenz_2step_nec_feet` (12 vs 0),
+  `zip_11step_cbbe_3ba` (3 vs 0). In every case the size-independent coverage total
+  `size_mismatch + reproduced` is unchanged (144, 31, 177 respectively) and
+  `missing`/`extra`/`hash_mismatch` match the golden `diagnostics.repro`.
+
+This is NOT a forward-simulator defect. The simulator's conflict resolution is
+size-INDEPENDENT (it compares only priority/document-order), and the fixture tests
+prove faithfulness three ways over ALL 15 fixtures without being derailed by the
+size discrepancy:
+
+1. `simulate_reproduces_cpp_output_tree`: the Rust simulate's `dest -> winning
+   source` map equals the C++ `outputTree` `dest -> source` map (byte-exact,
+   size-independent) for every fixture.
+2. `compare_trees_reproduces_cpp_repro_metrics`: `compare_trees` fed the
+   reconstructed C++ `outputTree` (with the golden atom sizes) reproduces each
+   fixture's full `diagnostics.repro` counters AND `exact_match` flag.
+3. `end_to_end_matches_repro_metrics`: the end-to-end run over
+   the fixture atoms matches `missing`, `extra`, `hash_mismatch`, and the
+   coverage total `size_mismatch + reproduced` for every fixture.
+
+The `heel_volume` metrics pin (missing=35, reproduced=1) is read from
+`expected.json` `diagnostics.repro` at test time (not hardcoded) and reproduced
+exactly by the end-to-end run, because `heel_volume` is size-consistent (its lone
+output atom's fixture size equals its golden size and the target size). The
+follow-up owner for the archive-listing discrepancy is Task 11 (Rust archive
+layer) / Task 16 (round-trip validation): whichever size-reporting behavior the
+Rust archive listing adopts will decide whether these three mods reproduce exactly
+or as size-mismatch in the full Rust pipeline, and that must be reconciled with
+the C++ behavior there. Logged here so it is not lost.
+
+### Dropped C++ log sites
+
+The forward simulator (`FomodForwardSimulator.cpp`) contains NO log calls, so
+nothing was dropped from it. `compare_trees_impl`/`compare_trees`/
+`collect_mismatched_dests` in `FomodCSPSolver.cpp` also contain no logging. The
+`evaluate_candidate` progress logging (`[solver] ...` tqdm bar) lives in
+`evaluate_candidate`, which is Task 8/9 and NOT in scope here.
+
+### Accepted divergences (Task 6)
+
+- None behavioral. Representational only: `Option<&_>` for nullable pointers,
+  `impl FnMut(&str) -> bool` predicates instead of C++ template parameters,
+  `&[Vec<Vec<bool>>]` for the const-ref selections vector, `usize` `flat_idx`
+  (only ever incremented from 0, so signed `int` is unnecessary), and the phase-3
+  `always_install || (install_if_usable && ...)` single condition in place of the
+  C++ two-branch else-if (semantically identical; clippy `if_same_then_else`).
+- Test-harness reuse: shared fixture-loading helpers were hoisted into
+  `tests/common/mod.rs` (minijson reader, `load_archive_entries`, `prep_entries`,
+  `derive_prefix`, `run_case` extended with the parsed `installer`, plus
+  `load_expected`/`committed_cases`). The Task 5 `fomod_atoms_fixtures.rs` still
+  carries its own inline copies to avoid churning a passing test; de-duplicating
+  it onto `common` is a safe follow-up.
