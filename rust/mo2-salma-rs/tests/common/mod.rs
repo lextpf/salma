@@ -369,6 +369,76 @@ pub struct CaseRun {
     pub target: TargetTree,
 }
 
+/// Reconstruct the C++ solver's `[step][group][plugin]` selection grid from a
+/// fixture's `expected.json`. Hoisted from the Task 6 forward-simulator
+/// fixtures so the Task 7 propagator fixtures share the exact positional walk.
+///
+/// The IR is walked by position; `expected.json` emits one entry per IR step
+/// and per IR group (verified by the alignment asserts). Within a group each IR
+/// plugin is selected iff its name appears in that group's `plugins` (selected)
+/// array; name matches are consumed in order so duplicate plugin names within a
+/// group resolve positionally.
+pub fn build_selection_grid(
+    installer: &FomodInstaller,
+    expected: &minijson::Value,
+    case: &str,
+) -> Vec<Vec<Vec<bool>>> {
+    let steps = expected.member("steps").expect("steps").as_array();
+    assert_eq!(
+        steps.len(),
+        installer.steps.len(),
+        "{case}: expected.json step count vs IR step count"
+    );
+
+    let mut grid = Vec::with_capacity(installer.steps.len());
+    for (si, ir_step) in installer.steps.iter().enumerate() {
+        let egroups = steps[si].member("groups").expect("groups").as_array();
+        assert_eq!(
+            egroups.len(),
+            ir_step.groups.len(),
+            "{case}: step {si} group count vs IR"
+        );
+
+        let mut step_grid = Vec::with_capacity(ir_step.groups.len());
+        for (gi, ir_group) in ir_step.groups.iter().enumerate() {
+            let selected = egroups[gi].member("plugins").expect("plugins").as_array();
+            let deselected: &[minijson::Value] = egroups[gi]
+                .member("deselected")
+                .map(|v| v.as_array())
+                .unwrap_or(&[]);
+            assert_eq!(
+                selected.len() + deselected.len(),
+                ir_group.plugins.len(),
+                "{case}: step {si} group {gi}: selected+deselected != IR plugin count"
+            );
+
+            // Multiset of selected plugin names; duplicates resolve positionally.
+            let mut sel_counts: HashMap<String, i32> = HashMap::new();
+            for p in selected {
+                *sel_counts
+                    .entry(p.member("name").expect("name").as_str().to_string())
+                    .or_insert(0) += 1;
+            }
+
+            let mut group_grid = Vec::with_capacity(ir_group.plugins.len());
+            for ir_plugin in &ir_group.plugins {
+                let take = sel_counts.get_mut(&ir_plugin.name).is_some_and(|n| {
+                    if *n > 0 {
+                        *n -= 1;
+                        true
+                    } else {
+                        false
+                    }
+                });
+                group_grid.push(take);
+            }
+            step_grid.push(group_grid);
+        }
+        grid.push(step_grid);
+    }
+    grid
+}
+
 /// Prepare a fixture case end to end: load archive listing + installed files,
 /// derive the prefix, parse the XML, then run the Task 5 pipeline.
 pub fn run_case(case: &str) -> CaseRun {

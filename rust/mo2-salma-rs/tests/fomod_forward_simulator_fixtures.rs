@@ -50,83 +50,11 @@ mod common;
 
 use std::collections::{HashMap, HashSet};
 
+use common::build_selection_grid;
 use common::minijson;
 use mo2_salma_rs::fomod_atom::FomodAtom;
 use mo2_salma_rs::fomod_csp_types::ReproMetrics;
 use mo2_salma_rs::fomod_forward_simulator::{SimulatedTree, compare_trees, simulate};
-use mo2_salma_rs::fomod_ir::FomodInstaller;
-
-/// Reconstruct the C++ solver's `[step][group][plugin]` selection grid from a
-/// fixture's `expected.json`.
-///
-/// The IR is walked by position; `expected.json` emits one entry per IR step
-/// and per IR group (verified by the alignment asserts). Within a group each IR
-/// plugin is selected iff its name appears in that group's `plugins` (selected)
-/// array; name matches are consumed in order so duplicate plugin names within a
-/// group resolve positionally. The exact source-parity assert in
-/// [`simulate_reproduces_cpp_output_tree`] is the safety net for the
-/// (real-mod-nonexistent) case where a duplicate name's selection is not
-/// prefix-aligned.
-fn build_selection_grid(
-    installer: &FomodInstaller,
-    expected: &minijson::Value,
-    case: &str,
-) -> Vec<Vec<Vec<bool>>> {
-    let steps = expected.member("steps").expect("steps").as_array();
-    assert_eq!(
-        steps.len(),
-        installer.steps.len(),
-        "{case}: expected.json step count vs IR step count"
-    );
-
-    let mut grid = Vec::with_capacity(installer.steps.len());
-    for (si, ir_step) in installer.steps.iter().enumerate() {
-        let egroups = steps[si].member("groups").expect("groups").as_array();
-        assert_eq!(
-            egroups.len(),
-            ir_step.groups.len(),
-            "{case}: step {si} group count vs IR"
-        );
-
-        let mut step_grid = Vec::with_capacity(ir_step.groups.len());
-        for (gi, ir_group) in ir_step.groups.iter().enumerate() {
-            let selected = egroups[gi].member("plugins").expect("plugins").as_array();
-            let deselected: &[minijson::Value] = egroups[gi]
-                .member("deselected")
-                .map(|v| v.as_array())
-                .unwrap_or(&[]);
-            assert_eq!(
-                selected.len() + deselected.len(),
-                ir_group.plugins.len(),
-                "{case}: step {si} group {gi}: selected+deselected != IR plugin count"
-            );
-
-            // Multiset of selected plugin names; duplicates resolve positionally.
-            let mut sel_counts: HashMap<String, i32> = HashMap::new();
-            for p in selected {
-                *sel_counts
-                    .entry(p.member("name").expect("name").as_str().to_string())
-                    .or_insert(0) += 1;
-            }
-
-            let mut group_grid = Vec::with_capacity(ir_group.plugins.len());
-            for ir_plugin in &ir_group.plugins {
-                let take = sel_counts.get_mut(&ir_plugin.name).is_some_and(|n| {
-                    if *n > 0 {
-                        *n -= 1;
-                        true
-                    } else {
-                        false
-                    }
-                });
-                group_grid.push(take);
-            }
-            step_grid.push(group_grid);
-        }
-        grid.push(step_grid);
-    }
-    grid
-}
 
 /// Read a fixture's `diagnostics.repro` block into a [`ReproMetrics`].
 fn expected_metrics(expected: &minijson::Value) -> ReproMetrics {
