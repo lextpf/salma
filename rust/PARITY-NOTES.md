@@ -1538,3 +1538,161 @@ copy; the Task 6 file now imports it. No behavior change.
 - The C++ `assert(group_resolved, ...)` before flag accumulation is trivially
   true inside the `if group_resolved` block; the port drops it (a comment notes
   why) rather than emit a vacuous `debug_assert!`.
+
+## Task 8 - CSP precompute + types + option enumeration
+
+Ported `src/FomodCSPTypes.hpp` (the CSP datatype set), `src/FomodCSPPrecompute.hpp`/
+`.cpp` (`compute_evidence`, `build_precompute`, `build_components`, and the
+flag/condition helpers), and `src/FomodCSPOptions.hpp`/`.cpp` (per-group option
+enumeration, reduction, caching, and the SelectAny caps). Also pulled in the two
+solver types the datatype set needs so this module is self-contained: `SolverResult`
+from `src/FomodCSPSolver.hpp` and `SolverConfig`/`kConfig` from
+`src/FomodCSPSolverInternal.hpp`. The `solve_fomod_csp` entry point, the 5 phases,
+and the search helpers (`rebuild_flags`, `evaluate_candidate`, `run_backtrack_pass`,
+`greedy_solve`, `local_search`, `estimate_search_space`, `targeted_repair_search`,
+...) are Task 9 and are NOT ported here.
+
+### Module layout
+
+| C++ TU                            | Rust module                    |
+|-----------------------------------|--------------------------------|
+| `FomodCSPTypes.hpp` (+ 2 imports) | `fomod_csp_types` (extended)   |
+| `FomodCSPPrecompute.hpp`/`.cpp`   | `fomod_csp_precompute`         |
+| `FomodCSPOptions.hpp`/`.cpp`      | `fomod_csp_options`            |
+
+### Precompute borrow shape (the key structural decision)
+
+The C++ `Precompute` holds seven non-owning `const*` inputs (installer, atoms,
+atom_index, target, excluded, overrides, propagation) plus owned reverse indices.
+The Rust `Precompute<'a>` models the inputs as `&'a T` (for the always-present
+ones) and `Option<&'a T>` (for the nullable `overrides`/`propagation`); the owned
+reverse indices are plain `Vec`/`HashMap`/`HashSet`. `build_precompute<'a>(...,
+groups: Vec<GroupRef>, evidence: Vec<i32>) -> Precompute<'a>` borrows the seven
+inputs for `'a` and moves in the two caller-built vectors, exactly like the C++
+signature. This is the shape the Task 9 phases consume: they read `Precompute`
+immutably (`&Precompute`) and mutate a SEPARATE, owned `SolverState`, so the
+borrow of the inputs never conflicts with the mutable search state. `Precompute`
+derives `PartialEq` so the determinism tests can compare two builds directly (the
+reference fields compare pointees, which are identical for two builds from the
+same inputs).
+
+### Hashing reuse (byte-exact)
+
+- `hash_flag_subset` (`FomodCSPPrecompute.cpp:53-67`) reuses `utils::fnv1a_hash`
+  + `utils::hash_combine`: seed = FNV offset basis `14695981039346656037`; per key
+  in the sorted key list, fold `fnv1a(key_bytes)`, then either `fnv1a(value_bytes)`
+  (present) or the `0xA5A5A5A5A5A5A5A5` sentinel (absent). This `u64` is
+  `OptionCacheKey.flags_sig` and is part of the cache key equality, so it is
+  byte-exact. A present empty-string value is DISTINCT from an absent key (folds
+  `fnv1a("")` vs the sentinel), and the fold makes it key-order-sensitive. Pinned
+  micro-test constants were computed offline from the exact C++ fold.
+- `option_signature` (`FomodCSPOptions.cpp:441-460`) likewise reuses
+  `fnv1a_hash`+`hash_combine`: it COPIES `produced_atoms` (the `"dest|source"`
+  keys, built at `FomodCSPOptions.cpp:427`) into a vector and sorts it, folds
+  each; then copies `flags_written` into a `(name, value)` vector, sorts by
+  name-then-value, and folds name then value per pair. The sorts make the hash
+  deterministic despite the unordered source containers; pinned constant included.
+- The `OptionCacheKey` / `MemoKey` std::hash functors (`FomodCSPTypes.hpp:350-362,
+  389-398`) are NOT observable (the maps are only used via find/emplace, never
+  iterated to output), so the Rust ports `#[derive(Hash)]`. Only `PartialEq`/`Eq`
+  on the fields (`OptionCacheKey`: group_idx, flags_sig, select_any_cap,
+  exact_mode; `MemoKey`: next_idx, flag_state_sig, contested_sig) is load-bearing,
+  and that is covered by field-wise equality micro-tests. `flag_state_sig` /
+  `contested_sig` are produced by Task 9.
+
+### C++ nondeterminism made deterministic (total-order tiebreaks)
+
+Task 8 outputs are NOT recorded in the fixtures' `expected.json`, so byte-parity
+against a specific C++ run is not available (it resumes at Task 9). Where the C++
+uses an unstable sort or iterates an unordered container, the port adds a TOTAL
+tiebreak for run-to-run determinism; exact C++ tie order is explicitly NOT
+reproduced.
+
+| C++ site | C++ order | Rust total tiebreak |
+|----------|-----------|---------------------|
+| `build_components` ordering (`FomodCSPPrecompute.cpp:364-366`) | unstable sort by size DESC only | size DESC, then min-member ASC (each component is pre-sorted ascending, so `comp[0]` is its min) |
+| `generate_raw_options` evidence order (`FomodCSPOptions.cpp:123-125`) | unstable sort by evidence DESC | evidence DESC, then plugin-index ASC |
+| `generate_raw_options` small-group powerset (`FomodCSPOptions.cpp:248-250`) | unstable sort by score DESC | score DESC, then bitmask ASC |
+| `reduce_options` candidate list (`FomodCSPOptions.cpp:536-554`) | surviving indices from an UNORDERED `best_by_sig` map, then unstable sort by (evidence DESC, unique DESC, useful DESC, extra ASC) | same four keys, then raw-option index ASC as the final total tiebreak (input order from the unordered map no longer matters) |
+
+The BFS neighbor-visit order inside `build_components` is also unordered, but each
+finished component is sorted ascending before storage, so membership is
+deterministic regardless. The `compute_evidence` target-tree iteration and the
+`build_precompute` contested loop iterate unordered maps but only do commutative
+`+=`/set-insert, so their outputs are order-independent. Every reverse-index
+vector is sort+dedup ascending.
+
+The GroupRef list the CSP entry point builds (`FomodCSPSolver.cpp:1499-1558`,
+document order then a per-step UNSTABLE sort by group-priority DESC then
+plugin_count ASC) is a Task 9 CALLER concern; the Task 8 fixture tests reproduce
+it with a STABLE sort (ties keep document order) purely to exercise
+`build_precompute` on realistic inputs. Its equal-(priority, plugin_count) tie
+order is another non-bit-parity site, noted here.
+
+### SelectAny cap pick_rank (diversity-then-fill)
+
+`reduce_options` caps SelectAny/SelectAtLeastOne candidate lists
+(`FomodCSPOptions.cpp:559-597`) via `pick_rank` (guards: rank in range, not
+already picked, `narrowed.len() < cap` - the guard is strict `<`, so the boundary
+is off-by-one sensitive and kept exactly). Order: (a) `pick_rank(0)` keeps the top
+option; (b) diversity - for each rank in order, if the option selected-plugin
+popcount is newly seen, `pick_rank(rank)`; (c) fill - `pick_rank(rank)` in order
+until `cap` reached. `stats.capped_select_any_options += candidates.len() -
+narrowed.len()`. The port keeps `pick_rank` as a free function (rather than a
+closure) so the `&candidates` / `&mut narrowed` / `&mut chosen_rank` borrows stay
+simple. A micro-test constructs > cap distinct candidates and asserts exactly
+`cap` survive plus the counter delta.
+
+### Dead forced_unique_options counter
+
+`SolverStats::forced_unique_options` (`FomodCSPTypes.hpp:167`) is declared but
+NEVER incremented anywhere in the C++ (verified across the whole solver). The Rust
+field is kept for struct parity and is documented as dead; Task 8 does NOT
+increment it.
+
+### Log-only surface (Task 17)
+
+- `group_name` (`FomodCSPOptions.cpp:29-36`) is used only in log lines. It is
+  ported (pub, so no dead-code warning) but has no behavioral effect.
+- `get_options_for_group` branching/group-stats logging block
+  (`FomodCSPOptions.cpp:666-692`) is dropped; its ONLY side effect,
+  `stats.logged_group_options[gidx] = true`, is preserved (guarded with `.get_mut`
+  so an unsized counter vector cannot panic, since the flag is behaviorally inert).
+- The out-of-range `gidx` error log (`FomodCSPOptions.cpp:622-623`) is dropped; the
+  function still returns a shared empty `CachedOptions` (a process-wide
+  `OnceLock<CachedOptions>` static, mirroring the C++ `static const CachedOptions
+  kEmpty`), and never populates the cache on that path.
+
+### Accepted divergences (Task 8)
+
+- `get_options_for_group` uses the `Entry::Vacant` form instead of the C++
+  `contains_key` + `emplace` (satisfies clippy `map_entry`) and returns via a
+  final `cache.get(&key).unwrap()`. The value is computed ONLY on a miss because
+  `reduce_options` has `SolverStats` side effects that must not be double-counted
+  on a cache hit.
+- `generate_raw_options` builds the required-mask options by cloning the
+  `required` vector instead of the C++ per-index copy loop, and the SelectAll
+  option / powerset masks likewise (clippy `manual_memcpy` / `needless_range_loop`).
+  Value-identical.
+- `SolverProgress` uses `std::time::Instant` for the C++
+  `steady_clock::time_point` fields and models the not-yet-set `deadline` as
+  `Option<Instant>` (`None`) rather than the C++ clock-epoch placeholder; the
+  `PROGRESS_NODE_INTERVAL` / `PROGRESS_TIME_INTERVAL_MS` `static constexpr` members
+  become associated `const`s. Consumed by Task 9.
+- `SelectAny` cap constants are named `SELECT_ANY_CAP_{NARROW,MEDIUM,FULL}`
+  (Rust SCREAMING_SNAKE) for `kSelectAnyCap{Narrow,Medium,Full}`; `kConfig` becomes
+  `CONFIG` (a `const SolverConfig`, backed by `SolverConfig::DEFAULT`).
+
+### Oracle limitation (why the fixture tests are structural)
+
+The `Precompute` reverse indices and per-group option lists are internal
+intermediates NOT recorded in `expected.json` (which holds the final selection
+grid, produced at Task 9). So the golden-fixture tests here assert STRUCTURE
+(shapes match the installer hierarchy; every reverse index is sorted+deduped;
+components partition `[0, group_count)` size-descending) and DETERMINISM (two
+builds are identical; `get_options_for_group` returns a stable option count and
+valid masks). The BEHAVIORAL parity lives in the hand-derived micro-tests
+(evidence +3/+2/+1 and flag propagation; the per-group-type option masks and their
+total order; the post-filter, extra-only drop, signature collapse, and SelectAny
+cap; the two byte-exact hash folds). Byte-parity against recorded C++ intermediates
+resumes at Task 9.
