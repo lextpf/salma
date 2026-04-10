@@ -1696,3 +1696,219 @@ valid masks). The BEHAVIORAL parity lives in the hand-derived micro-tests
 total order; the post-filter, extra-only drop, signature collapse, and SelectAny
 cap; the two byte-exact hash folds). Byte-parity against recorded C++ intermediates
 resumes at Task 9.
+
+## Task 9 - CSP solver phases
+
+Port of `src/FomodCSPSolver.cpp` + `src/FomodCSPSolverPhases.cpp` to
+`rust/mo2-salma-rs/src/fomod_csp_solver.rs`. The C++ splits the solver core and
+the five phase functions across two TUs; the port folds them into one module so
+the large private helper set (rebuild_flags, evaluate_candidate, lower_bound,
+contested_signature, the backtracker, etc.) stays module-private. Only
+`solve_fomod_csp` is `pub`. The `CheckpointGuard` struct (CSP.cpp:941-978) is DEAD
+in C++ and not ported.
+
+### Entry control flow and phase short-circuits (`solve_fomod_csp`)
+
+Mirrors CSP.cpp:1488-1745 exactly. (S1) flat GroupRef list in document order,
+`flat_start` captured BEFORE the per-step sort. (S2) per-step priority sort. (S3)
+`compute_evidence` + `build_precompute`; seed `SolverState` with every plugin
+false (no propagation-forced seeding in the solver). (S4) `deadline = now + 600s`,
+`select_any_cap = SELECT_ANY_CAP_NARROW` for phases 1-4. (S5) `run_initial_phases`
+always; then `run_component_decomposition`, `run_residual_repair`,
+`run_focused_search`, `run_global_fallback` each guarded by
+`!found_exact && !deadline_exceeded`, setting `ran_phaseN=true` when entered (no
+early return). (S6) assemble result. The C++ per-GroupRef bounds `assert` block
+(CSP.cpp:1588-1602) is dropped (guaranteed by construction). The solver does NOT
+itself check `propagation.fully_resolved` to bypass - that is the Task 12 caller.
+
+### Per-step priority sort - total-order tiebreak (S2, tie landmine)
+
+`group_priority`: SelectAll=4, SelectExactlyOne=3, SelectAtMostOne=2,
+SelectAtLeastOne=1, SelectAny=0. C++ sorts each step's contiguous group range by
+`(priority DESC, plugin_count ASC)` with an UNSTABLE `std::sort` and NO tertiary
+key, so equal `(priority, plugin_count)` groups get unspecified order. The port
+adds a document-order tertiary key (`group_idx ASC`) making the comparator a
+TOTAL order, and uses the stable `slice::sort_by`. This guarantees run-to-run
+determinism but does NOT guarantee bit-parity with a specific MSVC run when a
+step has two groups of equal priority AND equal plugin_count; the golden fixtures
+never exercise that tie (all pass exact-grid). Same total-order philosophy the
+Task 8 component sort already applies.
+
+### `better_than` first-found-wins and its testing implication
+
+`ReproMetrics::better_than` rejects an EQUAL tuple (Task 6/8), so
+`evaluate_candidate` (the SOLE `nodes_explored++` site, CSP.cpp:221) keeps the
+FIRST-discovered candidate at any metric tuple. Every visitation/iteration/sort
+order is therefore observable in the final grid whenever ties exist. Testing
+consequence, realized in `tests/fomod_csp_solver_fixtures.rs`:
+- METRICS parity (missing/extra/size/hash/reproduced + `exact_match` +
+  `phase_reached`) is robust to grid ties and is asserted for every
+  archive-consistent fixture.
+- EXACT-GRID parity (byte-for-byte grid) is only asserted for the deterministic
+  subset (fixtures with no accepted-path metric ties). All 12 archive-consistent
+  fixtures return the exact C++ grid, so the pinned `EXACT_GRID_COUNT = 12`; there
+  is currently NO fixture that matched metrics but diverged on grid bytes.
+
+### The archive-listing size discrepancy - solver consequence (3 fixtures)
+
+The Task 6 note records that the golden run scored atoms with `file_size = 0`
+(its live archive listing did not populate uncompressed sizes) while the committed
+`archive_entries.json` snapshots carry populated sizes; for 3 fixtures
+(`rar_7step_sos`, `sevenz_2step_nec_feet`, `zip_11step_cbbe_3ba`) some populated
+sizes differ from the installed target size. Task 9 inherits this: the SOLVER
+optimizes against the fixture atoms, so for these 3 it scores the extra size
+mismatches the golden run never saw. Verified behavior:
+- 12 "consistent" fixtures (expected-grid metrics == `diagnostics.repro`): full
+  solver parity - grid, all five repro counters, `exact_match`, `phase_reached`.
+- `sevenz_2step_nec_feet`, `rar_7step_sos`: terminate quickly but score the extra
+  size mismatches, so `exact_match`/`phase_reached`/`size_mismatch` diverge; only
+  the size-INDEPENDENT counters (missing/extra/hash) and `size+reproduced`
+  coverage match. `sevenz_2step_nec_feet` still returns the correct grid (the
+  mismatches are unfixable so the greedy grid is kept); `rar_7step_sos` returns a
+  different grid.
+- `zip_11step_cbbe_3ba` (100 plugins): with the golden size-0 atoms the C++ run
+  reached exact in the greedy phase (89 nodes); with the fixture atoms it can
+  never short-circuit on exact and searches the full space to the 600s wall-clock
+  deadline (measured: 544s / ~603k nodes in RELEASE, returning a different grid).
+  It is EXCLUDED from the solver-driving tests (pinned by name `NON_TERMINATING`),
+  and its inconsistency is still asserted via the size-split invariants on the
+  KNOWN expected grid (no solver run). This is a Task 2 fixture-data discrepancy,
+  NOT a solver defect: the solver is correct for consistent data (12/12 grids +
+  metrics). `metrics_parity_all_fixtures` is therefore FALSE (3 fixtures diverge
+  on the size split), reported as a concern, not a bug.
+
+### Iterative backtracker + memo + lower-bound pruning
+
+`backtrack` (CSP.cpp:980-1354) is an explicit heap-stack loop, NOT Rust recursion
+(a deep installer would overflow the native 1 MB stack). Frame fields, the
+two-phase structure (phase-1 init: depth/node-limit/deadline guards, then the
+skip loop over single-option/invisible groups, then bounds+memo at the branching
+group; phase-2: extra-only prune scan, apply option, push child), the shared
+`checkpoints` / `flag_undo` / `stack` vectors, `kMaxBacktrackDepth = 500`,
+`save_checkpoint` refusing past `CONFIG.max_checkpoints = 4096`, and `unwind_frame`
+are ported field-for-field. Rust-specific shape: the top frame is accessed by
+index (`stack[top]`) so no `&mut` borrow is held across a `stack.push`/`pop`; frames
+are popped-then-unwound. Node-limit and deadline guards use `>=` and the deadline
+is sampled only when `(nodes_explored & 63) == 0`, exactly as C++.
+- Lower bound (CSP.cpp:572-655): `simulate` then `compare_trees_impl` with three
+  predicates that count a mismatch only when NO unassigned group (`order_pos >=
+  next_idx`, via `has_remaining_group` on `dest_to_{groups,size_match_groups,
+  hash_capable_groups}`) and no `conditional_repair_remaining` flag-setter can fix
+  it. `cannot_beat` is strict lexicographic `>` on
+  `(missing, extra, size_mismatch, hash_mismatch)`.
+- `run_bounds_here = enable_bounds && ci >= 4 && ci % bound_stride == 0` with the
+  exact pressure-tiered stride table; `enable_memo` gated on best counters `<= 24`.
+- Memo (`plan.memo: HashMap<MemoKey, ReproMetrics>`): a re-hit with a not-better
+  `lb` prunes (`!lb.better_than(stored)`); store on miss or strictly-better `lb`,
+  clearing the whole table at `kMaxMemoEntries = 100000`. The `MemoKey` is
+  `{ next_idx = ci, flag_state_sig = hash_flag_subset(flags, memo_flags),
+  contested_sig }` - both signatures are byte-exact (below). The map is used only
+  via get/insert (never iterated to output), so its `#[derive(Hash)]` order is not
+  observable - matching the Task 8 note.
+
+### `contested_signature` byte-fold reuses the utils helpers
+
+`contested_signature` (CSP.cpp:672-708) seeds `sig = 0xcbf29ce484222325` (FNV
+offset basis) and, iterating `pre.contested_plugins` (the SORTED-ascending vec),
+folds `(flat_plugin + 1) as u64` via `utils::hash_combine` for each contested
+plugin whose group is already assigned (`0 <= order_pos < next_idx`) AND currently
+selected. Unassigned groups and deselected plugins are skipped. This is a `MemoKey`
+equality field, so the fold is byte-exact; the micro-test
+`contested_signature_folds_selected_assigned_contested_in_sorted_order`
+hand-derives the `u64` for a 2-plugin contested set (only selected, already-
+assigned plugins fold, in sorted order).
+
+### The two flag-replay orders and their call sites
+
+Two distinct flag replays, reproduced exactly:
+- `rebuild_flags` (CSP.cpp:37-100) walks steps/groups in DOCUMENT order,
+  short-circuiting before `(stop_step, stop_group)` when set. Call sites:
+  `evaluate_candidate`'s `best.inferred_flags` (full), `local_search` (per group,
+  `stop = gref`), the non-incremental backtrack skip/bounds path, and every phase's
+  full rebuild.
+- `advance_flags_past_group` (CSP.cpp:897-924) advances ONE group's plugins in the
+  priority-sorted `pre.groups`/plan order, pushing a `FlagDelta` per mutation for
+  `undo_flags_to`. Call sites: `greedy_solve` and the incremental backtrack path
+  (enabled only when `plan.order.len() == pre.groups.len()`, CSP.cpp:1402).
+The two orders differ intra-step; the micro-test
+`rebuild_flags_document_order_vs_advance_group_order` pins a case where document
+order yields `F=b` while reverse group advance yields `F=a`.
+
+### `SolverProgress.deadline` as `Option<Instant>`
+
+Task 8 already modeled `deadline` as `Option<Instant>` (`None` = unset), matching
+the port plan; Task 9 consumes it. The C++ sentinel test
+`deadline.time_since_epoch().count() != 0` becomes `if let Some(deadline) = ...`.
+Only `deadline` / `deadline_exceeded` have behavioral effect; the other
+`SolverProgress` fields (`estimated_total`, `pass_start_*`, `last_progress_*`)
+feed only progress logging and are NOT tracked (see dropped logs below). The
+`deadline_in_the_past_trips_and_none_never_does` micro-test covers both the past
+deadline (`deadline_exceeded` flips) and the `None` case (never trips, pass runs
+to completion).
+
+### `phase_reached` / `phase_per_group` derivation; `alternatives_per_group`
+
+`phase_reached` (CSP.cpp:1701-1718): default `"csp.greedy"`; `"csp.fallback"` if
+phase 5 ran, else `"csp.focused"` (4), `"csp.repair"` (3), `"csp.local_search"`
+(2), in that if/elif order - it names the DEEPEST phase that RAN, not the phase
+that found the result (so a fixture solved by local search inside phase 1 still
+reports `"csp.greedy"`; `sevenz_atmostone_slavetats_riek` does exactly this at 5
+nodes). `phase_per_group[s][g]` = `""` when `(s,g)` is in
+`propagation.resolved_groups` (linear search), else `final_phase`.
+`alternatives_per_group` is ALWAYS all zeros (the C++ `assign(groups, 0)`; never
+computed anywhere).
+
+### Repair local sort - added total-order tiebreak
+
+`build_repair_plugin_map` (CSP.cpp:395-475) sorts candidate local plugin indices
+by `evidence ASC` with an UNSTABLE `std::sort` and no tie key; the port adds a
+`local-index ASC` tiebreak for run-to-run determinism (same philosophy as S2).
+Caps at `kMaxRepairBits = 11`, keeps groups with `>= 2` bits, SelectAny/
+SelectAtLeastOne only.
+
+### `thread_local` scratch replaced with fresh allocation
+
+`evaluate_candidate` and `lower_bound` use a C++ `thread_local SimulatedTree
+scratch` reused via `simulate_into` (an allocation optimization on the hot path).
+The port calls `simulate` (a fresh tree) each time; behaviorally identical (the
+scratch is cleared before every use). The periodic scratch-shrink
+(`kScratchShrinkThreshold`) is likewise not needed. This is a performance-only
+divergence; a Task 16 profiling pass may reintroduce a reused scratch if the hot
+loop needs it.
+
+### Dropped log sites (Task 17)
+
+Every `Logger::instance().log(...)` / `log_warning(...)` and the tqdm progress-bar
+machinery in both C++ TUs are dropped (the Rust logger arrives in Task 17). Sites:
+the `[solver] Starting CSP` / `Done` / `Pruning summary` / `Domain reduction
+summary` / wall-clock-exceeded lines in `solve_fomod_csp`; the per-phase
+`[solver] Phase: ...` / `After ...` lines in every phase function; the
+`build_tqdm_bar` progress lines and initial/final bars in `evaluate_candidate` and
+`run_backtrack_pass`; the checkpoint-limit and kMaxBacktrackDepth warn-once lines
+in `backtrack`; the `group_name`-based affected-groups log lines. The `format_count`
+/ `format_option_cap` / `format_duration` / `build_tqdm_bar` formatters
+(CSP.cpp:719-778) are not ported. None sits in a decision path; the associated
+progress-field bookkeeping (documented above) is dropped with them. `stats.*`
+counters ARE maintained (they drive pruning-related branch decisions and are
+asserted by the micro-tests).
+
+### Consumed Task-8 dead code
+
+This task is the first consumer of `SolverState`/`SolverSearchState`/
+`SolverBestResult`/`SolverProgress`, `SearchPlan`, `MemoKey`, `FlagDelta`,
+`SolverConfig`/`CONFIG`, and the pruning `SolverStats` counters. No `#[allow(
+dead_code)]` needed to be removed (Task 8 relied on `pub` visibility, not
+allowances).
+
+### Test-suite delta
+
+14 new tests: 9 solver micro-tests in `src/fomod_csp_solver.rs`
+(`evaluate_candidate` first-found-wins; `apply_option`; byte-exact
+`contested_signature`; the two flag-replay orders; `lower_bound` unfixable-only;
+extra-only prune; `>=` node-limit boundary; memo re-hit prune; deadline
+past/`None`) and 5 fixture tests in `tests/fomod_csp_solver_fixtures.rs`
+(metrics parity over the 12 consistent fixtures; exact-grid over the deterministic
+subset, count pinned at 12 with the two propagation-resolved fixtures asserted by
+name; the inconsistent 3 diverge only on the size split; solver coverage on the 2
+fast inconsistent fixtures via size-independent invariants; determinism over
+`zip_exactlyone_racecompat` + `rar_7step_sos`).
