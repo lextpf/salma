@@ -43,7 +43,11 @@
 //!   `src/InferenceDiagnostics.hpp`/`.cpp`
 //! - [`json`] - the byte-faithful `nlohmann::json::dump(2)` replacement (owned
 //!   `Value` model + serializer) used by the schema-v2 inference output path
+//! - [`archive_service`] - the archive I/O facade (zip / 7z / rar backends),
+//!   mirror of `src/ArchiveService.hpp`/`.cpp`, reproducing
+//!   `list_entries_with_sizes` byte-for-byte against the golden corpus
 
+pub mod archive_service;
 pub mod capi;
 pub mod fomod_atom;
 pub mod fomod_csp_options;
