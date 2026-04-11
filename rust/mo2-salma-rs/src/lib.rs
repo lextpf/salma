@@ -37,9 +37,12 @@
 //!   `src/FomodCSPSolver.cpp`
 //! - [`fomod_propagator`] - the deterministic constraint-propagation pre-pass,
 //!   mirror of `src/FomodPropagator.hpp`/`.cpp`
-//! - [`inference_diagnostics`] - the `ReasonCode` enum + `ReasonDetail`, a
-//!   partial mirror of `src/InferenceDiagnostics.hpp`/`.cpp` (the confidence
-//!   scoring, accumulator, and schema-v2 JSON helpers arrive in Task 10)
+//! - [`inference_diagnostics`] - the `ReasonCode` enum + `ReasonDetail` plus
+//!   the confidence scoring, the `InferenceDiagnosticsBuilder` accumulator, and
+//!   the schema-v2 `serialize_*` helpers, mirror of
+//!   `src/InferenceDiagnostics.hpp`/`.cpp`
+//! - [`json`] - the byte-faithful `nlohmann::json::dump(2)` replacement (owned
+//!   `Value` model + serializer) used by the schema-v2 inference output path
 
 pub mod capi;
 pub mod fomod_atom;
@@ -54,5 +57,6 @@ pub mod fomod_ir;
 pub mod fomod_ir_parser;
 pub mod fomod_propagator;
 pub mod inference_diagnostics;
+pub mod json;
 pub mod types;
 pub mod utils;
