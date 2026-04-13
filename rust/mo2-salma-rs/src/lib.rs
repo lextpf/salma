@@ -50,9 +50,15 @@
 //!   drives every stage, plus the installed-file scan, lazy contested-file
 //!   hashing, the Tier-1 `meta.ini` fomod-plus shortcut, and `compute_overrides`,
 //!   mirror of `src/FomodInferenceService.hpp`/`.cpp`
+//! - [`file_operations`] - the queued copy/move executor behind every install,
+//!   mirror of `src/FileOperations.hpp`/`.cpp`
+//! - [`fomod_service`] - FOMOD install REPLAY (dependency checks, the required /
+//!   optional / conditional file passes, and the priority-ordered execution),
+//!   mirror of `src/FomodService.hpp`/`.cpp`
 
 pub mod archive_service;
 pub mod capi;
+pub mod file_operations;
 pub mod fomod_atom;
 pub mod fomod_csp_options;
 pub mod fomod_csp_precompute;
@@ -65,6 +71,7 @@ pub mod fomod_inference_service;
 pub mod fomod_ir;
 pub mod fomod_ir_parser;
 pub mod fomod_propagator;
+pub mod fomod_service;
 pub mod inference_diagnostics;
 pub mod json;
 pub mod types;
