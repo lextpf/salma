@@ -1,10 +1,16 @@
 //! `mo2_salma_rs` - Rust port of the salma `mo2-core` FOMOD engine.
 //!
-//! Milestone 1 ships the flat C ABI skeleton: the eight `extern "C"` exports
-//! declared in [`capi`], matching `src/CApi.hpp` symbol-for-symbol so this DLL
-//! is a drop-in replacement for the C++ `mo2-salma.dll`. The engine internals
-//! (inference, install replay, archive handling) arrive task by task; every
-//! service-backed export returns a documented placeholder until then.
+//! The crate exposes the flat C ABI in [`capi`]: the eight `extern "C"` exports
+//! matching `src/CApi.hpp` symbol-for-symbol, so this DLL is a drop-in
+//! replacement for the C++ `mo2-salma.dll`.
+//!
+//! All eight exports are now backed by real engine code. `inferFomodSelections`
+//! drives the inference pipeline (Task 12) and `install` / `installWithConfig` /
+//! `resolveModArchive` drive the install orchestrator and archive resolver
+//! (Task 15). The one remaining gap is logging: there is no Rust `Logger` yet,
+//! so the DLL emits nothing to `logs/salma.log` and never invokes a registered
+//! `setLogCallback` (Task 17). Every dropped call site is marked in place with a
+//! `// dropped log site` comment.
 //!
 //! Ported so far:
 //! - [`utils`] - shared helpers, mirror of `src/Utils.hpp`/`src/Utils.cpp`
@@ -55,7 +61,17 @@
 //! - [`fomod_service`] - FOMOD install REPLAY (dependency checks, the required /
 //!   optional / conditional file passes, and the priority-ordered execution),
 //!   mirror of `src/FomodService.hpp`/`.cpp`
+//! - [`mod_structure_detector`] - content-root detection for non-FOMOD
+//!   archives, mirror of `src/ModStructureDetector.hpp`/`.cpp`
+//! - [`archive_resolver`] - the `installationFile` -> archive fallback chain
+//!   behind `resolveModArchive`, mirror of
+//!   `src/FomodArchiveResolver.hpp`/`.cpp`
+//! - [`installation_service`] - the top-level install orchestrator (extract to
+//!   temp -> FOMOD detect -> replay or content-root copy -> cleanup) behind
+//!   `install` / `installWithConfig`, mirror of
+//!   `src/InstallationService.hpp`/`.cpp`
 
+pub mod archive_resolver;
 pub mod archive_service;
 pub mod capi;
 pub mod file_operations;
@@ -73,6 +89,8 @@ pub mod fomod_ir_parser;
 pub mod fomod_propagator;
 pub mod fomod_service;
 pub mod inference_diagnostics;
+pub mod installation_service;
 pub mod json;
+pub mod mod_structure_detector;
 pub mod types;
 pub mod utils;
