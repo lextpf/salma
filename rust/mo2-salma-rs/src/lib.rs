@@ -91,6 +91,7 @@ pub mod fomod_service;
 pub mod inference_diagnostics;
 pub mod installation_service;
 pub mod json;
+pub mod logger;
 pub mod mod_structure_detector;
 pub mod types;
 pub mod utils;

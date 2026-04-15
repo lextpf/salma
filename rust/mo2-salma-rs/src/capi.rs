@@ -31,7 +31,7 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Stable ABI version string, mirror of the C++ `MO2_SALMA_API_VERSION`.
 ///
@@ -52,12 +52,6 @@ static API_VERSION_C: &CStr = c"1.2.0";
 /// wins and the value is visible across threads (`SeqCst` store/load). A single
 /// atomic bool is sufficient - the C++ mutex only ever guarded a bool.
 static LAST_INSTALL_SUCCESS: AtomicBool = AtomicBool::new(false);
-
-/// Registered log callback stored as a raw function-pointer address (0 = none).
-/// Mirrors `Logger::set_callback`'s lock-free atomic store. No logger is wired
-/// up yet (that arrives in a later task); the pointer is simply retained so
-/// registering and clearing are observable and crash-free.
-static LOG_CALLBACK: AtomicUsize = AtomicUsize::new(0);
 
 /// Outcome of borrowing a C-string argument across the ABI boundary.
 enum ArgStr<'a> {
@@ -189,19 +183,10 @@ pub extern "C" fn getApiVersion() -> *const c_char {
 pub extern "C" fn setLogCallback(callback: Option<unsafe extern "C" fn(*const c_char)>) {
     guard(
         || {
-            // Store the callback address (0 == cleared). Lock-free, mirroring
-            // Logger::set_callback. No logger consumes it yet.
-            let addr = match callback {
-                Some(f) => f as usize,
-                None => 0,
-            };
-            LOG_CALLBACK.store(addr, Ordering::SeqCst);
-            // Nothing reads LOG_CALLBACK until the logger lands (Task 17), so
-            // the release optimizer would otherwise elide the store above as
-            // dead. black_box keeps the round-tripped value live, so the
-            // pointer is genuinely retained in the DLL as the ABI contract
-            // requires. Removed once a real reader exists.
-            std::hint::black_box(LOG_CALLBACK.load(Ordering::SeqCst));
+            // Mirror of `CApi::setLogCallback` (`src/CApi.cpp:32-37`): forward
+            // straight to the logger, whose store is a lock-free atomic. A null
+            // callback re-enables file logging (logs/salma.log).
+            crate::logger::Logger::instance().set_callback(callback);
         },
         || {},
     );
@@ -606,13 +591,20 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
-    // This is the ONLY test that touches LOG_CALLBACK, so the shared slot
-    // cannot race against a parallel test.
+    /// The export must reach the real logger now, not a private slot. This and
+    /// `logger::tests::set_callback_registers_and_clears` are the only tests
+    /// that touch the process-global callback, and both run in this binary, so
+    /// neither may assert on state the other could be holding: each registers,
+    /// checks, and clears within its own body.
     #[test]
-    fn set_log_callback_stores_and_clears() {
+    fn set_log_callback_reaches_the_logger() {
+        let logger = crate::logger::Logger::instance();
         setLogCallback(Some(noop_log));
-        assert_ne!(LOG_CALLBACK.load(Ordering::SeqCst), 0);
+        assert!(
+            logger.has_callback(),
+            "setLogCallback must register with the logger"
+        );
         setLogCallback(None);
-        assert_eq!(LOG_CALLBACK.load(Ordering::SeqCst), 0);
+        assert!(!logger.has_callback(), "null must clear it");
     }
 }

@@ -15,20 +15,23 @@
 //! string the C++ `what()` would have produced. `capi` returns that string
 //! verbatim, so the ABI-visible behavior is unchanged.
 //!
-//! There is no Rust logger yet (Task 17). Every `Logger::instance().log*` call
-//! is dropped; the branch that produced it is kept with a `// dropped log site`
-//! comment so Task 17 can restore it verbatim.
+//! Log call sites mirror the C++ tags, wording, and ordering so MO2's log
+//! window reads the same. Error TEXT interpolated into a message differs where
+//! the C++ formats `filesystem_error::what()` or a library exception and this
+//! formats the Rust error.
 
 use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::archive_service::ArchiveService;
 use crate::file_operations::FileOperations;
 use crate::fomod_ir_parser::parse_module_config;
 use crate::fomod_service::{FomodService, execute_file_operations};
 use crate::json::{self, Value};
+use crate::logger::Logger;
 use crate::mod_structure_detector::find_main_mod_folders;
 use crate::types::{FileOperation, FomodDependencyContext};
 use crate::utils::{is_inside, random_hex_string, to_lower};
@@ -118,10 +121,13 @@ impl InstallationService {
         // install's disk pressure does not poison this run (IS 36).
         FileOperations::reset_disk_full();
 
-        // dropped log site: log("[install] === Starting mod installation ===")
-        // dropped log site: log("[install] Archive: {}", archive_path)
-        // dropped log site: log("[install] Target mod directory: {}", mod_path)
-        // dropped log site: log("[install] Initialization finished")
+        let logger = Logger::instance();
+        let start = Instant::now();
+
+        logger.log("[install] === Starting mod installation ===");
+        logger.log(&format!("[install] Archive: {archive_path}"));
+        logger.log(&format!("[install] Target mod directory: {mod_path}"));
+        logger.log("[install] Initialization finished");
 
         if !Path::new(archive_path).exists() {
             return Err(InstallError::new(format!(
@@ -129,22 +135,35 @@ impl InstallationService {
             )));
         }
 
-        // dropped log site: log_warning("[install] Could not read archive size: {}")
-        // on error, then log("[install] Archive size: {} bytes ({:.2f} MB)").
-        // The size is read purely to log it, so the whole block is dropped.
+        // Size is read purely to log it; a failure warns and reports 0, as in
+        // the C++ (which swallows the error_code and keeps going).
+        let archive_size = match fs::metadata(archive_path) {
+            Ok(meta) => meta.len(),
+            Err(err) => {
+                logger.log_warning(&format!("[install] Could not read archive size: {err}"));
+                0
+            }
+        };
+        logger.log(&format!(
+            "[install] Archive size: {archive_size} bytes ({:.2} MB)",
+            archive_size as f64 / 1024.0 / 1024.0
+        ));
 
         // The C++ `fs::create_directories` throws on failure and the exception
         // escapes install_mod BEFORE any temp dir exists, so there is nothing to
         // clean up on this path. Same here.
         fs::create_dir_all(mod_path)
             .map_err(|e| InstallError::new(format!("Cannot create mod directory: {e}")))?;
-        // dropped log site: log("[install] Created mod directory: {}", mod_path)
+        logger.log(&format!("[install] Created mod directory: {mod_path}"));
 
         let temp_dir = std::env::temp_dir().join(format!("fomod-{}", random_hex_string(8)));
         let archive_extract_dir = temp_dir.join("archive");
         fs::create_dir_all(&archive_extract_dir)
             .map_err(|e| InstallError::new(format!("Cannot create temp directory: {e}")))?;
-        // dropped log site: log("[install] Temporary directory: {}", temp_dir)
+        logger.log(&format!(
+            "[install] Temporary directory: {}",
+            temp_dir.display()
+        ));
 
         let outcome = self.run_install(
             archive_path,
@@ -156,13 +175,20 @@ impl InstallationService {
 
         // Cleanup is symmetric across both exit paths (IS 103-113 on success,
         // IS 132-145 in the catch-all). Removal failures only warn.
-        // dropped log site: log("[install] Cleaned up temporary directory") on
-        // success, log_warning("[install] WARNING: Failed to cleanup temp
-        // directory: {}") / ("[install] Failed to cleanup temp directory on
-        // error path") on failure.
-        let _ = fs::remove_dir_all(&temp_dir);
+        match fs::remove_dir_all(&temp_dir) {
+            Ok(()) => logger.log("[install] Cleaned up temporary directory"),
+            Err(err) if outcome.is_ok() => logger.log_warning(&format!(
+                "[install] WARNING: Failed to cleanup temp directory: {err}"
+            )),
+            Err(_) => {
+                logger.log_warning("[install] Failed to cleanup temp directory on error path")
+            }
+        }
 
-        // dropped log site: log("[install] Total installation time: {:.2f} seconds")
+        logger.log(&format!(
+            "[install] Total installation time: {:.2} seconds",
+            start.elapsed().as_secs_f64()
+        ));
 
         let result = outcome?;
 
@@ -191,7 +217,9 @@ impl InstallationService {
         temp_dir: &Path,
         archive_extract_dir: &Path,
     ) -> Result<String, InstallError> {
-        // dropped log site: log("[install] Extracting archive...")
+        let logger = Logger::instance();
+        logger.log("[install] Extracting archive...");
+        let extract_start = Instant::now();
         let archive_service = ArchiveService::new();
         archive_service
             .extract(
@@ -205,19 +233,25 @@ impl InstallationService {
             // their own wording (see PARITY-NOTES "Task 15"), so the FAILURE is
             // parity but the TEXT is not.
             .map_err(|e| InstallError::new(e.to_string()))?;
-        // dropped log site: log("[install] Archive extracted to {} in {:.2f} seconds")
+        logger.log(&format!(
+            "[install] Archive extracted to {} in {:.2} seconds",
+            temp_dir.display(),
+            extract_start.elapsed().as_secs_f64()
+        ));
 
-        // dropped log site: log("[install] Searching for FOMOD folder...")
+        logger.log("[install] Searching for FOMOD folder...");
         let fomod_folder = find_fomod_folder(archive_extract_dir);
 
         match fomod_folder {
             None => {
-                // dropped log site: log("[install] No FOMOD folder detected -
-                // using standard installation")
+                logger.log("[install] No FOMOD folder detected - using standard installation");
                 handle_non_fomod_install(archive_extract_dir, mod_path, archive_path, json_path)
             }
             Some(folder) => {
-                // dropped log site: log("[install] FOMOD folder found: {}")
+                logger.log(&format!(
+                    "[install] FOMOD folder found: {}",
+                    folder.display()
+                ));
                 handle_fomod_install(
                     &folder,
                     archive_extract_dir,
@@ -299,19 +333,24 @@ fn handle_non_fomod_install(
     archive_path: &str,
     json_path: &str,
 ) -> Result<String, InstallError> {
-    // dropped log site: log("[install] No 'fomod' folder found; checking for
-    // nested mod structure in: {}")
+    let logger = Logger::instance();
+    logger.log(&format!(
+        "[install] No 'fomod' folder found; checking for nested mod structure in: {}",
+        archive_root.display()
+    ));
 
     let effective_json = resolve_json_path(json_path, archive_path);
     let mut module_name_lower = String::new();
 
     if !effective_json.is_empty() && Path::new(&effective_json).exists() {
-        let config = read_json_config(&effective_json);
+        let config = read_json_config(&effective_json, "JSON config");
         if let Some(name) = config.get("moduleName").filter(|v| v.is_string())
             && let Some(s) = name.as_str()
         {
             module_name_lower = to_lower(s);
-            // dropped log site: log("[install] Detected moduleName \"{}\" in JSON")
+            logger.log(&format!(
+                "[install] Detected moduleName \"{module_name_lower}\" in JSON"
+            ));
         }
     }
 
@@ -322,8 +361,9 @@ fn handle_non_fomod_install(
         || module_name_lower.contains('\\')
         || module_name_lower.contains("..")
     {
-        // dropped log site: log_warning("[install] Rejecting moduleName with
-        // path separators: \"{}\"")
+        logger.log_warning(&format!(
+            "[install] Rejecting moduleName with path separators: \"{module_name_lower}\""
+        ));
         module_name_lower.clear();
     }
 
@@ -335,8 +375,9 @@ fn handle_non_fomod_install(
             None => module_name_lower.as_str(),
         };
         if RESERVED_NAMES.contains(&stem) {
-            // dropped log site: log_warning("[install] Rejecting Windows
-            // reserved device name: \"{}\"")
+            logger.log_warning(&format!(
+                "[install] Rejecting Windows reserved device name: \"{module_name_lower}\""
+            ));
             module_name_lower.clear();
         }
     }
@@ -345,8 +386,10 @@ fn handle_non_fomod_install(
 
     if !main_mod_folders.is_empty() {
         let chosen: PathBuf = if main_mod_folders.len() == 1 {
-            // dropped log site: log("[install] Only one mod folder \"{}\" found;
-            // copying it")
+            logger.log(&format!(
+                "[install] Only one mod folder \"{}\" found; copying it",
+                file_name_of(&main_mod_folders[0])
+            ));
             main_mod_folders[0].clone()
         } else {
             if module_name_lower.is_empty() {
@@ -358,11 +401,17 @@ fn handle_non_fomod_install(
             let matches: Vec<&PathBuf> = main_mod_folders
                 .iter()
                 .filter(|p| {
-                    // dropped log site: log("[install]      matches moduleName:
-                    // \"{}\"") for each hit
-                    p.file_name()
+                    let hit = p
+                        .file_name()
                         .map(|n| to_lower(&n.to_string_lossy()) == module_name_lower)
-                        .unwrap_or(false)
+                        .unwrap_or(false);
+                    if hit {
+                        logger.log(&format!(
+                            "[install]      matches moduleName: \"{}\"",
+                            file_name_of(p)
+                        ));
+                    }
+                    hit
                 })
                 .collect();
 
@@ -374,8 +423,10 @@ fn handle_non_fomod_install(
                 }));
             }
 
-            // dropped log site: log("[install] Copying contents of chosen mod
-            // folder \"{}\"")
+            logger.log(&format!(
+                "[install] Copying contents of chosen mod folder \"{}\"",
+                file_name_of(matches[0])
+            ));
             matches[0].clone()
         };
 
@@ -384,8 +435,10 @@ fn handle_non_fomod_install(
     }
 
     // Fallback: copy everything from the archive root.
-    // dropped log site: log("[install] No nested mod structure detected; copying
-    // all files from archive root to mod directory: {}")
+    logger.log(&format!(
+        "[install] No nested mod structure detected; copying all files from archive \
+         root to mod directory: {mod_path}"
+    ));
     FileOperations::copy_directory_contents(archive_root, Path::new(mod_path));
     Ok(mod_path.to_string())
 }
@@ -403,6 +456,7 @@ fn handle_fomod_install(
     temp_dir: &Path,
     json_path: &str,
 ) -> Result<String, InstallError> {
+    let logger = Logger::instance();
     let xml_path = fomod_folder.join("ModuleConfig.xml");
     // The C++ joins the EXACT casing `ModuleConfig.xml` even though
     // find_fomod_folder matched case-insensitively; Windows resolves it either
@@ -428,11 +482,14 @@ fn handle_fomod_install(
         // The wording of the inner description differs between pugixml and the
         // Rust loader; the failure itself is parity. See PARITY-NOTES "Task 15".
         .map_err(|e| InstallError::new(format!("Cannot parse XML ({e})")))?;
-    // dropped log site: log("[install] Loaded XML: {}", xml_path)
+    logger.log(&format!("[install] Loaded XML: {}", xml_path.display()));
 
     let config_json = if !effective_json.is_empty() && Path::new(&effective_json).exists() {
-        // dropped log site: log("[install] Loaded JSON: {}", effective_json)
-        read_json_config(&effective_json)
+        let value = read_json_config(&effective_json, "FOMOD JSON");
+        // The C++ emits this AFTER the catch, so it appears even when the parse
+        // failed (`InstallationService.cpp:329-340`).
+        logger.log(&format!("[install] Loaded JSON: {effective_json}"));
+        value
     } else {
         Value::Null
     };
@@ -448,13 +505,19 @@ fn handle_fomod_install(
             && let Some(s) = v.as_str()
         {
             context.game_path = s.to_string();
-            // dropped log site: log("[install] Game path from JSON: {}")
+            logger.log(&format!(
+                "[install] Game path from JSON: {}",
+                context.game_path
+            ));
         }
         if let Some(v) = config_json.get("gameVersion").filter(|v| v.is_string())
             && let Some(s) = v.as_str()
         {
             context.game_version = s.to_string();
-            // dropped log site: log("[install] Game version from JSON: {}")
+            logger.log(&format!(
+                "[install] Game version from JSON: {}",
+                context.game_version
+            ));
         }
     }
 
@@ -482,8 +545,12 @@ fn handle_fomod_install(
                     context.installed_plugins.insert(name);
                 }
             }
-            // dropped log site: log("[install] Found {} plugins in game Data
-            // directory", context.installed_plugins.size())
+            // The C++ reports the whole set size, which already holds the five
+            // seeded masters, so the count overstates what the scan found.
+            logger.log(&format!(
+                "[install] Found {} plugins in game Data directory",
+                context.installed_plugins.len()
+            ));
         }
     }
 
@@ -492,14 +559,18 @@ fn handle_fomod_install(
     let mod_dir = Path::new(mod_path);
     if mod_dir.is_dir() {
         collect_installed_files(mod_dir, mod_dir, &mut context.installed_files);
-        // dropped log site: log("[install] Scanned {} existing files in mod
-        // directory") when non-empty
+        if !context.installed_files.is_empty() {
+            logger.log(&format!(
+                "[install] Scanned {} existing files in mod directory",
+                context.installed_files.len()
+            ));
+        }
     }
 
     let mut fomod_service = FomodService::new();
     fomod_service.set_installer(installer);
 
-    // dropped log site: log("[install] Checking module-level dependencies...")
+    logger.log("[install] Checking module-level dependencies...");
     if !fomod_service.check_module_dependencies(Some(&context)) {
         return Err(InstallError::new(
             "Module-level dependencies not met - installation cannot proceed",
@@ -507,15 +578,16 @@ fn handle_fomod_install(
     }
 
     if !config_json.is_null() {
-        // dropped log site: log("[install] Validating JSON selections...")
+        logger.log("[install] Validating JSON selections...");
         // A malformed plugin `name` is where the C++ `value("name", "")` throws,
         // which aborts the whole install; a merely INVALID selection only warns.
         let valid = fomod_service
             .validate_json_selections(&config_json)
             .map_err(|e| InstallError::new(e.to_string()))?;
         if !valid {
-            // dropped log site: log_warning("[install] WARNING: JSON selections
-            // have group-type constraint violations")
+            logger.log_warning(
+                "[install] WARNING: JSON selections have group-type constraint violations",
+            );
         }
     }
 
@@ -525,7 +597,7 @@ fn handle_fomod_install(
     let mut next_doc_order: i32 = 0;
     let dst_base_str = dst_base.to_string_lossy().into_owned();
 
-    // dropped log site: log("[install] Processing required install files...")
+    logger.log("[install] Processing required install files...");
     fomod_service.process_required_files(
         &src_base,
         &dst_base_str,
@@ -535,7 +607,7 @@ fn handle_fomod_install(
 
     // Even without selections this still installs Required plugins and
     // alwaysInstall / installIfUsable entries from unselected plugins.
-    // dropped log site: log("[install] Processing optional install files...")
+    logger.log("[install] Processing optional install files...");
     fomod_service
         .process_optional_files(
             &config_json,
@@ -547,7 +619,7 @@ fn handle_fomod_install(
         )
         .map_err(|e| InstallError::new(e.to_string()))?;
 
-    // dropped log site: log("[install] Processing conditional file installs...")
+    logger.log("[install] Processing conditional file installs...");
     fomod_service.process_conditional_files(
         &src_base,
         &dst_base_str,
@@ -556,18 +628,35 @@ fn handle_fomod_install(
         &mut next_doc_order,
     );
 
-    let _file_op_failures = execute_file_operations(&mut file_ops);
-    // dropped log site: log_warning("[install] {} file operations failed during
-    // FOMOD install") when > 0. Always 0 in practice; see
-    // `execute_file_operations`' own doc comment.
+    let file_op_failures = execute_file_operations(&mut file_ops);
+    if file_op_failures > 0 {
+        // Always 0 in practice; see `execute_file_operations`' own doc comment.
+        logger.log_warning(&format!(
+            "[install] {file_op_failures} file operations failed during FOMOD install"
+        ));
+    }
 
     // Move the staged result into the mod directory. `dst_base` lives inside the
     // temp tree that install_mod removes, so nothing needs to survive here.
-    // dropped log site: log("[install] Moving unfomod files to mod directory: {}")
+    logger.log(&format!(
+        "[install] Moving unfomod files to mod directory: {mod_path}"
+    ));
     FileOperations::move_directory_contents(&dst_base, mod_dir);
 
-    // dropped log site: log("[install] FOMOD installation steps completed in {}")
+    logger.log(&format!(
+        "[install] FOMOD installation steps completed in {}",
+        temp_dir.display()
+    ));
     Ok(mod_path.to_string())
+}
+
+/// The file name of `p` as a display string, for the log lines that quote a
+/// candidate folder by name (the C++ `path.filename().string()`).
+fn file_name_of(p: &Path) -> String {
+    p.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Recursively collect mod-relative file paths into `out`.
@@ -609,7 +698,7 @@ fn collect_installed_files(root: &Path, dir: &Path, out: &mut HashSet<String>) {
 /// NOT fatal, despite `InstallationService.hpp:91` listing "Invalid JSON in
 /// selections file" under fatal errors. The code wins over the doc; the
 /// doc-vs-code gap is recorded in PARITY-NOTES "Task 15".
-fn read_json_config(path: &str) -> Value {
+fn read_json_config(path: &str, label: &str) -> Value {
     let Ok(text) = fs::read_to_string(path) else {
         // Unreadable file: the C++ `if (f)` guard skips the parse and leaves
         // config null. Non-UTF-8 lands here too, where nlohmann would have
@@ -618,9 +707,11 @@ fn read_json_config(path: &str) -> Value {
     };
     match json::parse(&text) {
         Ok(value) => value,
-        Err(_) => {
-            // dropped log site: log_warning("[install] Failed to parse JSON
-            // config {}: {}") / ("[install] Failed to parse FOMOD JSON {}: {}")
+        Err(err) => {
+            // The C++ uses two wordings for the same failure, one per call site:
+            // "JSON config" in the non-FOMOD path, "FOMOD JSON" in the other.
+            Logger::instance()
+                .log_warning(&format!("[install] Failed to parse {label} {path}: {err}"));
             Value::Null
         }
     }
@@ -645,8 +736,10 @@ fn resolve_json_path(json_path: &str, archive_path: &str) -> String {
 
     if derived.exists() {
         if !parent.as_os_str().is_empty() && !is_inside(parent, &derived) {
-            // dropped log site: log_warning("[install] Rejecting derived JSON
-            // path outside archive directory: {}")
+            Logger::instance().log_warning(&format!(
+                "[install] Rejecting derived JSON path outside archive directory: {}",
+                derived.display()
+            ));
             return String::new();
         }
         return derived.to_string_lossy().into_owned();
@@ -759,7 +852,7 @@ mod tests {
         let bad = root.join("bad.json");
         write(&bad, "{ this is not json");
         assert!(
-            read_json_config(bad.to_str().unwrap()).is_null(),
+            read_json_config(bad.to_str().unwrap(), "JSON config").is_null(),
             "a parse error is caught and warned about, never fatal"
         );
         stdfs::remove_dir_all(&root).ok();
@@ -768,7 +861,9 @@ mod tests {
     #[test]
     fn missing_json_config_reads_as_null() {
         let root = scratch("json-absent");
-        assert!(read_json_config(root.join("nope.json").to_str().unwrap()).is_null());
+        assert!(
+            read_json_config(root.join("nope.json").to_str().unwrap(), "JSON config").is_null()
+        );
         stdfs::remove_dir_all(&root).ok();
     }
 

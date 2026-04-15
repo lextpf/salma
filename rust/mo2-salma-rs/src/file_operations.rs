@@ -26,9 +26,9 @@
 //!
 //! ## Dropped logging
 //!
-//! There is no Rust logger yet (Task 17). Every `Logger::instance().log*` call
-//! is dropped; the branch that produced it is kept with a `// dropped log site`
-//! comment so Task 17 can restore it verbatim.
+//! Log call sites mirror the C++ tags and wording. The error TEXT interpolated
+//! into them differs: the C++ formats `filesystem_error::what()`, this formats
+//! `std::io::Error`.
 //!
 //! ## Disk-full detection mapping
 //!
@@ -48,6 +48,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::logger::Logger;
 use crate::types::{FileOpType, FileOperation};
 
 /// Sticky process-wide disk-full flag. Mirror of the C++ anonymous-namespace
@@ -139,15 +140,18 @@ impl FileOperations {
         // document-order tiebreaker callers rely on.
         self.ops.sort_by_key(|op| op.priority);
 
-        // dropped log site: log("[install] Executing {} file operations in
-        // priority order...", ops_.size())
+        Logger::instance().log(&format!(
+            "[install] Executing {} file operations in priority order...",
+            self.ops.len()
+        ));
 
         for op in &self.ops {
             // The C++ wraps each operation in try/catch so one failure cannot
             // abort the batch; copy_file / copy_folder already swallow their
             // own I/O errors here, so the loop body is inherently non-aborting.
-            // dropped log site: log_error("[install] Failed to execute file
-            // operation: {} -> {}: {}") on the caught exception.
+            // Its log_error("[install] Failed to execute file operation: {} ->
+            // {}: {}") is therefore unreachable on both sides, with no Rust
+            // counterpart to restore.
             match op.op_type {
                 FileOpType::File => {
                     Self::copy_file(Path::new(&op.source), Path::new(&op.destination));
@@ -183,24 +187,26 @@ impl FileOperations {
     /// - The copy ALWAYS overwrites an existing destination.
     pub fn copy_file(src: &Path, dst: &Path) {
         // Missing source is logged and silently skipped (not an error).
-        // dropped log site: log_warning("[install] Missing file: {}")
         if !src.exists() {
+            Logger::instance().log_warning(&format!("[install] Missing file: {}", src.display()));
             return;
         }
         // `dst.parent()` is `Some("")` for a bare filename; `create_dir_all("")`
         // is a no-op Ok, matching C++ `create_directories("")` returning false
         // without an error. `None` (dst is a root) skips the call entirely.
         if let Some(parent) = dst.parent() {
-            if fs::create_dir_all(parent).is_err() {
-                // dropped log site: log_error("[install] Failed to create
-                // directory {}: {}")
+            if let Err(err) = fs::create_dir_all(parent) {
+                Logger::instance().log_error(&format!(
+                    "[install] Failed to create directory {}: {err}",
+                    dst.display()
+                ));
                 return;
             }
         }
         // `fs::copy` overwrites, matching `copy_options::overwrite_existing`.
         if let Err(err) = fs::copy(src, dst) {
             note_disk_full_if_applicable(&err);
-            // dropped log site: log_error("[install] Copy error: {}")
+            Logger::instance().log_error(&format!("[install] Copy error: {err}"));
         }
     }
 
@@ -211,13 +217,15 @@ impl FileOperations {
     /// SKIPPED (the C++ `is_symlink(entry.symlink_status())` test); traversal
     /// uses the equivalent of `directory_options::skip_permission_denied`.
     pub fn copy_folder(src: &Path, dst: &Path) {
-        // dropped log site: log_warning("[install] Missing folder: {}")
         if !src.exists() {
+            Logger::instance().log_warning(&format!("[install] Missing folder: {}", src.display()));
             return;
         }
-        if fs::create_dir_all(dst).is_err() {
-            // dropped log site: log_error("[install] Failed to create directory
-            // {}: {}")
+        if let Err(err) = fs::create_dir_all(dst) {
+            Logger::instance().log_error(&format!(
+                "[install] Failed to create directory {}: {err}",
+                dst.display()
+            ));
             return;
         }
 
@@ -239,8 +247,10 @@ impl FileOperations {
                     // Any other iteration error escapes the C++ iterator and is
                     // caught by the outer handler, which ABORTS the whole copy.
                     note_disk_full_if_applicable(&err);
-                    // dropped log site: log_error("[install] Failed to iterate
-                    // directory {}: {}")
+                    Logger::instance().log_error(&format!(
+                        "[install] Failed to iterate directory {}: {err}",
+                        src.display()
+                    ));
                     return;
                 }
             };
@@ -252,8 +262,10 @@ impl FileOperations {
                             continue;
                         }
                         note_disk_full_if_applicable(&err);
-                        // dropped log site: log_error("[install] Failed to
-                        // iterate directory {}: {}")
+                        Logger::instance().log_error(&format!(
+                            "[install] Failed to iterate directory {}: {err}",
+                            src.display()
+                        ));
                         return;
                     }
                 };
@@ -273,8 +285,7 @@ impl FileOperations {
                 if file_type.is_dir() {
                     if let Err(err) = fs::create_dir_all(&dest_path) {
                         note_disk_full_if_applicable(&err);
-                        // dropped log site: log_error("[install] Copy error:
-                        // {}")
+                        Logger::instance().log_error(&format!("[install] Copy error: {err}"));
                         continue;
                     }
                     stack.push(path);
@@ -282,15 +293,13 @@ impl FileOperations {
                     if let Some(parent) = dest_path.parent() {
                         if let Err(err) = fs::create_dir_all(parent) {
                             note_disk_full_if_applicable(&err);
-                            // dropped log site: log_error("[install] Copy
-                            // error: {}")
+                            Logger::instance().log_error(&format!("[install] Copy error: {err}"));
                             continue;
                         }
                     }
                     if let Err(err) = fs::copy(&path, &dest_path) {
                         note_disk_full_if_applicable(&err);
-                        // dropped log site: log_error("[install] Copy error:
-                        // {}")
+                        Logger::instance().log_error(&format!("[install] Copy error: {err}"));
                     }
                 }
             }
@@ -309,17 +318,21 @@ impl FileOperations {
     /// `create_directories(dst)` failure path does NOT consult the disk-full
     /// flag even though the sibling `move_directory_contents` does.
     pub fn copy_directory_contents(src: &Path, dst: &Path) {
-        if fs::create_dir_all(dst).is_err() {
-            // dropped log site: log_error("[install] Failed to create directory
-            // {}: {}")
+        if let Err(err) = fs::create_dir_all(dst) {
+            Logger::instance().log_error(&format!(
+                "[install] Failed to create directory {}: {err}",
+                dst.display()
+            ));
             return;
         }
         let read_dir = match fs::read_dir(src) {
             Ok(rd) => rd,
             Err(err) => {
                 note_disk_full_if_applicable(&err);
-                // dropped log site: log_error("[install] Failed to iterate
-                // directory {}: {}")
+                Logger::instance().log_error(&format!(
+                    "[install] Failed to iterate directory {}: {err}",
+                    src.display()
+                ));
                 return;
             }
         };
@@ -328,8 +341,10 @@ impl FileOperations {
                 Ok(e) => e,
                 Err(err) => {
                     note_disk_full_if_applicable(&err);
-                    // dropped log site: log_error("[install] Failed to iterate
-                    // directory {}: {}")
+                    Logger::instance().log_error(&format!(
+                        "[install] Failed to iterate directory {}: {err}",
+                        src.display()
+                    ));
                     return;
                 }
             };
@@ -360,24 +375,31 @@ impl FileOperations {
     /// EXCEPT a disk-full rename error, which sets the sticky flag and skips the
     /// child instead of attempting a copy that cannot succeed.
     pub fn move_directory_contents(src: &Path, dst: &Path) {
-        // dropped log site: log_warning("[install] Missing folder for move: {}")
         if !src.exists() {
+            Logger::instance().log_warning(&format!(
+                "[install] Missing folder for move: {}",
+                src.display()
+            ));
             return;
         }
         if let Err(err) = fs::create_dir_all(dst) {
             // Unlike copy_directory_contents, the C++ DOES check the disk-full
             // condition on this create failure.
             note_disk_full_if_applicable(&err);
-            // dropped log site: log_error("[install] Failed to create directory
-            // {}: {}")
+            Logger::instance().log_error(&format!(
+                "[install] Failed to create directory {}: {err}",
+                dst.display()
+            ));
             return;
         }
         let read_dir = match fs::read_dir(src) {
             Ok(rd) => rd,
             Err(err) => {
                 note_disk_full_if_applicable(&err);
-                // dropped log site: log_error("[install] Failed to iterate
-                // directory for move {}: {}")
+                Logger::instance().log_error(&format!(
+                    "[install] Failed to iterate directory for move {}: {err}",
+                    src.display()
+                ));
                 return;
             }
         };
@@ -386,8 +408,10 @@ impl FileOperations {
                 Ok(e) => e,
                 Err(err) => {
                     note_disk_full_if_applicable(&err);
-                    // dropped log site: log_error("[install] Failed to iterate
-                    // directory for move {}: {}")
+                    Logger::instance().log_error(&format!(
+                        "[install] Failed to iterate directory for move {}: {err}",
+                        src.display()
+                    ));
                     return;
                 }
             };
@@ -402,13 +426,20 @@ impl FileOperations {
             };
             if is_disk_full(&rename_err) {
                 DISK_FULL.store(true, Ordering::Relaxed);
-                // dropped log site: log_error("[install] Move error (disk full)
-                // {} -> {}: {}")
+                Logger::instance().log_error(&format!(
+                    "[install] Move error (disk full) {} -> {}: {rename_err}",
+                    path.display(),
+                    target.display()
+                ));
                 continue;
             }
-            // dropped log site: log_warning("[install] rename {} -> {} failed
-            // ({}); falling back to copy") - kept so Task 17 can restore the
-            // same-volume-failure vs cross-volume-move distinction.
+            // Distinguishes a same-volume rename failure from the ordinary
+            // cross-volume move, which also lands here.
+            Logger::instance().log_warning(&format!(
+                "[install] rename {} -> {} failed ({rename_err}); falling back to copy",
+                path.display(),
+                target.display()
+            ));
             if path.is_dir() {
                 Self::copy_folder(&path, &target);
             } else {
@@ -435,9 +466,11 @@ impl FileOperations {
                 Ok(_) => fs::remove_file(&path).or_else(|_| fs::remove_dir(&path)),
                 Err(err) => Err(err),
             };
-            if remove_result.is_err() {
-                // dropped log site: log_warning("[install] Move fallback could
-                // not remove source {}: {}")
+            if let Err(err) = remove_result {
+                Logger::instance().log_warning(&format!(
+                    "[install] Move fallback could not remove source {}: {err}",
+                    path.display()
+                ));
             }
         }
     }
