@@ -3266,3 +3266,126 @@ the export; `scripts/` is a never-modify path and was not touched.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
   `cargo test --release` (587 passed, 0 failed) all clean; `smoke_ctypes.py`
   passes against the release DLL.
+
+## Task 16 - Round-trip validation with the Rust DLL
+
+Milestone 7 gate. `rust/tools/run_harness.py` drives the repo's UNMODIFIED
+`test_all.py` / `test_one.py` against the Rust DLL and, for comparison, against
+the C++ DLL.
+
+### Beating the stale-DLL trap
+
+`scripts/common.py::find_dll` searches, in order:
+
+1. `$SALMA_DEPLOY_PATH/salma/mo2-salma.dll`
+2. `build/bin/Release/mo2-salma.dll` (relative to the CWD)
+3. `./mo2-salma.dll`
+
+On a developer box candidate 1 exists and holds the DEPLOYED C++ DLL, so a naive
+run silently validates the wrong binary. `run_harness.py` copies the DLL under
+test to `rust/target/harness/salma/mo2-salma.dll` and points `SALMA_DEPLOY_PATH`
+at `rust/target/harness` for the SUBPROCESS ONLY, so candidate 1 becomes the
+staged file. No repo script is touched and no env change escapes the child.
+
+Which binary actually ran is proven three ways, not assumed:
+
+- **Path**: `test_all.py` logs `DLL: <path>`; the runner parses it and requires
+  it to equal the staged path. (`test_one.py` logs no path, so that mode falls
+  back to staging precedence plus the hash, and says so rather than skipping
+  silently.)
+- **Content**: the file at that path is re-hashed after the run and must match
+  the SHA-256 of the DLL that was staged.
+- **Behavior**: a pre-flight registers a log callback and runs one failing
+  inference. The C++ `Logger` fires the callback (observed: 5 lines); the Rust
+  port has no logger yet (Task 17) and fires 0. `getApiVersion` is useless as a
+  discriminator here because both report `1.2.0`.
+
+### TEMP pinning (required, not cosmetic)
+
+The first full baseline run FILLED the system drive and died with the C++
+engine's own `Install aborted: disk full while copying files`, leaving a 22 GB
+orphaned `%TEMP%\salma-bit7z-batch-*`. `run_harness.py` therefore pins the
+child's `TEMP`/`TMP` to `<mods drive>\salma_harness_tmp` (overridable with
+`--tmp-base`) and wipes it before and after each run, the same rule
+`gen_golden.py` already applies per mod.
+
+### Results
+
+Both DLLs were run over the same span, mod indices 1-300 of 309, with the
+default byte-for-byte content compare enabled:
+
+| | C++ `mo2-salma.dll` | Rust `mo2_salma_rs.dll` |
+| --- | --- | --- |
+| PASS | 52 | 52 |
+| FAIL | 0 | 0 |
+| SKIP | 248 | 248 |
+| per-mod status disagreements | - | **0** |
+
+The comparison is per-INDEX, not just per-total: every one of the 300 mods lands
+on the same verdict on both sides, with the same skip reason (185 "no FOMOD /
+scan returned empty", 63 "archive not found").
+
+`test_one.py --full` on three representative mods, one per archive format, all
+PASS with zero missing / extra / size / content mismatches:
+
+| Archive | Mod | Files |
+| --- | --- | --- |
+| `.7z` | (CVEO) by LDD - Aretuza Eyes Remastered | 181 |
+| `.zip` | 001_Gunslicer Animations All in One OAR | 1186 |
+| `.rar` | 001_Schlongs_of_Skyrim_SE v1.1.4 | 144 |
+
+### Timing (52 tested mods, same machine, sequential runs)
+
+| Stage | C++ | Rust | Delta | Ratio |
+| --- | --- | --- | --- | --- |
+| scan (infer) | 428.7s | 670.9s | +242.3s | 1.57x |
+| install (replay) | 288.7s | 537.2s | +248.6s | 1.86x |
+| total | 899.5s | 1414.1s | +514.7s | 1.57x |
+
+The port is CORRECT but ~1.6x slower. Two already-documented deferrals are the
+likely contributors and were explicitly left for this task: the
+`thread_local SimulatedTree` scratch that the C++ reuses on the solver hot path
+was replaced by a fresh allocation per call (Task 9 note), and the archive
+backends buffer whole entries rather than streaming (Task 11 note). Neither was
+profiled here; that is optimization work, not parity work, and is left open.
+
+### Corpus hazard at index 301, and a CONFIRMED memory divergence
+
+Mod 301, `Zaki Tattoos General 8K Addon 1.2.1.7z`, is 43.3 MB compressed and
+expands to over 63 GB of 8K textures. It ends every unbounded run on this
+corpus, on BOTH engines, but it ends them DIFFERENTLY:
+
+- **C++** streams contested entries through bit7z into
+  `%TEMP%\salma-bit7z-batch-*` on DISK. Observed: 63 GB of scratch, which filled
+  the system drive.
+- **Rust** buffers entries in MEMORY (`read_to_end` in all three backends).
+  Observed: 39.4 GB resident with 8 GB of 63.7 GB RAM left and still climbing;
+  the run was killed to protect the machine.
+
+This UPGRADES the Task 11 note, which said the in-memory model was "acceptable
+for FOMOD content, revisited only if Task 16 surfaces a giant loose entry". Task
+16 has now surfaced exactly that, on a real corpus mod, so the divergence is
+confirmed reachable rather than theoretical:
+
+- The C++ degrades to a disk-space failure, which its own `disk_full_encountered`
+  guard turns into a clean `Install aborted` error.
+- The Rust degrades to memory exhaustion, which has NO equivalent guard and
+  would take the host process (MO2) down with it.
+
+Recorded, not fixed: the fix is to stream extraction block-by-block like the C++
+`copy_data`, which is a rework of `archive_service.rs` and belongs with the
+performance pass, not the parity gate. Until then a mod of this shape is a
+hard-failure risk on the Rust DLL that it is not on the C++ DLL. This is the
+single most consequential open divergence in the port and should gate cutover.
+
+Because the run stops there on both sides, mods 301-309 (9 mods, all sorting
+after "Z") are NOT covered by these numbers. That is a coverage gap in the
+harness result, stated rather than papered over.
+
+### Gate results
+
+- `test_all.py`, mods 1-300, Rust DLL: 52 passed, 0 failed, 248 skipped, 0
+  per-mod disagreements vs the C++ baseline.
+- `test_one.py --full`: 3 of 3 PASS.
+- No repo script was modified; `git diff main -- src tests CMakeLists.txt
+  scripts test_all.py test_one.py` stays empty.
