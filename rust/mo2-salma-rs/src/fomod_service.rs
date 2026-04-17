@@ -36,8 +36,17 @@
 //!   functions.** The C++ has them as private members, but only `make_plugin_key`
 //!   is `static` and none of the three touch instance state. Free functions let
 //!   `process_optional_files` split-borrow `installer` and `plugin_flags`.
-//! - **Logging is dropped** (Task 17 ports `Logger`). Branches whose only effect
-//!   was a log line are kept with a comment naming the dropped site.
+//! - **Logging is reproduced.** Every `Logger` call site of the C++ is present
+//!   at the same level, with the same `[fomod]` wording and the same place in
+//!   control flow, including the file/folder and processed/skipped tallies the
+//!   C++ computes purely so it can log them. The two text divergences are both
+//!   places where the C++ interpolates a caught exception's `what()`, which has
+//!   no counterpart here: the rollback line in
+//!   [`FomodService::process_optional_files`] interpolates [`SelectionsError`]'s
+//!   `Display` instead (the error the port raises in place of that throw), and
+//!   the per-operation failure line in [`execute_file_operations`] drops the
+//!   trailing `: reason` entirely (its back end reports failure as a bool). The
+//!   latter is unreachable in both languages, see [`execute_file_operations`].
 //! - **The copy back end.** [`execute_file_operations`] calls
 //!   [`FileOperations::copy_file`] / [`FileOperations::copy_folder`], the port of
 //!   the C++ `FileOperations` statics. Those statics are documented and
@@ -52,8 +61,10 @@ use crate::file_operations::FileOperations;
 use crate::fomod_dependency_evaluator::{evaluate_condition, evaluate_plugin_type};
 use crate::fomod_ir::{
     FomodCondition, FomodFileEntry, FomodGroupType, FomodInstaller, FomodPlugin,
+    group_type_to_string,
 };
 use crate::json::Value;
+use crate::logger::Logger;
 use crate::types::{FileOpType, FileOperation, FomodDependencyContext, PluginType};
 use crate::utils::{is_safe_destination, to_lower};
 
@@ -130,16 +141,26 @@ impl FomodService {
     /// Returns `true` when dependencies are met or absent. Never fails: the
     /// dependency evaluator is total.
     pub fn check_module_dependencies(&self, context: Option<&FomodDependencyContext>) -> bool {
-        // (FS 109-113) Absent dependencies -> true; the C++ branch is log-only
-        // beyond that (dropped log site: "[fomod] No module-level dependencies
-        // found").
+        // (FS 109-113) Absent dependencies -> true.
         let Some(condition) = &self.installer.module_dependencies else {
+            Logger::instance().log("[fomod] No module-level dependencies found");
             return true;
         };
 
-        // (FS 116-126) Dropped log sites: the "Checking...", the ERROR on an
-        // unmet condition, and the "satisfied" line. Only the bool is observable.
-        evaluate_condition(condition, &self.plugin_flags, context)
+        // (FS 115-126) The unmet line is a plain `log` in the C++ (INFO level
+        // with an "ERROR:" prefix in the text), not `log_error`.
+        Logger::instance().log("[fomod] Checking module-level dependencies...");
+        let met = evaluate_condition(condition, &self.plugin_flags, context);
+
+        if !met {
+            Logger::instance().log(
+                "[fomod] ERROR: Module-level dependencies not met - installation cannot proceed",
+            );
+            return false;
+        }
+
+        Logger::instance().log("[fomod] Module-level dependencies satisfied");
+        true
     }
 
     /// Enqueue files from `<requiredInstallFiles>`. Mirror of
@@ -155,12 +176,36 @@ impl FomodService {
         ops: &mut Vec<FileOperation>,
         next_doc_order: &mut i32,
     ) {
-        // (FS 139-164) The C++ early-returns on an empty list and tallies
-        // file/folder counts purely to log them. Both are dropped log sites; the
-        // loop over an empty vector is the same no-op.
-        for entry in &self.installer.required_files {
-            enqueue_entry(entry, src_base, dst_base, ops, next_doc_order);
+        // (FS 139-143) Empty list -> nothing to do.
+        if self.installer.required_files.is_empty() {
+            Logger::instance().log("[fomod] No required install files found");
+            return;
         }
+
+        Logger::instance().log(&format!(
+            "[fomod] Processing {} required install files...",
+            self.installer.required_files.len()
+        ));
+
+        // (FS 148-160) The tallies exist only to be logged below; an entry counts
+        // only when it actually produced an operation.
+        let mut file_count = 0;
+        let mut folder_count = 0;
+        for entry in &self.installer.required_files {
+            let before = ops.len();
+            enqueue_entry(entry, src_base, dst_base, ops, next_doc_order);
+            if ops.len() > before {
+                if entry.is_folder {
+                    folder_count += 1;
+                } else {
+                    file_count += 1;
+                }
+            }
+        }
+
+        Logger::instance().log(&format!(
+            "[fomod] Queued {file_count} files and {folder_count} folders from required install files"
+        ));
     }
 
     /// Validate JSON selections against the IR's group cardinality constraints.
@@ -172,10 +217,13 @@ impl FomodService {
     /// `Err(SelectionsError::NameTypeError)` where the C++ `value("name", "")`
     /// would throw, which in the C++ aborts the whole install.
     pub fn validate_json_selections(&self, config_json: &Value) -> Result<bool, SelectionsError> {
-        // (FS 193-197) No steps array -> validation skipped (dropped log site).
+        // (FS 193-197) No steps array -> validation skipped.
         let Some(steps) = config_json.get("steps").filter(|s| s.is_array()) else {
+            Logger::instance().log("[fomod] No steps in JSON - validation skipped");
             return Ok(true);
         };
+
+        Logger::instance().log("[fomod] Validating JSON selections against FOMOD schema...");
 
         // Build step -> group -> set(plugin name) from the JSON (FS 203-227).
         // Nested entries are only created once a readable plugin name lands in
@@ -235,19 +283,49 @@ impl FomodService {
                     .filter(|plugin| sel.contains(&plugin.name))
                     .count() as i32;
 
-                // (FS 252-271) The "selected plugin not found in group" pass is a
-                // dropped log site; it has no effect on the return value.
+                // (FS 252-271) Warn about selections not present in the IR group.
+                // This pass is log-only; it has no effect on the return value.
+                // The C++ iterates an `unordered_set`, so the relative order of
+                // these warnings is unspecified there too.
+                for sel_name in sel {
+                    if !group.plugins.iter().any(|plugin| &plugin.name == sel_name) {
+                        Logger::instance().log_warning(&format!(
+                            "[fomod] Group \"{}\": selected plugin \"{sel_name}\" not found in group",
+                            group.name
+                        ));
+                    }
+                }
 
+                let type_str = group_type_to_string(group.r#type);
                 if !validate_cardinality(
                     group.r#type,
                     selected_in_group,
                     group.plugins.len() as i32,
                 ) {
                     all_valid = false;
+                    Logger::instance().log(&format!(
+                        "[fomod] WARNING: Group \"{}\" type \"{type_str}\" validation failed: {selected_in_group} selected, {} total (note: Required plugins are auto-installed and may not appear in JSON selections)",
+                        group.name,
+                        group.plugins.len()
+                    ));
+                } else {
+                    Logger::instance().log(&format!(
+                        "[fomod] Group \"{}\" type \"{type_str}\": {selected_in_group}/{} plugins selected - VALID",
+                        group.name,
+                        group.plugins.len()
+                    ));
                 }
             }
         }
 
+        Logger::instance().log(&format!(
+            "[fomod] JSON selections validated: {}",
+            if all_valid {
+                "ALL VALID"
+            } else {
+                "SOME VIOLATIONS"
+            }
+        ));
         Ok(all_valid)
     }
 
@@ -283,9 +361,15 @@ impl FomodService {
         let initial_ops_size = ops.len();
         let initial_doc_order = *next_doc_order;
 
-        // (FS 321-327) No steps array -> nothing to do (dropped log site). The C++
-        // try/catch only wraps the has_steps branch, so no rollback applies here.
+        // (FS 321-327) No steps array -> nothing to do. The C++ try/catch only
+        // wraps the has_steps branch, so no rollback applies here; the total line
+        // (FS 633) is outside the if/else and is emitted on this path too.
         let Some(steps) = config_json.get("steps").filter(|s| s.is_array()) else {
+            Logger::instance().log("[fomod] No valid steps in JSON - optional selections skipped");
+            Logger::instance().log(&format!(
+                "[fomod] Total file operations queued from optional files: {}",
+                ops.len()
+            ));
             return Ok(());
         };
 
@@ -298,14 +382,23 @@ impl FomodService {
             next_doc_order,
         );
 
-        if result.is_err() {
-            // (FS 621-630) Roll the whole call back, then propagate. Dropped log
-            // site: "[fomod] Exception during optional file processing, rolled
-            // back queued operations".
+        if let Err(err) = result {
+            // (FS 621-630) Roll the whole call back, log, then propagate. The C++
+            // interpolates `ex.what()` from the nlohmann type_error; the port has
+            // no such object and interpolates its own error text instead.
             ops.truncate(initial_ops_size);
             *next_doc_order = initial_doc_order;
+            Logger::instance().log_error(&format!(
+                "[fomod] Exception during optional file processing, rolled back queued operations: {err}"
+            ));
+            // The C++ rethrows from the catch, so FS 633 is NOT reached.
+            return Err(err);
         }
 
+        Logger::instance().log(&format!(
+            "[fomod] Total file operations queued from optional files: {}",
+            ops.len()
+        ));
         result
     }
 
@@ -329,6 +422,12 @@ impl FomodService {
 
         let mut processed_plugins: HashSet<String> = HashSet::new();
 
+        // (FS 333-334) First statement of the C++ try block.
+        Logger::instance().log(&format!(
+            "[fomod] Processing optional files from JSON with {} step(s)",
+            array_items(Some(steps)).len()
+        ));
+
         // (FS 337-341) Map IR steps by name for occurrence-based matching. The
         // C++ counters are `int`; `usize` here (they only ever increment, and the
         // step count is bounded by the JSON document size).
@@ -347,10 +446,13 @@ impl FomodService {
                 return Err(SelectionsError::NameTypeError);
             };
             let step_name = step_name.to_string();
+            Logger::instance().log(&format!("[fomod] Processing step: \"{step_name}\""));
 
             // (FS 348-353) A step with no groups array still CONSUMES an
             // occurrence of its name before skipping.
             if !json_step.get("groups").is_some_and(Value::is_array) {
+                Logger::instance()
+                    .log(&format!("[fomod] Step \"{step_name}\" has no groups array"));
                 post_increment(&mut step_occurrence, &step_name);
                 continue;
             }
@@ -364,8 +466,11 @@ impl FomodService {
                 .copied();
 
             // (FS 368-373) A missing IR step does NOT consume a second
-            // occurrence; dropped log site: "Could not find IR step".
+            // occurrence.
             let Some(ir_step_idx) = ir_step_idx else {
+                Logger::instance().log_warning(&format!(
+                    "[fomod] Could not find IR step \"{step_name}\" occurrence {occ}"
+                ));
                 continue;
             };
             let ir_step = &installer.steps[ir_step_idx];
@@ -373,6 +478,9 @@ impl FomodService {
             // (FS 376-383) Step visibility gates everything below, including the
             // per-step Required auto-install pass.
             if step_hidden(&ir_step.visible, plugin_flags, context) {
+                Logger::instance().log(&format!(
+                    "[fomod] Skipping step \"{step_name}\" due to unmet visibility dependencies"
+                ));
                 continue;
             }
 
@@ -386,15 +494,24 @@ impl FomodService {
             }
             let mut group_occurrence: HashMap<String, usize> = HashMap::new();
 
+            Logger::instance().log(&format!(
+                "[fomod] Step has {} group(s)",
+                array_items(json_step.get("groups")).len()
+            ));
+
             for json_group in array_items(json_step.get("groups")) {
                 let Some(group_name) = name_field(json_group) else {
                     return Err(SelectionsError::NameTypeError);
                 };
                 let group_name = group_name.to_string();
+                Logger::instance().log(&format!("[fomod] Processing group: \"{group_name}\""));
 
                 // (FS 399-405) Same shape as the step branch: no plugins array
                 // still consumes an occurrence.
                 if !json_group.get("plugins").is_some_and(Value::is_array) {
+                    Logger::instance().log(&format!(
+                        "[fomod] Group \"{group_name}\" has no plugins array"
+                    ));
                     post_increment(&mut group_occurrence, &group_name);
                     continue;
                 }
@@ -421,14 +538,24 @@ impl FomodService {
                 }
                 let mut plugin_occurrence: HashMap<String, usize> = HashMap::new();
 
+                Logger::instance().log(&format!(
+                    "[fomod] Group has {} plugin(s)",
+                    array_items(json_group.get("plugins")).len()
+                ));
+
                 for json_plugin in array_items(json_group.get("plugins")) {
                     // (FS 434-440) Tolerant of both schemas; an unreadable entry
-                    // is skipped BEFORE the occurrence counter moves (dropped log
-                    // site: "Skipping plugin entry with no readable name").
+                    // is skipped BEFORE the occurrence counter moves.
                     let plugin_name = read_plugin_name(json_plugin);
                     if plugin_name.is_empty() {
+                        Logger::instance()
+                            .log_warning("[fomod] Skipping plugin entry with no readable name");
                         continue;
                     }
+
+                    Logger::instance().log(&format!(
+                        "[fomod] Looking for plugin: \"{plugin_name}\" in step \"{step_name}\", group \"{group_name}\""
+                    ));
 
                     let pocc = post_increment(&mut plugin_occurrence, &plugin_name);
                     let ir_plugin = ir_group.and_then(|group| {
@@ -438,8 +565,11 @@ impl FomodService {
                             .map(|&pi| &group.plugins[pi])
                     });
 
-                    // (FS 490-495) A miss is a dropped log site only.
+                    // (FS 490-495) A miss is log-only; the loop continues.
                     let Some(ir_plugin) = ir_plugin else {
+                        Logger::instance().log_error(&format!(
+                            "[fomod] Could not find plugin \"{plugin_name}\" in step/group IR"
+                        ));
                         continue;
                     };
 
@@ -447,8 +577,15 @@ impl FomodService {
                     if let Some(dependencies) = &ir_plugin.dependencies
                         && !evaluate_condition(dependencies, plugin_flags, context)
                     {
+                        Logger::instance().log(&format!(
+                            "[fomod] Skipping plugin \"{plugin_name}\" due to unmet dependencies"
+                        ));
                         continue;
                     }
+
+                    Logger::instance().log(&format!(
+                        "[fomod] Plugin \"{plugin_name}\" (explicitly selected)"
+                    ));
 
                     apply_condition_flags(ir_plugin, plugin_flags);
                     enqueue_plugin_files(ir_plugin, src_base, dst_base, ops, next_doc_order);
@@ -470,6 +607,10 @@ impl FomodService {
                         continue;
                     }
                     if evaluate_plugin_type(plugin, plugin_flags, context) == PluginType::Required {
+                        Logger::instance().log(&format!(
+                            "[fomod] Auto-installing Required plugin: \"{}\"",
+                            plugin.name
+                        ));
                         apply_condition_flags(plugin, plugin_flags);
                         enqueue_plugin_files(plugin, src_base, dst_base, ops, next_doc_order);
                         processed_plugins.insert(key);
@@ -503,6 +644,10 @@ impl FomodService {
                         continue;
                     }
                     if evaluate_plugin_type(plugin, plugin_flags, context) == PluginType::Required {
+                        Logger::instance().log(&format!(
+                            "[fomod] Auto-installing Required plugin: \"{}\"",
+                            plugin.name
+                        ));
                         apply_condition_flags(plugin, plugin_flags);
                         enqueue_plugin_files(plugin, src_base, dst_base, ops, next_doc_order);
                         processed_plugins.insert(key);
@@ -514,6 +659,7 @@ impl FomodService {
         // --- Pass 3: alwaysInstall / installIfUsable from unselected plugins
         // (FS 569-612). Visibility is re-checked here too, against the flags as
         // they stand AFTER passes 1 and 2. ---
+        let mut auto_file_count = 0;
         for step in &installer.steps {
             if step_hidden(&step.visible, plugin_flags, context) {
                 continue;
@@ -537,12 +683,33 @@ impl FomodService {
                         if !should_install {
                             continue;
                         }
-                        // (FS 597-608) The C++ tallies enqueued entries only to
-                        // log them; dropped log site.
+                        // (FS 597-608) An entry counts, and logs, only when it
+                        // actually produced an operation.
+                        let before = ops.len();
                         enqueue_entry(entry, src_base, dst_base, ops, next_doc_order);
+                        if ops.len() > before {
+                            auto_file_count += 1;
+                            Logger::instance().log(&format!(
+                                "[fomod] Auto-installing {} ({}): {} -> {}",
+                                if entry.is_folder { "folder" } else { "file" },
+                                if entry.always_install {
+                                    "alwaysInstall"
+                                } else {
+                                    "installIfUsable"
+                                },
+                                entry.source,
+                                entry.destination
+                            ));
+                        }
                     }
                 }
             }
+        }
+
+        if auto_file_count > 0 {
+            Logger::instance().log(&format!(
+                "[fomod] Auto-install pass: {auto_file_count} alwaysInstall/installIfUsable file(s)"
+            ));
         }
 
         Ok(())
@@ -559,16 +726,42 @@ impl FomodService {
         ops: &mut Vec<FileOperation>,
         next_doc_order: &mut i32,
     ) {
-        // (FS 648-679) The empty-list early return and the processed/skipped
-        // tallies are dropped log sites; the loop is otherwise identical.
+        // (FS 648-652) Empty list -> nothing to do.
+        if self.installer.conditional_patterns.is_empty() {
+            Logger::instance().log("[fomod] No conditional file install patterns found");
+            return;
+        }
+
+        let total = self.installer.conditional_patterns.len();
+        Logger::instance().log(&format!(
+            "[fomod] Processing {total} conditional file install patterns..."
+        ));
+
+        // (FS 656-679) The tallies exist only to be logged. `processed` is
+        // pre-incremented before the per-pattern line, so it reads as a 1-based
+        // "N of total" counter over the patterns that actually matched.
+        let mut processed = 0;
+        let mut skipped = 0;
         for pattern in &self.installer.conditional_patterns {
             if !evaluate_condition(&pattern.condition, &self.plugin_flags, context) {
+                skipped += 1;
+                Logger::instance().log("[fomod] Skipping pattern due to unmet dependencies");
                 continue;
             }
+
+            processed += 1;
+            Logger::instance().log(&format!(
+                "[fomod] Processing conditional pattern {processed}/{total}"
+            ));
+
             for entry in &pattern.files {
                 enqueue_entry(entry, src_base, dst_base, ops, next_doc_order);
             }
         }
+
+        Logger::instance().log(&format!(
+            "[fomod] Queued {processed} conditional patterns, skipped {skipped} patterns"
+        ));
     }
 }
 
@@ -580,8 +773,8 @@ impl FomodService {
 /// of `FomodService::enqueue_entry`.
 ///
 /// - an empty `source` enqueues nothing;
-/// - a destination rejected by [`is_safe_destination`] enqueues nothing (dropped
-///   log site: "[fomod] Skipping path-traversal destination");
+/// - a destination rejected by [`is_safe_destination`] enqueues nothing and logs
+///   a warning;
 /// - otherwise `src_base/source` and `dst_base/destination` are joined and
 ///   `next_doc_order` is POST-incremented into the new operation.
 ///
@@ -602,6 +795,10 @@ fn enqueue_entry(
     }
 
     if !is_safe_destination(&entry.destination) {
+        Logger::instance().log_warning(&format!(
+            "[fomod] Skipping path-traversal destination: {}",
+            entry.destination
+        ));
         return;
     }
 
@@ -794,14 +991,34 @@ where
             .then(a.document_order.cmp(&b.document_order))
     });
 
+    Logger::instance().log(&format!(
+        "[fomod] Executing {} file operations in priority order...",
+        ops.len()
+    ));
+
     let mut failed = 0i32;
     for op in ops.iter() {
         if copy(op) {
             failed += 1;
+            // (FS 720-723) The C++ appends `: {ex.what()}` from the caught
+            // exception. The back end here reports failure as a bool and carries
+            // no message, so the trailing `: reason` has no counterpart.
+            Logger::instance().log_error(&format!(
+                "[fomod] Failed to execute file operation: {} -> {}",
+                op.source, op.destination
+            ));
         }
     }
 
-    // (FS 727-733) The "N of M operations failed" warning is a dropped log site.
+    // (FS 727-733) `ops.len()` is read BEFORE the clear, as in the C++ where the
+    // warning precedes `ops.clear()`.
+    if failed > 0 {
+        Logger::instance().log_warning(&format!(
+            "[fomod] {failed} of {} file operations failed",
+            ops.len()
+        ));
+    }
+
     ops.clear();
     failed
 }
