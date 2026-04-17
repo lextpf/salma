@@ -41,6 +41,20 @@
 //! uniformly on those; this port matches the implementation, not the stale doc
 //! table (noted in PARITY-NOTES).
 //!
+//! ## `[archive]` log lines
+//!
+//! The C++ names its libraries in these lines ("via bit7z", "falling back to
+//! libarchive", "Using libarchive for extraction"). Neither library exists here,
+//! so every such line names the crate that actually ran instead - `zip`,
+//! `sevenz_rust2` or `unrar` - keeping the C++ line shape, tag and position.
+//! Lines describing machinery with no counterpart at all are not emitted: the
+//! `7z.dll` discovery narrative ("[archive] 7z library: ...", "[archive] 7z.dll
+//! not found in SEVENZIP_PATH...") and libarchive's per-entry "Write header
+//! warning" / "Copy data warning" / "copy_data failed for entry" (this port has
+//! no separate write-disk handle that can warn without failing). There is
+//! likewise no bit7z-versus-libarchive fallback, so the four "falling back to
+//! libarchive" lines have no trigger. See PARITY-NOTES "Task 17".
+//!
 //! [`ArchiveService::extract_prefix`] is the one deliberate exception: the C++
 //! ZIP path (libarchive fallback, `ArchiveService.cpp:615-617`) normalizes the
 //! entry with Light (lowercase + `\`->`/`, NO leading strip) while its bit7z
@@ -53,7 +67,9 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
+use crate::logger::Logger;
 use crate::utils::{self, normalize_path, to_lower};
 
 /// Maximum decompressed entry size buffered in memory (256 MiB), mirror of
@@ -177,10 +193,24 @@ impl ArchiveService {
     /// C++ does. See the module docs for the per-format order/separator rules
     /// that reproduce the golden `archive_entries.json` byte-for-byte.
     pub fn list_entries_with_sizes(&self, archive_path: &str) -> EntryListing {
-        match self.list_raw(archive_path) {
+        let backend = backend_name(format_of(archive_path));
+        let ext = dotted_extension(archive_path);
+        Logger::instance().log(&format!(
+            "[archive] list_entries via {backend} for {ext} file"
+        ));
+
+        let started = Instant::now();
+        let listing = match self.list_raw(archive_path) {
             Ok(raw) => build_listing(raw),
             Err(_) => EntryListing::default(),
-        }
+        };
+        let ms = started.elapsed().as_millis();
+        Logger::instance().log(&format!(
+            "[archive] list_entries: {} entries, {} sizes via {backend} ({ms}ms)",
+            listing.paths.len(),
+            listing.sizes.len()
+        ));
+        listing
     }
 
     /// List all entry paths (header-only). Mirror of
@@ -219,15 +249,31 @@ impl ArchiveService {
         archive_path: &str,
         entry_names: &HashSet<String>,
     ) -> HashMap<String, Vec<u8>> {
+        // The empty check precedes the logging in the C++ (`:707-715`), so an
+        // empty request emits nothing at all.
         if entry_names.is_empty() {
             return HashMap::new();
         }
-        let result = match format_of(archive_path) {
+        Logger::instance().log(&format!(
+            "[archive] read_entries_batch: {} entries requested",
+            entry_names.len()
+        ));
+        let format = format_of(archive_path);
+        let started = Instant::now();
+        let result = match format {
             Format::Zip => read_batch_zip(archive_path, entry_names),
             Format::SevenZ => read_batch_7z(archive_path, entry_names),
             Format::Rar => read_batch_rar(archive_path, entry_names),
         };
-        result.unwrap_or_default()
+        let results = result.unwrap_or_default();
+        let ms = started.elapsed().as_millis();
+        Logger::instance().log(&format!(
+            "[archive] read_entries_batch: {}/{} entries via {} ({ms}ms)",
+            results.len(),
+            entry_names.len(),
+            backend_name(format)
+        ));
+        results
     }
 
     /// Extract every entry to a destination directory. Mirror of
@@ -237,7 +283,17 @@ impl ArchiveService {
     /// escape `destination_path` (the traversal guard, [`utils::is_inside`]).
     /// Errors if the archive cannot be opened.
     pub fn extract(&self, archive_path: &str, destination_path: &str) -> ArchiveResult<()> {
-        self.extract_filtered(archive_path, destination_path, |_| true)
+        // The C++ `extract` and `extract_filtered` are separate entry points with
+        // separate narratives; this port implements the former via the latter, so
+        // it calls the shared counted body directly rather than the public
+        // `extract_filtered` (whose closing line belongs to that entry point).
+        Logger::instance().log(&format!("[archive] Extracting archive: {archive_path}"));
+        let count = self.extract_counted(archive_path, destination_path, |_| true)?;
+        Logger::instance().log(&format!(
+            "[archive] Extraction completed via {}: {count} entries",
+            backend_name(format_of(archive_path))
+        ));
+        Ok(())
     }
 
     /// Extract only entries accepted by `filter`. Mirror of
@@ -254,6 +310,26 @@ impl ArchiveService {
         destination_path: &str,
         filter: F,
     ) -> ArchiveResult<()>
+    where
+        F: FnMut(&str) -> bool,
+    {
+        let count = self.extract_counted(archive_path, destination_path, filter)?;
+        Logger::instance().log(&format!(
+            "[archive] extract_filtered: extracted {count} entries"
+        ));
+        Ok(())
+    }
+
+    /// Route to the per-format extraction backend and return the number of
+    /// entries actually written. Shared, silent body behind [`Self::extract`],
+    /// [`Self::extract_filtered`] and [`Self::extract_prefix`], each of which
+    /// owns its own C++ log narrative.
+    fn extract_counted<F>(
+        &self,
+        archive_path: &str,
+        destination_path: &str,
+        filter: F,
+    ) -> ArchiveResult<usize>
     where
         F: FnMut(&str) -> bool,
     {
@@ -289,9 +365,14 @@ impl ArchiveService {
     ) -> ArchiveResult<()> {
         let prefix_lower = to_lower(prefix).replace('\\', "/");
         let format = format_of(archive_path);
-        self.extract_filtered(archive_path, destination_path, |entry_path| {
+        let count = self.extract_counted(archive_path, destination_path, |entry_path| {
             prefix_entry_norm(format, entry_path).starts_with(&prefix_lower)
-        })
+        })?;
+        Logger::instance().log(&format!(
+            "[archive] {} extract_prefix: {count} entries",
+            backend_name(format)
+        ));
+        Ok(())
     }
 
     /// Create a zip archive from a directory tree. Mirror of
@@ -384,7 +465,46 @@ fn safe_output_path(destination: &Path, entry_path: &str) -> Option<PathBuf> {
     if utils::is_inside(destination, &full_output) {
         Some(full_output)
     } else {
+        // The C++ emits this from both of its extraction loops
+        // (`ArchiveService.cpp:307` and `:531`); routing every backend through
+        // this one guard emits it from all three here.
+        Logger::instance().log_warning(&format!(
+            "[archive] Skipping path-traversal entry: {entry_path}"
+        ));
         None
+    }
+}
+
+/// The extension WITH its leading dot, lowercased, as the C++ log lines carry it
+/// (`ArchiveService.cpp:402` keeps `fs::path::extension()`'s dot, so the line
+/// reads "for .7z file"). An extensionless path yields "", matching the C++
+/// "for  file" exactly rather than emitting a bare ".".
+fn dotted_extension(archive_path: &str) -> String {
+    let ext = extension_lower(archive_path);
+    if ext.is_empty() {
+        String::new()
+    } else {
+        format!(".{ext}")
+    }
+}
+
+/// Name of the crate that backs a format, for the `[archive]` log lines. The C++
+/// names `bit7z` / `libarchive` in the same positions; this port has neither, so
+/// the true backend is named instead (see PARITY-NOTES "Task 17").
+fn backend_name(format: Format) -> &'static str {
+    match format {
+        Format::Zip => "zip",
+        Format::SevenZ => "sevenz_rust2",
+        Format::Rar => "unrar",
+    }
+}
+
+/// Count an extracted entry and emit the C++ per-100 progress line
+/// (`ArchiveService.cpp:343-346`).
+fn note_extracted(count: &mut usize) {
+    *count += 1;
+    if *count % 100 == 0 {
+        Logger::instance().log(&format!("[archive] Extracted {count} files..."));
     }
 }
 
@@ -480,10 +600,11 @@ fn read_batch_zip(
     Some(results)
 }
 
-fn extract_zip<F>(archive_path: &str, destination: &str, mut filter: F) -> ArchiveResult<()>
+fn extract_zip<F>(archive_path: &str, destination: &str, mut filter: F) -> ArchiveResult<usize>
 where
     F: FnMut(&str) -> bool,
 {
+    let mut count = 0usize;
     let dest = Path::new(destination);
     fs::create_dir_all(dest)?;
     let file = File::open(archive_path).map_err(|e| ArchiveError::Open(e.to_string()))?;
@@ -510,8 +631,9 @@ where
         let mut buf = Vec::with_capacity(prealloc_hint(entry.size()));
         entry.read_to_end(&mut buf)?;
         write_extracted_file(&output, &buf)?;
+        note_extracted(&mut count);
     }
-    Ok(())
+    Ok(count)
 }
 
 // ---------------------------------------------------------------------------
@@ -624,10 +746,11 @@ where
     })
 }
 
-fn extract_7z<F>(archive_path: &str, destination: &str, mut filter: F) -> ArchiveResult<()>
+fn extract_7z<F>(archive_path: &str, destination: &str, mut filter: F) -> ArchiveResult<usize>
 where
     F: FnMut(&str) -> bool,
 {
+    let mut count = 0usize;
     let dest = Path::new(destination);
     fs::create_dir_all(dest)?;
     let mut io_err: Option<std::io::Error> = None;
@@ -650,13 +773,14 @@ where
             });
             return Ok(false);
         }
+        note_extracted(&mut count);
         Ok(true)
     })
     .map_err(|e| ArchiveError::Open(e.to_string()))?;
     if let Some(e) = io_err {
         return Err(ArchiveError::Io(e));
     }
-    Ok(())
+    Ok(count)
 }
 
 // ---------------------------------------------------------------------------
@@ -740,10 +864,11 @@ fn read_batch_rar(
     Some(results)
 }
 
-fn extract_rar<F>(archive_path: &str, destination: &str, mut filter: F) -> ArchiveResult<()>
+fn extract_rar<F>(archive_path: &str, destination: &str, mut filter: F) -> ArchiveResult<usize>
 where
     F: FnMut(&str) -> bool,
 {
+    let mut count = 0usize;
     let dest = Path::new(destination);
     fs::create_dir_all(dest)?;
     let mut archive = unrar::Archive::new(archive_path)
@@ -767,6 +892,7 @@ where
             Some(output) => {
                 let (bytes, next) = open.read().map_err(|e| ArchiveError::Open(e.to_string()))?;
                 write_extracted_file(&output, &bytes)?;
+                note_extracted(&mut count);
                 archive = next;
             }
             None => {
@@ -774,7 +900,7 @@ where
             }
         }
     }
-    Ok(())
+    Ok(count)
 }
 
 // ---------------------------------------------------------------------------
@@ -821,18 +947,33 @@ fn create_zip_impl(folder_path: &str, output_zip_path: &str) -> ArchiveResult<()
         // zip entry names use forward slashes regardless of host separator.
         let rel_name = rel.to_string_lossy().replace('\\', "/");
         writer
-            .start_file(rel_name, options)
+            .start_file(rel_name.clone(), options)
             .map_err(|e| ArchiveError::Open(e.to_string()))?;
-        let mut input = File::open(&path)?;
+        // The C++ probes `fs::file_size` here (libarchive needs the size up
+        // front) and SKIPS the entry when that fails; the zip crate needs no
+        // size, so the nearest failure is the open. NOTE the divergence beyond
+        // the message: the C++ `continue`s to the next file, this port
+        // propagates and abandons the archive. Pre-existing, recorded in
+        // PARITY-NOTES "Task 17"; not changed here because altering control flow
+        // is outside a logging task.
+        let mut input = File::open(&path).inspect_err(|_| {
+            Logger::instance().log_warning(&format!(
+                "[archive] Skipping file in zip (cannot read size): {rel_name}"
+            ));
+        })?;
         let mut chunk = [0u8; COPY_CHUNK];
         loop {
             let n = input.read(&mut chunk)?;
             if n == 0 {
                 break;
             }
-            writer
-                .write_all(&chunk[..n])
-                .map_err(|e| ArchiveError::Io(std::io::Error::other(e.to_string())))?;
+            // Same shape: the C++ warns and moves to the next file, this port
+            // propagates.
+            writer.write_all(&chunk[..n]).map_err(|e| {
+                Logger::instance()
+                    .log_warning(&format!("[archive] Write error in zip for: {rel_name}"));
+                ArchiveError::Io(std::io::Error::other(e.to_string()))
+            })?;
         }
     }
     writer
