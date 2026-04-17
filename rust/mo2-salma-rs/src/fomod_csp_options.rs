@@ -35,6 +35,7 @@ use crate::fomod_csp_types::{
 };
 use crate::fomod_dependency_evaluator::evaluate_plugin_type;
 use crate::fomod_ir::{FomodGroup, FomodGroupType};
+use crate::logger::Logger;
 use crate::types::PluginType;
 use crate::utils::{fnv1a_hash, hash_combine};
 
@@ -60,8 +61,9 @@ pub fn effective_select_any_cap(
 }
 
 /// Return a human-readable `step N "StepName" / group M "GroupName"` label for
-/// logging. Mirror of the C++ `group_name`. Log-only (no behavioral effect); the
-/// C++ call sites emit `[solver]` log lines that arrive with the Task 17 logger.
+/// logging. Mirror of the C++ `group_name`. Log-only (no behavioral effect); it
+/// is interpolated into the `[solver]` lines emitted by
+/// [`get_options_for_group`].
 pub fn group_name(pre: &Precompute<'_>, g: &GroupRef) -> String {
     let step = &pre.installer.steps[g.step_idx as usize];
     let group = &step.groups[g.group_idx as usize];
@@ -583,9 +585,9 @@ fn reduce_options(
 /// The cache key is `(gidx, hash_flag_subset(flags, group_cache_flags[gidx]),
 /// effective_cap, exact_mode)`. On a miss the raw options are generated,
 /// filtered against any propagation-narrowed domain, reduced, and stored
-/// alongside their per-option profiles. An out-of-range `gidx` returns a shared
-/// empty [`CachedOptions`] (the C++ logs an error and returns a `static`
-/// empty; logging arrives with Task 17).
+/// alongside their per-option profiles. An out-of-range `gidx` logs a
+/// `[solver]` error and returns a shared empty [`CachedOptions`] (the C++
+/// returns a `static` empty).
 pub fn get_options_for_group<'c>(
     gidx: i32,
     pre: &Precompute<'_>,
@@ -598,8 +600,8 @@ pub fn get_options_for_group<'c>(
     let exact_mode = is_exact_group_mode(gidx, exact_groups);
     let effective_cap = effective_select_any_cap(gidx, select_any_cap, exact_groups);
     if gidx < 0 || gidx as usize >= pre.group_cache_flags.len() {
-        // C++ logs "[solver] gidx N out of range" and returns a static empty;
-        // logging is deferred to Task 17.
+        let size = pre.group_cache_flags.len();
+        Logger::instance().log_error(&format!("[solver] gidx {gidx} out of range (size {size})"));
         static EMPTY_OPTIONS: OnceLock<CachedOptions> = OnceLock::new();
         return EMPTY_OPTIONS.get_or_init(CachedOptions::default);
     }
@@ -650,11 +652,34 @@ pub fn get_options_for_group<'c>(
             entry.profiles.push(build_option_profile(&gref, opt, pre));
         }
 
-        // Log-only bookkeeping (C++ logs the branching/group stats once per
-        // group). Behaviorally inert; just marks the group as logged. Guarded so
-        // an unsized counter vector cannot panic.
+        // Emit the branching / group stats once per group. The C++ indexes
+        // `stats.logged_group_options[gidx]` directly; the guarded lookup here
+        // keeps an unsized counter vector from panicking.
         if let Some(logged) = stats.logged_group_options.get_mut(gidx as usize) {
             *logged = true;
+            let mut positive_evidence = 0i32;
+            let mut usable_plugins = 0i32;
+            let pc = gref.plugin_count as usize;
+            let fs = gref.flat_start as usize;
+            for pi in 0..pc {
+                if pre.evidence[fs + pi] > 0 {
+                    positive_evidence += 1;
+                }
+                let eff = evaluate_plugin_type(&group.plugins[pi], flags, None);
+                if eff != PluginType::NotUsable {
+                    usable_plugins += 1;
+                }
+            }
+            let label = group_name(pre, &gref);
+            let raw_count = raw.len();
+            let reduced_count = entry.options.len();
+            Logger::instance().log(&format!(
+                "[solver] Branching {label}: options raw={raw_count} reduced={reduced_count}"
+            ));
+            let plugin_count = gref.plugin_count;
+            Logger::instance().log(&format!(
+                "[solver] Group stats {label}: plugins={plugin_count}, usable={usable_plugins}, positive_evidence={positive_evidence}"
+            ));
         }
 
         slot.insert(entry);
