@@ -35,7 +35,7 @@ Evidence, all reproducible from this repo:
   ABI surface.
 - `python rust/tools/smoke_plugin.py` - the MO2 plugin's OWN `find_dll` /
   `load_dll` / `_configure_dll` / `_check_api_version`, run verbatim against the
-  packaged DLL. 11 checks.
+  packaged DLL. 12 checks.
 
 ## Before you cut over
 
