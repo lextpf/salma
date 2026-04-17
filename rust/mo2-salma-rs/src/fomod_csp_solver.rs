@@ -38,25 +38,26 @@
 //! subtree memoization (byte-exact [`hash_flag_subset`] + [`contested_signature`]
 //! keys), an extra-only option prune, node-limit and wall-clock deadline guards.
 //!
-//! ## Dropped log sites (Task 17)
+//! ## Progress logging
 //!
-//! Every `Logger::instance().log(...)` / progress-bar call in the C++ is
-//! dropped here (the Rust logger arrives in Task 17). The C++ progress fields
-//! (`estimated_total`, `pass_start_*`, `last_progress_*`) feed only those logs
-//! and are not tracked; `deadline` / `deadline_exceeded` (the only progress
-//! fields with behavioral effect) are. The `format_count` / `format_option_cap`
-//! / `build_tqdm_bar` formatters are not ported. See `rust/PARITY-NOTES.md`.
+//! The C++ `[solver]` narrative is reproduced, including the tqdm-style progress
+//! bar: [`format_count`], [`format_duration`], [`format_option_cap`] and
+//! [`build_tqdm_bar`] are ported, and the progress fields that drive them
+//! (`estimated_total`, `pass_start_*`, `last_progress_*`) are maintained
+//! alongside `deadline` / `deadline_exceeded`. The per-node progress check in
+//! [`evaluate_candidate`] sits behind the same `estimated_total > 1` guard as
+//! the C++, so a pass with no estimate never reads the clock.
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::fomod_atom::{AtomIndex, ExpandedAtoms, TargetTree};
-use crate::fomod_csp_options::{get_options_for_group, is_exact_group_mode};
+use crate::fomod_csp_options::{get_options_for_group, group_name, is_exact_group_mode};
 use crate::fomod_csp_precompute::{build_precompute, compute_evidence, hash_flag_subset};
 use crate::fomod_csp_types::{
     CONFIG, CachedOptions, GroupOption, GroupRef, InferenceOverrides, MemoKey, OptionCacheKey,
     Precompute, ReproMetrics, SELECT_ANY_CAP_FULL, SELECT_ANY_CAP_MEDIUM, SELECT_ANY_CAP_NARROW,
-    SearchPlan, SolverResult, SolverState, SolverStats,
+    SearchPlan, SolverProgress, SolverResult, SolverState, SolverStats,
 };
 use crate::fomod_dependency_evaluator::{
     ExternalConditionOverride, evaluate_condition_inferred, evaluate_plugin_type,
@@ -66,6 +67,7 @@ use crate::fomod_forward_simulator::{
 };
 use crate::fomod_ir::{FomodGroupType, FomodInstaller, FomodStep};
 use crate::fomod_propagator::PropagationResult;
+use crate::logger::Logger;
 use crate::types::PluginType;
 use crate::utils::hash_combine;
 
@@ -158,6 +160,121 @@ fn step_visible_with_flags(
 }
 
 // ---------------------------------------------------------------------------
+// Log-line formatters (mirrors of the C++ `format_count`, `format_duration`,
+// `format_option_cap`, `build_tqdm_bar`)
+// ---------------------------------------------------------------------------
+
+/// Human-readable node count: `1234` -> `1k`, `2_500_000` -> `2.5M`. Mirror of
+/// the C++ `format_count`. The `k` tier uses `{:.0}` (no decimals) while `M`/`G`
+/// use `{:.1}`, exactly as the C++ does.
+fn format_count(n: i64) -> String {
+    if n >= 1_000_000_000 {
+        format!("{:.1}G", n as f64 / 1e9)
+    } else if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1e6)
+    } else if n >= 1_000 {
+        format!("{:.0}k", n as f64 / 1e3)
+    } else {
+        n.to_string()
+    }
+}
+
+/// `MM:SS` under an hour, `H:MM:SS` above it, `00:SS` under a minute. Mirror of
+/// the C++ `format_duration`.
+fn format_duration(s: i64) -> String {
+    if s < 60 {
+        format!("00:{s:02}")
+    } else if s < 3600 {
+        format!("{:02}:{:02}", s / 60, s % 60)
+    } else {
+        format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+    }
+}
+
+/// A SelectAny cap for display: non-positive means uncapped. Mirror of the C++
+/// `format_option_cap`.
+fn format_option_cap(select_any_cap: i32) -> String {
+    if select_any_cap <= 0 {
+        "full".to_string()
+    } else {
+        select_any_cap.to_string()
+    }
+}
+
+/// Render a tqdm-style progress bar. Mirror of the C++ `build_tqdm_bar`
+/// (`width` is that function's defaulted parameter, always 20 at its call
+/// sites).
+///
+/// The `>` head OVERWRITES the cell after the filled run, so a bar at 0% reads
+/// `>...................` and a full bar has no head at all - both reproduced
+/// from the C++ index arithmetic rather than re-derived.
+fn build_tqdm_bar(current: i64, total: i64, elapsed_s: i64) -> String {
+    const WIDTH: usize = 20;
+    let total = if total <= 0 { 1 } else { total };
+    let ratio = (current as f64 / total as f64).min(1.0);
+    let filled = (ratio * WIDTH as f64) as usize;
+    let pct = (ratio * 100.0) as i64;
+
+    let mut bar = vec![b'.'; WIDTH];
+    for cell in bar.iter_mut().take(filled.min(WIDTH)) {
+        *cell = b'=';
+    }
+    if filled < WIDTH {
+        bar[filled] = b'>';
+    }
+    let bar = String::from_utf8_lossy(&bar);
+
+    let timing = if elapsed_s > 0 && current > 0 {
+        let rate = current as f64 / elapsed_s as f64;
+        let remaining_s = if ratio < 1.0 {
+            ((total - current) as f64 / rate) as i64
+        } else {
+            0
+        };
+        format!(
+            " [{}<{}, {}/s]",
+            format_duration(elapsed_s),
+            format_duration(remaining_s),
+            format_count(rate as i64)
+        )
+    } else {
+        format!(" [{}<?, ?/s]", format_duration(elapsed_s))
+    };
+
+    format!(
+        "{pct:>3}%|{bar}| {}/{} nodes{timing}",
+        format_count(current),
+        format_count(total)
+    )
+}
+
+/// Emit one of the C++ `After <phase>: exact=..., missing=..., extra=...,
+/// size_mm=..., hash_mm=...` lines. Every phase closes with the same shape, so
+/// the six call sites share this helper rather than repeating the format string.
+///
+/// `exact` comes from `search.found_exact` (the run-wide flag) while the four
+/// counters come from `best.best`, exactly as the C++ mixes them.
+fn log_phase_metrics(state: &SolverState, phase: &str) {
+    Logger::instance().log(&format!(
+        "[solver] After {phase}: exact={}, missing={}, extra={}, size_mm={}, hash_mm={}",
+        state.search.found_exact,
+        state.best.best.missing,
+        state.best.best.extra,
+        state.best.best.size_mismatch,
+        state.best.best.hash_mismatch
+    ));
+}
+
+/// Render `affected` group indices as the C++ `"; "`-joined `group_name` list.
+fn join_group_names(pre: &Precompute<'_>, affected: &[i32]) -> String {
+    affected
+        .iter()
+        .map(|&g| group_name(pre, &pre.groups[g as usize]))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+// ---------------------------------------------------------------------------
 // Candidate scoring
 // ---------------------------------------------------------------------------
 
@@ -170,7 +287,7 @@ fn step_visible_with_flags(
 /// [`ReproMetrics::better_than`](crate::fomod_csp_types::ReproMetrics::better_than)
 /// rejects an equal tuple. The C++ thread-local scratch tree is replaced with a
 /// fresh per-call [`simulate`]; the two are behaviorally identical (the scratch
-/// is only an allocation optimization). Progress logging is dropped.
+/// is only an allocation optimization).
 fn evaluate_candidate(
     state: &mut SolverState,
     installer: &FomodInstaller,
@@ -183,6 +300,37 @@ fn evaluate_candidate(
     let metrics = compare_trees(&sim, target, excluded);
 
     state.search.nodes_explored += 1;
+
+    // Periodic progress logging; fires for every phase (greedy, local search,
+    // backtrack). Gated on `estimated_total > 1`, so a pass that never sets an
+    // estimate costs nothing but the comparison - the same guard the C++ uses,
+    // and the reason the clock is not read on every node.
+    if state.progress.estimated_total > 1 {
+        let now = Instant::now();
+        let elapsed_ms = now
+            .duration_since(state.progress.last_progress_time)
+            .as_millis() as i64;
+        let nodes_since = (state.search.nodes_explored - state.progress.last_progress_nodes) as i64;
+        if nodes_since >= SolverProgress::PROGRESS_NODE_INTERVAL as i64
+            || (elapsed_ms >= SolverProgress::PROGRESS_TIME_INTERVAL_MS as i64
+                && state.search.nodes_explored > state.progress.last_progress_nodes)
+        {
+            state.progress.last_progress_nodes = state.search.nodes_explored;
+            state.progress.last_progress_time = now;
+            let pass_nodes = state.search.nodes_explored as i64 - state.progress.pass_start_nodes;
+            let pass_elapsed_s =
+                now.duration_since(state.progress.pass_start_time).as_secs() as i64;
+            let bar = build_tqdm_bar(pass_nodes, state.progress.estimated_total, pass_elapsed_s);
+            if state.best.has_best {
+                Logger::instance().log(&format!(
+                    "[solver] {bar} | best: m={} e={}",
+                    state.best.best_metrics.missing, state.best.best_metrics.extra
+                ));
+            } else {
+                Logger::instance().log(&format!("[solver] {bar} | no solution yet"));
+            }
+        }
+    }
 
     if !state.best.has_best || metrics.better_than(&state.best.best_metrics) {
         state.best.best_metrics = metrics;
@@ -383,6 +531,11 @@ fn targeted_repair_search(
     if plugin_map.is_empty() {
         return;
     }
+
+    Logger::instance().log(&format!(
+        "[solver] Targeted repair neighborhood: {} groups",
+        plugin_map.len()
+    ));
 
     state.search.selections = state.best.best.selections.clone();
 
@@ -905,7 +1058,12 @@ struct CheckpointEntry {
 }
 
 /// Save a group's current selection as a checkpoint, refusing past the
-/// configured limit. Mirror of the C++ `save_checkpoint` lambda.
+/// configured limit. Mirror of the C++ `save_checkpoint` lambda
+/// (`FomodCSPSolver.cpp:1021-1032`).
+///
+/// The C++ carries the same limit check and the same warning a second time, on
+/// `SelectionCheckpoint::save` (`:967-978`), but that struct has no callers -
+/// it is dead code, so this is the only live site in either language.
 fn save_checkpoint(
     checkpoints: &mut Vec<CheckpointEntry>,
     selections: &[Vec<Vec<bool>>],
@@ -913,6 +1071,7 @@ fn save_checkpoint(
     max_checkpoints: usize,
 ) -> bool {
     if checkpoints.len() >= max_checkpoints {
+        Logger::instance().log_warning("[solver] Checkpoint limit reached, abandoning branch");
         return false;
     }
     checkpoints.push(CheckpointEntry {
@@ -1008,6 +1167,12 @@ fn backtrack(
         // ------------------------------------------------------------------
         if stack[top].branch_idx < 0 {
             if stack.len() > MAX_BACKTRACK_DEPTH {
+                // Warn on the FIRST abort only, before the counter moves.
+                if stats.max_depth_aborts == 0 {
+                    Logger::instance().log_warning(&format!(
+                        "[solver] kMaxBacktrackDepth ({MAX_BACKTRACK_DEPTH}) exceeded; abandoning branch (logged once per solve)"
+                    ));
+                }
                 stats.max_depth_aborts += 1;
                 let mut f = stack.pop().unwrap();
                 unwind_frame(
@@ -1433,14 +1598,14 @@ fn estimate_search_space(
 
 /// Run one systematic backtracking pass over `order` with branch-and-bound
 /// pruning, stopping after `node_limit` evaluations (0 = unlimited). Mirror of
-/// the C++ `run_backtrack_pass` (logging dropped).
+/// the C++ `run_backtrack_pass`.
 #[allow(clippy::too_many_arguments)]
 fn run_backtrack_pass(
     state: &mut SolverState,
     pre: &Precompute,
     order: &[i32],
     node_limit: i32,
-    _label: &str,
+    label: &str,
     select_any_cap: i32,
     exact_groups: Option<&HashSet<i32>>,
     cache: &mut HashMap<OptionCacheKey, CachedOptions>,
@@ -1474,8 +1639,8 @@ fn run_backtrack_pass(
     }
 
     // Primes the option cache (side effect required for stat parity); the
-    // returned estimate is log-only.
-    let _ = estimate_search_space(
+    // returned estimate also drives the progress bar's denominator.
+    let space = estimate_search_space(
         pre,
         order,
         &state.search.flags,
@@ -1485,6 +1650,37 @@ fn run_backtrack_pass(
         stats,
         CONFIG.greedy_space_cap,
     );
+
+    state.progress.estimated_total = if node_limit > 0 {
+        node_limit as i64
+    } else {
+        space as i64
+    };
+    state.progress.last_progress_nodes = state.search.nodes_explored;
+    state.progress.pass_start_nodes = state.search.nodes_explored as i64;
+    state.progress.pass_start_time = Instant::now();
+    state.progress.last_progress_time = state.progress.pass_start_time;
+
+    let cap = format_option_cap(select_any_cap);
+    if node_limit == 0 {
+        Logger::instance().log(&format!(
+            "[solver] Phase: backtrack {label} ({} groups, space={}, select_any_cap={cap})",
+            order.len(),
+            format_count(space as i64)
+        ));
+    } else {
+        Logger::instance().log(&format!(
+            "[solver] Phase: backtrack {label} ({} groups, limit={}, select_any_cap={cap})",
+            order.len(),
+            format_count(node_limit as i64)
+        ));
+    }
+
+    // A 0% bar up front, so even a fast solve shows a visible start.
+    if state.progress.estimated_total > 1 {
+        let bar = build_tqdm_bar(0, state.progress.estimated_total, 0);
+        Logger::instance().log(&format!("[solver] {bar} | searching..."));
+    }
 
     backtrack(
         state,
@@ -1496,6 +1692,28 @@ fn run_backtrack_pass(
         cache,
         stats,
     );
+
+    // A closing 100% bar, whose DENOMINATOR is the nodes actually explored
+    // rather than the estimate, so the pass always ends at exactly 100%.
+    let pass_nodes = state.search.nodes_explored as i64 - state.progress.pass_start_nodes;
+    if pass_nodes > 0
+        && state.progress.estimated_total > 1
+        && state.search.nodes_explored > state.progress.last_progress_nodes
+    {
+        let pass_elapsed_s = state.progress.pass_start_time.elapsed().as_secs() as i64;
+        let bar = build_tqdm_bar(pass_nodes, pass_nodes, pass_elapsed_s);
+        if state.best.has_best {
+            Logger::instance().log(&format!(
+                "[solver] {bar} | best: m={} e={} (done)",
+                state.best.best_metrics.missing, state.best.best_metrics.extra
+            ));
+        } else {
+            Logger::instance().log(&format!("[solver] {bar} | no solution (done)"));
+        }
+    }
+
+    // Clear the estimate so it cannot leak into the next phase.
+    state.progress.estimated_total = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1511,12 +1729,21 @@ fn run_initial_phases(
     options_cache: &mut HashMap<OptionCacheKey, CachedOptions>,
     stats: &mut SolverStats,
 ) {
+    Logger::instance().log(&format!(
+        "[solver] Phase: greedy ({} groups)",
+        pre.groups.len()
+    ));
     greedy_solve(state, pre, select_any_cap, None, options_cache, stats);
+    log_phase_metrics(state, "greedy");
     if state.search.found_exact {
         return;
     }
 
     let all_groups: Vec<i32> = (0..pre.groups.len() as i32).collect();
+    Logger::instance().log(&format!(
+        "[solver] Phase: local search ({} groups)",
+        all_groups.len()
+    ));
     local_search(
         state,
         pre,
@@ -1527,6 +1754,7 @@ fn run_initial_phases(
         options_cache,
         stats,
     );
+    log_phase_metrics(state, "local search");
 
     if state.search.found_exact || !state.best.has_best {
         return;
@@ -1541,9 +1769,21 @@ fn run_initial_phases(
     );
     let mismatched = collect_mismatched_dests(&sim_best, pre.target, pre.excluded);
     let affected = groups_for_mismatches(pre, &mismatched);
+    let affected_groups = join_group_names(pre, &affected);
+    Logger::instance().log(&format!(
+        "[solver] Remaining mismatches: {} dests, {} affected groups",
+        mismatched.len(),
+        affected.len()
+    ));
+    if !affected_groups.is_empty() {
+        Logger::instance().log(&format!(
+            "[solver] Mismatch-affecting groups: {affected_groups}"
+        ));
+    }
 
     if !state.search.found_exact {
         targeted_repair_search(state, pre, &affected, &mismatched);
+        log_phase_metrics(state, "targeted repair");
     }
 }
 
@@ -1560,13 +1800,29 @@ fn run_component_decomposition(
         return;
     }
 
+    Logger::instance().log(&format!(
+        "[solver] Component decomposition: {} components",
+        pre.components.len()
+    ));
+
+    // 1-based counter over ALL components, empty ones included, incremented
+    // before the line is emitted (`FomodCSPSolverPhases.cpp:121-136`).
+    let mut comp_idx = 0;
     for comp in &pre.components {
         if state.search.found_exact || state.progress.deadline_exceeded {
             break;
         }
         if comp.is_empty() {
+            comp_idx += 1;
             continue;
         }
+
+        comp_idx += 1;
+        Logger::instance().log(&format!(
+            "[solver] Phase: backtrack component {comp_idx}/{} ({} groups)",
+            pre.components.len(),
+            comp.len()
+        ));
 
         if state.best.has_best {
             state.search.selections = state.best.best.selections.clone();
@@ -1620,6 +1876,8 @@ fn run_component_decomposition(
             stats,
         );
     }
+
+    log_phase_metrics(state, "component solve");
 }
 
 /// Phase 3: near-perfect residual repair (m=0, e=0, tiny size/hash). Mirror of
@@ -1656,6 +1914,18 @@ fn run_residual_repair(
     if repair_groups.is_empty() || repair_groups.len() >= pre.groups.len() {
         return;
     }
+
+    Logger::instance().log(&format!(
+        "[solver] Residual repair mode: {} mismatched dests, {} affected groups",
+        mismatched.len(),
+        repair_groups.len()
+    ));
+    // Unconditional, unlike the phase-1 equivalent: `repair_groups` is known
+    // non-empty here, so the C++ emits this without an empty guard.
+    Logger::instance().log(&format!(
+        "[solver] Residual mismatch-affecting groups: {}",
+        join_group_names(pre, &repair_groups)
+    ));
 
     state.search.selections = state.best.best.selections.clone();
     state.search.flags = rebuild_flags(
@@ -1715,6 +1985,11 @@ fn run_focused_search(
         return;
     }
 
+    Logger::instance().log(&format!(
+        "[solver] Focused search: {} mismatched dests, {} groups",
+        mismatched.len(),
+        focus_groups.len()
+    ));
     state.search.selections = state.best.best.selections.clone();
     state.search.flags = rebuild_flags(
         pre.installer,
@@ -1765,6 +2040,10 @@ fn run_focused_search(
 
     if !state.search.found_exact {
         let exact_focus_groups: HashSet<i32> = focus_groups.iter().copied().collect();
+        Logger::instance().log(&format!(
+            "[solver] Focused exact fallback: {} groups",
+            focus_groups.len()
+        ));
 
         state.search.selections = state.best.best.selections.clone();
         state.search.flags = rebuild_flags(
@@ -1802,6 +2081,8 @@ fn run_focused_search(
             stats,
         );
     }
+
+    log_phase_metrics(state, "focused search");
 }
 
 /// Outcome of one global fallback pass. Mirror of the C++ `GlobalPassOutcome`.
@@ -1936,6 +2217,11 @@ fn run_global_fallback(
         capped_options: 0,
     };
     if !state.search.found_exact {
+        Logger::instance().log(&format!(
+            "[solver] Option widening: SelectAny cap {} -> {}",
+            format_option_cap(SELECT_ANY_CAP_NARROW),
+            format_option_cap(SELECT_ANY_CAP_MEDIUM)
+        ));
         medium = run_global_pass(
             state,
             pre,
@@ -1970,6 +2256,11 @@ fn run_global_fallback(
             let mismatched = collect_mismatched_dests(&sim_best, pre.target, pre.excluded);
             let affected = groups_for_mismatches(pre, &mismatched);
             if !affected.is_empty() && affected.len() < pre.groups.len() {
+                Logger::instance().log(&format!(
+                    "[solver] Global targeted fallback: {} mismatched dests, {} affected groups",
+                    mismatched.len(),
+                    affected.len()
+                ));
                 let exact_groups: HashSet<i32> = affected.iter().copied().collect();
                 run_global_pass(
                     state,
@@ -1991,6 +2282,11 @@ fn run_global_fallback(
                 || state.best.best.size_mismatch > 0
                 || state.best.best.hash_mismatch > 0);
         if unresolved_after_targeted {
+            Logger::instance().log(&format!(
+                "[solver] Option widening: SelectAny cap {} -> {}",
+                format_option_cap(SELECT_ANY_CAP_MEDIUM),
+                format_option_cap(SELECT_ANY_CAP_FULL)
+            ));
             run_global_pass(
                 state,
                 pre,
@@ -2108,6 +2404,16 @@ pub fn solve_fomod_csp(
     let mut options_cache: HashMap<OptionCacheKey, CachedOptions> = HashMap::new();
     let select_any_cap = SELECT_ANY_CAP_NARROW;
 
+    // `flat_plugins` is the C++ running total accumulated while building
+    // `pre.groups` (`FomodCSPSolver.cpp:1500-1507`); summing the per-group
+    // counts reproduces it.
+    let flat_plugins: i32 = pre.groups.iter().map(|g| g.plugin_count).sum();
+    Logger::instance().log(&format!(
+        "[solver] Starting CSP: {} groups, {flat_plugins} total plugins, {} components",
+        pre.groups.len(),
+        pre.components.len()
+    ));
+
     // (S5) Phase sequence; phases 2-5 run only while unsolved and in budget.
     let mut ran_phase2 = false;
     let mut ran_phase3 = false;
@@ -2157,7 +2463,51 @@ pub fn solve_fomod_csp(
         run_global_fallback(&mut state, &pre, &mut options_cache, &mut stats);
     }
 
-    // (S6) Assemble the result.
+    // (S6) Final reporting, then assemble the result. The C++ sets
+    // `nodes_explored` inside both arms of its has_best branch; the single
+    // assignment here covers both.
+    if state.progress.deadline_exceeded {
+        Logger::instance().log(&format!(
+            "[solver] Wall-clock time limit ({}s) exceeded after {} nodes",
+            CONFIG.time_limit_seconds, state.search.nodes_explored
+        ));
+    }
+
+    if state.best.has_best {
+        Logger::instance().log(&format!(
+            "[solver] Done: {} nodes, exact={}, missing={}, extra={}, size_mm={}, hash_mm={}",
+            state.search.nodes_explored,
+            state.best.best.exact_match,
+            state.best.best.missing,
+            state.best.best.extra,
+            state.best.best.size_mismatch,
+            state.best.best.hash_mismatch
+        ));
+    } else {
+        Logger::instance().log(&format!(
+            "[solver] No solution found ({} nodes explored)",
+            state.search.nodes_explored
+        ));
+    }
+
+    Logger::instance().log(&format!(
+        "[solver] Pruning summary: extra_only={}, lower_bound={}, memo={}, invisible_skip={}, node_limit={}, max_depth_aborts={}",
+        stats.pruned_extra_only,
+        stats.pruned_lower_bound,
+        stats.pruned_memo,
+        stats.skipped_invisible,
+        stats.pruned_node_limit,
+        stats.max_depth_aborts
+    ));
+
+    Logger::instance().log(&format!(
+        "[solver] Domain reduction summary: dropped_extra_only_options={}, collapsed_equivalent={}, forced_unique={}, capped_select_any={}",
+        stats.dropped_extra_only_options,
+        stats.collapsed_equivalent_options,
+        stats.forced_unique_options,
+        stats.capped_select_any_options
+    ));
+
     state.best.best.nodes_explored = state.search.nodes_explored;
 
     let final_phase = if ran_phase5 {
