@@ -16,29 +16,63 @@ End with omissions. After each task, state what you changed and what you intenti
 
 salma is a wizardless FOMOD installer, processor, and selection-inference engine for Skyrim modding (Mod Organizer 2 integration). C++23 backend + React frontend, Windows-only (MSVC 2022).
 
+On the `rust-core` branch the engine is being ported to Rust (`rust/`). Both engines are present: the Rust port is what the root scripts build and what ships, and the C++ in `src/` is retained as the parity oracle the port is validated against. See "The Rust port" below.
+
 ## Build, test, run
 
-VCPKG_ROOT must be set (the CMake preset reads it for the toolchain). Dependencies are vcpkg manifest-mode (`vcpkg.json`) on the `x64-windows-static-md` triplet, supplied by the overlay in `cmake/`. First configure can take several minutes while vcpkg builds the cache.
+On the `rust-core` branch the engine is being ported to Rust and **the root scripts drive the Rust build**, not the C++ one. Both engines coexist: `src/` (C++) is still the parity oracle the Rust port is validated against.
 
 ```powershell
-.\build.bat        # full pipeline: clang-format -> configure -> clang-tidy -> Release build -> docs
-.\test.bat         # build salma_tests and run it
-.\deploy.bat       # copy DLL + mo2-salma.py into the MO2 plugins dir
+.\build.bat        # fmt -> clippy (-D warnings) -> cargo build --release -> package the DLL
+.\test.bat         # cargo test --release -> smoke_ctypes.py -> smoke_plugin.py
+.\deploy.bat       # copy the packaged DLL + mo2-salma.py into the MO2 plugins dir (a CUTOVER, read rust/CUTOVER.md)
+.\purge.bat        # remove the deployed plugin from MO2 (engine-agnostic)
 ```
 
-For a fast iteration loop, configure once then scope the build to a target:
+Both scripts default `CARGO_BUILD_JOBS=4` when unset. Cargo otherwise runs one job per core, and on a high-core host the parallel rustc + link peak has taken the toolchain down (rustc `STATUS_HEAP_CORRUPTION`, cc-rs failures building the unrar sources). Set the variable to override.
+
+For a fast Rust iteration loop:
+
+```powershell
+cargo build --release --manifest-path rust\Cargo.toml   # the DLL: rust\target\release\mo2_salma_rs.dll
+cargo test  --release --manifest-path rust\Cargo.toml   # 594 tests
+cargo clippy --all-targets --release --manifest-path rust\Cargo.toml -- -D warnings
+```
+
+### Building the C++ side
+
+No script builds it any more. VCPKG_ROOT must be set (the CMake preset reads it for the toolchain). Dependencies are vcpkg manifest-mode (`vcpkg.json`) on the `x64-windows-static-md` triplet, supplied by the overlay in `cmake/`. First configure can take several minutes while vcpkg builds the cache.
 
 ```powershell
 cmake --preset default                                    # Release configure (preset "debug" for Debug)
+cmake --build build --config Release                      # everything
 cmake --build build --config Release --target mo2-core    # the DLL (mo2-salma.dll), no HTTP
 cmake --build build --config Release --target mo2-server  # the EXE (Crow HTTP server)
 cmake --build build --config Release --target salma_tests # GoogleTest binary
 .\build\bin\Release\mo2-server.exe                        # run the server on 127.0.0.1:5000
 ```
 
-Build outputs land in `build/bin/Release/`: `mo2-salma.dll`, `mo2-server.exe`, `salma_tests.exe`.
+Build outputs land in `build/bin/Release/`: `mo2-salma.dll`, `mo2-server.exe`, `salma_tests.exe`. You need this build for the parity tools (`rust/tools/gen_golden.py`, `rust/tools/run_harness.py`) which diff the Rust DLL against the C++ one.
 
 ### Tests
+
+Rust tests are the primary suite (594 at last count). Unit tests live inline in `rust/src/*.rs` under `#[cfg(test)]`; integration tests are `rust/tests/*.rs`, with the committed golden-case corpus in `rust/tests/golden/cases/` and the shared fixture harness in `rust/tests/common/mod.rs`.
+
+```powershell
+cargo test --release --manifest-path rust\Cargo.toml                       # everything
+cargo test --release --manifest-path rust\Cargo.toml -- utils::            # a module's unit tests
+cargo test --release --manifest-path rust\Cargo.toml --test fomod_ir_fixtures   # one integration target
+```
+
+Adding a Rust test: an inline `#[cfg(test)] mod tests` needs nothing declared, and a new `rust/tests/<name>.rs` is picked up automatically. Cargo only treats `.rs` files DIRECTLY under `tests/` as targets, which is why `tests/golden/` (data) and `tests/common/` (shared module) are not compiled as test binaries.
+
+Parity checks against the C++ oracle need the corpus and the `SALMA_*` env vars, so they are separate from `test.bat` and from CI:
+
+```powershell
+python rust\tools\compare_infer.py rust\target\release\mo2_salma_rs.dll --curated  # 16 vetted cases
+python rust\tools\compare_infer.py rust\target\release\mo2_salma_rs.dll            # full 197-fixture corpus
+python rust\tools\run_harness.py                                                   # test_all.py round-trip, both engines
+```
 
 C++ unit tests are GoogleTest (linked via `GTest::gtest_main`), discovered with `gtest_discover_tests`.
 
@@ -72,10 +106,14 @@ Start `mo2-server.exe` on :5000 before `npm run dev`, or every `/api/*` call the
 
 ## CI gates (must pass before merge)
 
+- `rust.yml` is the Rust pipeline and the primary gate: `cargo fmt --check`, `cargo clippy --all-targets --release -- -D warnings`, release build, `cargo test --release`, then the corpus-free Python checks (`package.py`, `smoke_ctypes.py`, `smoke_plugin.py`) and an artifact upload of the deployable `mo2-salma.dll`. Triggered by changes under `rust/`, to `build.bat`/`test.bat`, or to `scripts/mo2-salma.py`.
 - `build.yml` runs `clang-format -i` over `src` + `tests` and fails if `git diff` is non-empty. Formatting is a hard gate: run the formatter, never hand-adjust layout. It also builds the web frontend (`npm ci; npm run build`) and the C++ Release targets.
 - `test.yml` runs `ctest --preset ci`.
-- `sonar.yml` runs a SonarCloud scan.
-- clang-tidy runs only in local `build.bat` (fails the build on any issue), not in CI.
+- `lint.yaml` runs `npm run lint` over `web/`.
+- `sonar.yml` runs a SonarCloud scan (`sonar.sources=src`, so the C++ only).
+- clang-tidy no longer runs anywhere automatically: it was a `build.bat` step, and that script now drives the Rust build. Run it by hand against `build-cdb` if you touch C++.
+
+`build.yml`, `test.yml`, `lint.yaml` and `sonar.yml` only trigger on `main`, so they do not run on `rust-core` pushes; they gate the merge.
 
 ## Conventions and gotchas
 
@@ -84,6 +122,7 @@ Start `mo2-server.exe` on :5000 before `npm run dev`, or every `/api/*` call the
 - No em-dashes anywhere (code, comments, docs, prose). Use plain hyphens.
 - Commits use a gitmoji prefix + short imperative subject, one concern each (`🚚 Rename ... to .hpp`, `🛂 ...` for security, `💄 Restyle ...`). No trailing period. Do not mix formatting-only churn with feature/bug work.
 - C++ style (`.clang-format`, Google base): 4-space indent, Allman braces, 100 columns, left-aligned pointers/refs, sorted includes. `#pragma once` (no guards), braces on all control-flow bodies, `explicit` single-arg ctors, prefer return values over out-params, named structs over `std::pair`/`std::tuple`, no `using namespace` in headers.
+- Rust style: whatever `cargo fmt` produces, and `cargo clippy --all-targets -- -D warnings` must be clean. One module per C++ translation unit, snake_cased. Module and item docs are `//!` and `///` (the `/** */` rule is C++-only). Every deliberate divergence from the C++ gets a comment naming what the C++ does and why this differs, plus an entry in `rust/PARITY-NOTES.md`; a reproduction of a C++ bug must say that it is one, or someone will "fix" it and break parity.
 - New frontend backend calls go through `web/src/api.ts` (typed `fetch` wrapper that injects the `X-Salma-Csrf` header and retries on 403), not ad-hoc `fetch`. Shared TS types live in `web/src/types.ts`. Reusable components are in `web/src/comps/` (the old `web/src/components/` was removed). ESLint allows zero warnings; unused vars must be prefixed `_`.
 - `docs/` and `site/` are generated (doxide -> `scripts/_clean_docs.py` -> mkdocs). Do not commit them; only `docs/main.html` (the theme override) is tracked.
 - Respect existing user edits, do not revert unrelated changes, and prefer the repo's `.bat` scripts over ad hoc commands.
@@ -103,6 +142,22 @@ salma ships three artifacts over one shared core library. Improving inference on
 - `web/dist/` - the Vite-built React SPA, served by `mo2-server`.
 
 `Export.hpp` defines the `MO2_API` macro (dllexport when building mo2-core, dllimport for consumers).
+
+### The Rust port (`rust/`)
+
+`rust/` is a full port of `mo2-core` and is the engine the root scripts build. It produces `mo2_salma_rs.dll`, exporting the same eight `extern "C"` symbols, and `rust/tools/package.py` renames it to `mo2-salma.dll` at cutover. It does NOT port `mo2-server` or the web layer; there is no Crow equivalent.
+
+The layout deliberately mirrors the C++ side, one module per C++ translation unit with the name snake_cased:
+
+```
+rust/Cargo.toml     one package, no workspace
+rust/build.rs       Win32 link flags for the vendored unrar sources
+rust/src/*.rs       mirrors src/*.cpp   (FomodIRParser.cpp -> fomod_ir_parser.rs)
+rust/tests/*.rs     integration tests + tests/golden/ corpus + tests/common/ harness
+rust/tools/*.py     packaging, smoke tests, and the C++-vs-Rust parity harnesses
+```
+
+`rust/PARITY-NOTES.md` is the authoritative record of every divergence from the C++, organised by task, and `rust/CUTOVER.md` covers swapping the deployed DLL and rolling back. Read both before changing engine behavior: many surprising-looking constructs are deliberate reproductions of C++ bugs, and they say so.
 
 ### Inference pipeline (the core feature)
 

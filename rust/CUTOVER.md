@@ -99,13 +99,19 @@ divergences" and the per-task divergence sections.
 ### 1. Build and stage
 
 ```powershell
-python rust\tools\package.py
+.\build.bat
 ```
 
-Builds release and stages `rust\target\package\mo2-salma.dll`, printing its
-SHA-256. The rename from `mo2_salma_rs.dll` happens here and only here: during
-the parity phase the two names are kept distinct so a stray copy can never be
-mistaken for the C++ build.
+Formats, lints, builds release, and stages `rust\target\package\mo2-salma.dll`,
+printing its SHA-256. The rename from `mo2_salma_rs.dll` happens in
+`package.py` and only there: during the parity phase the two names are kept
+distinct so a stray copy can never be mistaken for the C++ build.
+
+To stage without the fmt/clippy/build steps (an existing release build):
+
+```powershell
+python rust\tools\package.py --no-build
+```
 
 ### 2. Back up the deployed C++ DLL
 
@@ -117,30 +123,33 @@ Do not skip this. It is the rollback.
 
 ### 3. Deploy
 
-The direct copy, which is the recommended path:
+```powershell
+.\deploy.bat
+```
+
+`deploy.bat` now prefers `rust\target\package\mo2-salma.dll` over the C++
+`build\bin\Release\mo2-salma.dll`, so a plain run ships the Rust engine and also
+refreshes `scripts\mo2-salma.py` in the plugins directory. It prints a cutover
+warning before copying.
+
+The equivalent direct copy, if you want to leave the Python plugin alone:
 
 ```powershell
 copy /Y rust\target\package\mo2-salma.dll "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll"
 ```
 
-`deploy.bat` also works unmodified, because it already prefers a `mo2-salma.dll`
-sitting at the repo root over `build\bin\Release\` (deploy.bat:34-35). Use this
-if you also want it to refresh `scripts\mo2-salma.py` in the plugins directory:
+**To deploy the C++ build instead**, delete or rename the staged Rust artifact
+first, since it takes precedence:
 
 ```powershell
-copy /Y rust\target\package\mo2-salma.dll .\mo2-salma.dll
+del rust\target\package\mo2-salma.dll
 .\deploy.bat
-del .\mo2-salma.dll
 ```
 
-**Delete the repo-root copy afterwards.** Two reasons, both real:
-
-1. Every later `deploy.bat` run silently keeps deploying the Rust build,
-   including a run you intended to redeploy the C++ one.
-2. `/mo2-salma.dll` is git-ignored (an anchored rule added for exactly this
-   flow), so it will not be committed by accident - but only that one path is
-   covered. A copy under any other name or directory is still visible to
-   `git add`, and it is a 2.5 MB binary.
+A `mo2-salma.dll` at the REPO ROOT still overrides both sources. That path is
+git-ignored by an anchored `/mo2-salma.dll` rule so a 2.5 MB binary cannot be
+committed by accident, but only that exact path is covered: a copy under any
+other name or directory is still visible to `git add`.
 
 ### 4. Verify it took
 

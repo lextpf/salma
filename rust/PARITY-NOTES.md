@@ -1,7 +1,7 @@
 # PARITY-NOTES
 
 Running log of behavioral parity decisions and divergences between the Rust
-port (`rust/mo2-salma-rs`, DLL `mo2_salma_rs.dll`) and the C++ source of truth
+port (`rust/`, DLL `mo2_salma_rs.dll`) and the C++ source of truth
 (`src/`, DLL `mo2-salma.dll`). The C++ engine is authoritative; every entry
 records where the Rust side matches it and where it intentionally does not yet.
 
@@ -117,7 +117,7 @@ produces (it encodes paths as UTF-8).
 ## Task 3 - Utils port
 
 Port of `src/Utils.hpp` + `src/Utils.cpp` to
-`rust/mo2-salma-rs/src/utils.rs` (plus `types.rs` for `PluginType` from
+`rust/src/utils.rs` (plus `types.rs` for `PluginType` from
 `src/Types.hpp`). All 59 TEST()/TEST_F() cases in `tests/utils_test.cpp` are
 ported 1:1 into `utils.rs`'s `#[cfg(test)]` module (snake_case names, same
 inputs and expected outputs), plus 16 Rust-only tests covering the functions
@@ -272,8 +272,8 @@ the C++ suite does not exercise directly.
 
 ## Task 4 - FomodIR + XML parser
 
-Port of `src/FomodIR.hpp` to `rust/mo2-salma-rs/src/fomod_ir.rs` and
-`src/FomodIRParser.hpp`/`.cpp` to `rust/mo2-salma-rs/src/fomod_ir_parser.rs`,
+Port of `src/FomodIR.hpp` to `rust/src/fomod_ir.rs` and
+`src/FomodIRParser.hpp`/`.cpp` to `rust/src/fomod_ir_parser.rs`,
 including the pugixml document-load semantics the C++ callers rely on
 (`doc.load_buffer` with DEFAULT options at `src/FomodInferenceService.cpp:908`,
 `doc.load_file` at `src/InstallationService.cpp:316`). The reference pugixml
@@ -838,7 +838,7 @@ each, naming the C++ ground truth, the Rust site, and the validation used.
 ## Task 5 - Dependency evaluator + atom expansion
 
 Port of `src/FomodDependencyEvaluator.hpp`/`.cpp` to
-`rust/mo2-salma-rs/src/fomod_dependency_evaluator.rs`, `src/FomodAtom.hpp` to
+`rust/src/fomod_dependency_evaluator.rs`, `src/FomodAtom.hpp` to
 `fomod_atom.rs`, and `src/FomodInferenceAtoms.hpp`/`.cpp` to
 `fomod_inference_atoms.rs`, plus `FomodDependencyContext` (`src/Types.hpp:85`)
 added to `types.rs`. 67 new tests: 38 evaluator micro-tests, 4 atom-datatype
@@ -1716,7 +1716,7 @@ resumes at Task 9.
 ## Task 9 - CSP solver phases
 
 Port of `src/FomodCSPSolver.cpp` + `src/FomodCSPSolverPhases.cpp` to
-`rust/mo2-salma-rs/src/fomod_csp_solver.rs`. The C++ splits the solver core and
+`rust/src/fomod_csp_solver.rs`. The C++ splits the solver core and
 the five phase functions across two TUs; the port folds them into one module so
 the large private helper set (rebuild_flags, evaluate_candidate, lower_bound,
 contested_signature, the backtracker, etc.) stays module-private. Only
@@ -2195,7 +2195,7 @@ assumption (central-directory order is preserved verbatim).
 directives for the Win32 import libraries the sources need. Without them the
 final link fails with ~13 LNK2019 unresolved externals (`RegOpenKeyExW`,
 `CryptAcquireContextW`, `OpenProcessToken`, `AdjustTokenPrivileges`,
-`SetFileSecurityW`, ...). `mo2-salma-rs/build.rs` emits
+`SetFileSecurityW`, ...). `rust/build.rs` emits
 `cargo:rustc-link-lib=advapi32` and `cargo:rustc-link-lib=user32`, gated to
 Windows via `CARGO_CFG_TARGET_OS` (the correct TARGET signal in a build script).
 
@@ -2799,7 +2799,7 @@ side changes.
 ## Task 14 - FileOperations + FomodService install replay
 
 Milestone 7 begins. `src/FileOperations.hpp`/`.cpp` ->
-`rust/mo2-salma-rs/src/file_operations.rs`, `src/FomodService.hpp`/`.cpp` ->
+`rust/src/file_operations.rs`, `src/FomodService.hpp`/`.cpp` ->
 `src/fomod_service.rs`, and the `FileOperation` / `FileOpType` / `InstallResult`
 structs from `src/Types.hpp` -> `src/types.rs`. This is the install REPLAY: it
 turns a parsed `FomodInstaller` IR plus a JSON selections document into the
@@ -3649,3 +3649,78 @@ export reaches the logger. Callback registration is asserted in exactly ONE test
 across the binary, because the callback is process-global and cargo runs tests
 in parallel. Suite: 587 -> 594, 0 failures; `cargo fmt --check` and
 `cargo clippy --all-targets -- -D warnings` clean.
+
+## Layout, scripts and pipelines
+
+The crate was flattened to mirror the C++ side of the repo. It had been a
+one-member cargo workspace, which put sources two levels below `rust/`:
+
+| Before | After |
+| --- | --- |
+| `rust/Cargo.toml` (workspace) + `rust/mo2-salma-rs/Cargo.toml` (package) | one `rust/Cargo.toml` |
+| `rust/mo2-salma-rs/src/` | `rust/src/` |
+| `rust/mo2-salma-rs/tests/` | `rust/tests/` |
+| `rust/mo2-salma-rs/build.rs` | `rust/build.rs` |
+| `rust/tests/golden/` | unchanged, now beside the tests that read it |
+
+`rust/src` + `rust/tests` now matches the C++ `src` + `tests`. The two `tests/`
+directories merged cleanly: cargo only treats `.rs` files DIRECTLY under
+`tests/` as integration targets, so `tests/golden/` (data) and `tests/common/`
+(a shared module, not a target) are both ignored by the target scanner.
+
+Nothing outside the crate had to move. All five Python tools resolve from the
+REPO ROOT rather than the crate directory, so `rust/tools/`, `rust/target/` and
+the `rust/tests/golden` paths they reference were already correct.
+
+Four crate-relative fixture paths did need fixing, and only one of them was
+caught by a compile error - the other three were runtime `env!` joins that
+failed as a test assertion:
+`tests/common/mod.rs`, `tests/fomod_atoms_fixtures.rs`,
+`tests/fomod_ir_fixtures.rs` and `src/utils.rs` all joined
+`CARGO_MANIFEST_DIR` with `../tests/golden/cases`; with the manifest now at
+`rust/`, the `../` had to go.
+
+### Scripts
+
+`build.bat`, `test.bat` and `deploy.bat` were repurposed in place rather than
+gaining `rust-` siblings.
+
+- `build.bat` - `cargo fmt` -> `cargo clippy --all-targets --release -D warnings`
+  -> `cargo build --release` -> `package.py --no-build`.
+- `test.bat` - `cargo test --release` -> `smoke_ctypes.py` -> `smoke_plugin.py`.
+  All three are corpus-free; the corpus-backed checks are named in its header.
+- `deploy.bat` - prefers `rust/target/package/mo2-salma.dll`, falls back to the
+  C++ `build/bin/Release/mo2-salma.dll`, and a repo-root `mo2-salma.dll` still
+  overrides both. It now prints a cutover warning, because MO2 loads whatever
+  sits at the deploy path and `getApiVersion` reports `1.2.0` for both engines.
+- `purge.bat` - untouched. It removes deployed files from MO2 and never cared
+  which engine produced them.
+
+Both scripts default `CARGO_BUILD_JOBS=4` when it is unset, and say why in
+their header: cargo otherwise runs one job per core, and on a 32-core host the
+parallel rustc + link peak took the toolchain down with a rustc
+`STATUS_HEAP_CORRUPTION` and a cc-rs failure building the unrar sources. Both
+recurred only at full parallelism. Set the variable to override.
+
+**The C++ engine is no longer built by any script.** It still compiles, is
+untouched, and remains the parity oracle that `gen_golden.py` and
+`run_harness.py` compare against, but building it is now the two documented
+cmake commands (recorded in `build.bat`'s header and in CLAUDE.md).
+
+### Pipelines
+
+`rust.yml` gains the corpus-free checks after its existing fmt/clippy/build/test
+sequence: `package.py`, `smoke_ctypes.py`, `smoke_plugin.py`, and an artifact
+upload of `mo2-salma.dll` so a cutover candidate is downloadable from a green
+run. Its path filter now also covers `build.bat`, `test.bat` and
+`scripts/mo2-salma.py`, since the smoke test drives the plugin verbatim and
+would not otherwise re-run when the plugin changes.
+
+The corpus-backed gates deliberately stay out of CI: `compare_infer.py` and
+`run_harness.py` need the mod archives and the C++ oracle DLL, neither of which
+exists on a clean runner.
+
+`build.yml`, `test.yml`, `lint.yaml` and `sonar.yml` are unchanged and still
+gate the C++ and the web frontend. They only trigger on `main`, so they do not
+run on this branch's pushes. Whether the C++ gates should survive the merge is a
+cutover decision, not a layout one, and is left open deliberately.
