@@ -109,11 +109,11 @@ Start `mo2-server.exe` on :5000 before `npm run dev`, or every `/api/*` call the
 - `rust.yml` is the Rust pipeline and the primary gate: `cargo fmt --check`, `cargo clippy --all-targets --release -- -D warnings`, release build, `cargo test --release`, then the corpus-free Python checks (`package.py`, `smoke_ctypes.py`, `smoke_plugin.py`) and an artifact upload of the deployable `mo2-salma.dll`. Triggered by changes under `rust/`, to `build.bat`/`test.bat`, or to `scripts/mo2-salma.py`.
 - `build.yml` runs `clang-format -i` over `src` + `tests` and fails if `git diff` is non-empty. Formatting is a hard gate: run the formatter, never hand-adjust layout. It also builds the web frontend (`npm ci; npm run build`) and the C++ Release targets.
 - `test.yml` runs `ctest --preset ci`.
-- `lint.yaml` runs `npm run lint` over `web/`.
-- `sonar.yml` runs a SonarCloud scan (`sonar.sources=src`, so the C++ only).
+- `eslint.yaml` runs `npm run lint` over `web/`, and only fires on `web/**` changes.
+- `sonar.yml` runs a SonarCloud scan over BOTH engines (`sonar.sources=src,rust/src`). The Rust analyzer shells out to cargo + clippy itself, so the workflow installs the toolchain; and because it looks for `Cargo.toml` in the project root by default, `sonar.rust.cargo.manifestPaths=rust/Cargo.toml` points it at ours. `rust/tests/golden/**` is excluded as test data.
 - clang-tidy no longer runs anywhere automatically: it was a `build.bat` step, and that script now drives the Rust build. Run it by hand against `build-cdb` if you touch C++.
 
-`build.yml`, `test.yml`, `lint.yaml` and `sonar.yml` only trigger on `main`, so they do not run on `rust-core` pushes; they gate the merge.
+`build.yml`, `test.yml`, `eslint.yaml` and `sonar.yml` only trigger on `main`, so they do not run on `rust-core` pushes; they gate the merge. `rust.yml` is path-triggered and runs on any branch.
 
 ## Conventions and gotchas
 
