@@ -1,16 +1,24 @@
-name: lint
+name: eslint
 
+# Scoped to web/: the only ESLint-covered code in the repo. Without the path
+# filter this ran on every push to main, including C++ and Rust-only changes.
 on:
   push:
     branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/eslint.yaml"
   pull_request:
     branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/eslint.yaml"
 
 permissions:
   contents: read
 
 jobs:
-  web-eslint:
+  eslint:
     runs-on: ubuntu-latest
     defaults:
       run:
