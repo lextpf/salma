@@ -11,8 +11,8 @@ REM                          against the packaged DLL
 REM
 REM All three are corpus-free. The corpus-backed parity checks are separate and
 REM need the SALMA_* env vars (scripts\setup-env.bat):
-REM   python rust\tools\compare_infer.py rust\target\release\mo2_salma_rs.dll --curated
-REM   python rust\tools\run_harness.py
+REM   python tools\compare_infer.py target\release\mo2_salma_rs.dll --curated
+REM   python tools\run_harness.py
 REM
 REM CARGO_BUILD_JOBS is capped for the same reason as in build.bat.
 REM ============================================================================
@@ -26,7 +26,7 @@ echo.
 
 set "REPO_ROOT=%~dp0"
 if "%REPO_ROOT:~-1%"=="\" set "REPO_ROOT=%REPO_ROOT:~0,-1%"
-set "RUST_DIR=%REPO_ROOT%\rust"
+REM Cargo and CMake share the repo root; cargo runs from here directly.
 
 if not defined CARGO_BUILD_JOBS set "CARGO_BUILD_JOBS=4"
 
@@ -43,7 +43,7 @@ REM STEP 1: Cargo test
 REM ============================================================================
 echo [1/3] Running cargo test --release...
 echo ----------------------------------------------------------------------------
-cargo test --manifest-path "%RUST_DIR%\Cargo.toml" --release
+cargo test --release
 if errorlevel 1 set ALL_PASSED=0
 echo.
 
@@ -56,11 +56,11 @@ where python >nul 2>&1
 if errorlevel 1 (
     echo SKIP: python not found in PATH
 ) else (
-    if not exist "%RUST_DIR%\target\release\mo2_salma_rs.dll" (
-        echo ERROR: rust\target\release\mo2_salma_rs.dll not found. Run build.bat first.
+    if not exist "%REPO_ROOT%\target\release\mo2_salma_rs.dll" (
+        echo ERROR: target\release\mo2_salma_rs.dll not found. Run build.bat first.
         set ALL_PASSED=0
     ) else (
-        python "%RUST_DIR%\tools\smoke_ctypes.py" "%RUST_DIR%\target\release\mo2_salma_rs.dll"
+        python "%REPO_ROOT%\tools\smoke_ctypes.py" "%REPO_ROOT%\target\release\mo2_salma_rs.dll"
         if errorlevel 1 set ALL_PASSED=0
     )
 )
@@ -75,12 +75,12 @@ where python >nul 2>&1
 if errorlevel 1 (
     echo SKIP: python not found in PATH
 ) else (
-    if not exist "%RUST_DIR%\target\package\mo2-salma.dll" (
+    if not exist "%REPO_ROOT%\target\package\mo2-salma.dll" (
         echo   Staging the packaged DLL first...
-        python "%RUST_DIR%\tools\package.py" --no-build
+        python "%REPO_ROOT%\tools\package.py" --no-build
         if errorlevel 1 set ALL_PASSED=0
     )
-    python "%RUST_DIR%\tools\smoke_plugin.py"
+    python "%REPO_ROOT%\tools\smoke_plugin.py"
     if errorlevel 1 set ALL_PASSED=0
 )
 echo.

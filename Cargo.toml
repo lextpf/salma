@@ -1,13 +1,12 @@
-# The salma mo2-core Rust port.
+# The salma engine.
 #
-# Layout mirrors the C++ side of the repo: sources in src/, tests in tests/,
-# with the golden-case corpus under tests/golden/. Builds to cargo's
-# rust/target/, never the C++ build/bin/ tree. Produces mo2_salma_rs.dll, a
-# drop-in replacement for the C++ mo2-salma.dll; rust/tools/package.py does the
-# rename at cutover (see rust/CUTOVER.md).
+# This crate lives at the repo root and shares src/ and tests/ with the C++ that
+# remains (the Crow server behind the web dashboard). The two never collide:
+# cargo only looks at *.rs, and CMake takes an explicit file list. The port is
+# file-for-file, so src/FomodService.cpp and src/fomod_service.rs sit adjacent.
 #
-# One package, no workspace: there is only ever one crate here, and the extra
-# nesting a workspace required put src/ two levels below rust/.
+# Builds to target/, never the C++ build/bin/ tree. Produces mo2_salma_rs.dll;
+# tools/package.py renames it to mo2-salma.dll at cutover (see CUTOVER.md).
 [package]
 name = "mo2_salma_rs"
 version = "0.1.0"

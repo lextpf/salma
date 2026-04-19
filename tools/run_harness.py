@@ -14,10 +14,10 @@ re-hashing the file at the path `test_all.py` reports. No repo script is
 modified and no environment change escapes the subprocess.
 
 Usage:
-  python rust/tools/run_harness.py                      # Rust DLL, full corpus
-  python rust/tools/run_harness.py --baseline           # C++ DLL, for comparison
-  python rust/tools/run_harness.py --limit 25           # first 25 testable mods
-  python rust/tools/run_harness.py --one <archive> <mod>   # test_one.py --full
+  python tools/run_harness.py                      # Rust DLL, full corpus
+  python tools/run_harness.py --baseline           # C++ DLL, for comparison
+  python tools/run_harness.py --limit 25           # first 25 testable mods
+  python tools/run_harness.py --one <archive> <mod>   # test_one.py --full
 """
 
 import argparse
@@ -31,10 +31,10 @@ import sys
 import time
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent.parent
-RUST_DLL = REPO / "rust" / "target" / "release" / "mo2_salma_rs.dll"
+REPO = Path(__file__).resolve().parent.parent
+RUST_DLL = REPO / "target" / "release" / "mo2_salma_rs.dll"
 CPP_DLL = REPO / "build" / "bin" / "Release" / "mo2-salma.dll"
-STAGING = REPO / "rust" / "target" / "harness"
+STAGING = REPO / "target" / "harness"
 DLL_NAME = "mo2-salma.dll"
 
 # test_all.py prefixes every line with a timestamp ("16:40:28  DLL: ..."), so

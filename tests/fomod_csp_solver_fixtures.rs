@@ -16,7 +16,7 @@
 //! size, so an end-to-end run over the FIXTURE atoms reports `size_mismatch`
 //! where the golden run (size 0 -> size check skipped) reported `reproduced`.
 //! This is a Task 2 fixture-data discrepancy, NOT a solver defect (see
-//! `rust/PARITY-NOTES.md` "Task 6" / "Task 9").
+//! `PARITY-NOTES.md` "Task 6" / "Task 9").
 //!
 //! Consequences for the SOLVER, which optimizes against the fixture atoms:
 //! - The 12 "consistent" fixtures (expected-grid metrics == `diagnostics.repro`)

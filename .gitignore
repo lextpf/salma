@@ -41,14 +41,14 @@ web/.vite/
 .tmp/
 
 # Rust (cargo build output)
-rust/target/
+/target/
 
 # Golden vectors: the full-corpus generator output is large and machine-local.
-# Only the curated cases under rust/tests/golden/cases/ are committed.
-rust/tests/golden/full/
+# Only the curated cases under tests/golden/cases/ are committed.
+/tests/golden/full/
 
 
 # Cutover staging: deploy.bat prefers a repo-root mo2-salma.dll over
-# build/bin/Release (deploy.bat:34-35), so rust/CUTOVER.md stages the Rust DLL
+# build/bin/Release (deploy.bat:34-35), so CUTOVER.md stages the Rust DLL
 # here. Anchored so it can never hide a DLL elsewhere in the tree.
 /mo2-salma.dll

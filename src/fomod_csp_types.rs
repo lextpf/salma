@@ -19,7 +19,7 @@
 //! - [`Precompute`] - the central read-only solver data structure. It BORROWS
 //!   its seven inputs as `&'a`/`Option<&'a>` references (mirroring the C++
 //!   non-owning `const*` fields) and owns the derived reverse indices; see
-//!   `rust/PARITY-NOTES.md` "Task 8" for the borrow-shape rationale.
+//!   `PARITY-NOTES.md` "Task 8" for the borrow-shape rationale.
 //! - [`OptionCacheKey`]/[`MemoKey`] - map keys. Their C++ std::hash functors
 //!   are NOT observable (find/emplace only), so `#[derive(Hash)]` is used; only
 //!   the `PartialEq`/`Eq` field comparison is load-bearing.

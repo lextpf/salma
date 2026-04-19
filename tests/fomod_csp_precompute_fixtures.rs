@@ -9,7 +9,7 @@
 //! which produces the final selection grid). So these fixture tests are
 //! STRUCTURAL + DETERMINISM only; the behavioral parity lives in the
 //! hand-derived micro-tests inside `src/fomod_csp_precompute.rs` and
-//! `src/fomod_csp_options.rs`. See `rust/PARITY-NOTES.md` "Task 8".
+//! `src/fomod_csp_options.rs`. See `PARITY-NOTES.md` "Task 8".
 //!
 //! Each fixture reuses the shared [`common`] harness (Task 5 input-prep) to
 //! build installer/atoms/index/excluded/target, then builds the flat GroupRef

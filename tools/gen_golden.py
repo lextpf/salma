@@ -14,10 +14,10 @@ format, that case is skipped rather than committing a half-filled fixture.
 Subcommands
 -----------
   generate   Run inferFomodSelections over the full local corpus and write one
-             fixture per mod under rust/tests/golden/full/ plus a manifest.json.
+             fixture per mod under tests/golden/full/ plus a manifest.json.
   candidates Print a diversity table (format, size, entry/file counts, group
              types) for curation. Reads the full/ fixtures produced by generate.
-  curate     Materialize one committed case under rust/tests/golden/cases/<name>/
+  curate     Materialize one committed case under tests/golden/cases/<name>/
              (expected.json, ModuleConfig.xml, archive_entries.json,
              target_tree.json, case.json).
   selftest   Verify the FNV-1a-64 implementation against known vectors.
@@ -46,10 +46,10 @@ from pathlib import Path
 # Paths and constants
 # ---------------------------------------------------------------------------
 
-# rust/tools/gen_golden.py -> parents[2] is the repo root.
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# tools/gen_golden.py -> parents[1] is the repo root.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DLL = REPO_ROOT / "build" / "bin" / "Release" / "mo2-salma.dll"
-GOLDEN_DIR = REPO_ROOT / "rust" / "tests" / "golden"
+GOLDEN_DIR = REPO_ROOT / "tests" / "golden"
 DEFAULT_FULL_DIR = GOLDEN_DIR / "full"
 DEFAULT_CASES_DIR = GOLDEN_DIR / "cases"
 
