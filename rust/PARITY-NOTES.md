@@ -3709,7 +3709,7 @@ cmake commands (recorded in `build.bat`'s header and in CLAUDE.md).
 
 ### Pipelines
 
-`rust.yml` gains the corpus-free checks after its existing fmt/clippy/build/test
+`build.yml` became the Rust pipeline (replacing the C++ build) and gains the corpus-free checks after its existing fmt/clippy/build/test
 sequence: `package.py`, `smoke_ctypes.py`, `smoke_plugin.py`, and an artifact
 upload of `mo2-salma.dll` so a cutover candidate is downloadable from a green
 run. Its path filter now also covers `build.bat`, `test.bat` and
@@ -3756,3 +3756,18 @@ configured as a required status check in branch protection, a path filter makes
 the check never report and the PR waits on it forever. Adding the filters is
 safe only together with changing branch protection, which cannot be done from
 the repo.
+
+### `build.yml` absorbed the Rust pipeline
+
+`rust.yml` was deleted and `build.yml` replaced with its content, so there is one
+`build` badge rather than a `build` + `rust` pair. Two jobs: `engine (rust)` (the
+former rust.yml sequence) and `web dashboard` (`npm run build`, kept because it
+is tsc type-check plus vite, and the SPA is served by the C++ `mo2-server` which
+the Rust port does not replace).
+
+What the old C++ `build.yml` gated and nothing gates now: the clang-format
+diff check over `src` + `tests`, and the C++ Release build itself. The build is
+still covered indirectly, because `test.yml` configures and builds the C++ on
+its own before running `ctest`; the format check is genuinely gone. Neither
+matters while nobody edits the C++, and both would come back with it if the
+oracle is ever removed.
