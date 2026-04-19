@@ -7,7 +7,7 @@ REM   1. Verifies the build exists (prefers the packaged Rust DLL)
 REM   2. Copies the DLL to the MO2 plugins/salma subdirectory
 REM   3. Copies the Python plugin to the MO2 plugins directory
 REM
-REM This is a CUTOVER. Read rust\CUTOVER.md before running it against a live
+REM This is a CUTOVER. Read CUTOVER.md before running it against a live
 REM MO2 install, and back the existing mo2-salma.dll up first.
 REM ============================================================================
 
@@ -38,7 +38,7 @@ REM Source order, most specific first:
 REM   1. a repo-root mo2-salma.dll   - manual override, wins over everything
 REM   2. the packaged Rust artifact  - what build.bat stages
 REM   3. the C++ Release build       - only if the Rust artifact is absent
-set "DLL_SOURCE=%~dp0rust\target\package\mo2-salma.dll"
+set "DLL_SOURCE=%~dp0target\package\mo2-salma.dll"
 if not exist "%DLL_SOURCE%" set "DLL_SOURCE=%~dp0build\bin\Release\mo2-salma.dll"
 if exist "%~dp0mo2-salma.dll" set "DLL_SOURCE=%~dp0mo2-salma.dll"
 if not exist "%DLL_SOURCE%" (
@@ -48,8 +48,8 @@ if not exist "%DLL_SOURCE%" (
 )
 echo   Found: %DLL_SOURCE%
 echo.
-echo   NOTE: this ships the RUST engine when rust\target\package\mo2-salma.dll
-echo         exists. Back up the deployed C++ DLL first and read rust\CUTOVER.md,
+echo   NOTE: this ships the RUST engine when target\package\mo2-salma.dll
+echo         exists. Back up the deployed C++ DLL first and read CUTOVER.md,
 echo         since MO2 loads whatever sits at that path with no version marker
 echo         (getApiVersion reports 1.2.0 for both engines).
 echo.
