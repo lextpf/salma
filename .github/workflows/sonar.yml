@@ -18,6 +18,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The Sonar Rust analyzer shells out to cargo + clippy itself, so both
+      # must be on PATH. Without this it reports zero Rust files rather than
+      # failing, which looks like a passing scan.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
