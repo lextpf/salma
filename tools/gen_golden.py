@@ -48,6 +48,11 @@ from pathlib import Path
 
 # tools/gen_golden.py -> parents[1] is the repo root.
 REPO_ROOT = Path(__file__).resolve().parents[1]
+# The C++ oracle this generator was built around was deleted once the Rust port
+# was signed off. build/bin/Release/mo2-salma.dll is now the RUST engine (CMake
+# copies it there for mo2-server), so this default no longer points at an
+# oracle; regenerating against it would bless the port's own output as the
+# reference. Pass --dll explicitly with a C++ build from history instead.
 DEFAULT_DLL = REPO_ROOT / "build" / "bin" / "Release" / "mo2-salma.dll"
 GOLDEN_DIR = REPO_ROOT / "tests" / "golden"
 DEFAULT_FULL_DIR = GOLDEN_DIR / "full"

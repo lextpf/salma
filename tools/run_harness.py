@@ -15,7 +15,7 @@ modified and no environment change escapes the subprocess.
 
 Usage:
   python tools/run_harness.py                      # Rust DLL, full corpus
-  python tools/run_harness.py --baseline           # C++ DLL, for comparison
+  python tools/run_harness.py --dll <path>          # an explicit DLL (see --baseline)
   python tools/run_harness.py --limit 25           # first 25 testable mods
   python tools/run_harness.py --one <archive> <mod>   # test_one.py --full
 """
@@ -185,7 +185,7 @@ def verify_loaded(out: str, expected_dll: Path, expected_hash: str,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run the repo harness against a staged DLL")
-    ap.add_argument("--baseline", action="store_true",
+    ap.add_argument("--baseline", action="store_true",  # retained so it errors, not silently self-compares
                     help="Stage the C++ DLL instead of the Rust one")
     ap.add_argument("--dll", type=Path, default=None,
                     help="Explicit DLL to stage (overrides --baseline)")
@@ -200,8 +200,20 @@ def main() -> int:
                          "(default: <mods drive>\\salma_harness_tmp)")
     args = ap.parse_args()
 
-    src = args.dll or (CPP_DLL if args.baseline else RUST_DLL)
-    label = "baseline" if args.baseline else "rust"
+    if args.baseline and not args.dll:
+        # The C++ engine was deleted once the Rust port was signed off, and
+        # build/bin/Release/mo2-salma.dll is now where CMake copies the RUST
+        # DLL for mo2-server. Honouring --baseline would stage the Rust build,
+        # label it "baseline", and report a flawless self-comparison.
+        sys.exit(
+            "--baseline is no longer available: the C++ oracle engine was removed.\n"
+            "build/bin/Release/mo2-salma.dll is the RUST engine now (copied there\n"
+            "for mo2-server), so a baseline run would compare Rust against itself.\n"
+            "To compare against the C++ again, check out a commit that still has\n"
+            "it and pass that DLL explicitly with --dll.")
+
+    src = args.dll or RUST_DLL
+    label = "explicit" if args.dll else "rust"
     print(f"[harness] source DLL: {src}")
     print(f"[harness] source sha256: {sha256(src)}")
 
