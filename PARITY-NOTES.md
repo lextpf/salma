@@ -3789,3 +3789,92 @@ still covered indirectly, because `test.yml` configures and builds the C++ on
 its own before running `ctest`; the format check is genuinely gone. Neither
 matters while nobody edits the C++, and both would come back with it if the
 oracle is ever removed.
+
+## Removing the C++ engine
+
+With Task 18 signed off, the C++ engine was deleted. What remains of the C++ is
+the Crow server behind the web dashboard, which the Rust port never covered.
+
+### The server had to be rewired first
+
+The engine could not simply be deleted. `mo2-server` reached it as in-process
+C++ classes, and while only THREE engine headers were included directly
+(`InstallationService.hpp`, `FomodInferenceService.hpp`,
+`FomodArchiveResolver.hpp`), their transitive closure was the whole tree: 65 of
+68 files. `InstallationService.hpp` pulls `FomodService.hpp` -> `FomodIR.hpp` ->
+the dependency evaluator, and `FomodInferenceService.hpp` pulls the entire CSP
+chain. Counting direct includes says "3 files"; counting what the compiler
+needs says "everything".
+
+`src/SalmaEngine.{hpp,cpp}` replaces those three with the flat C ABI the MO2
+Python plugin already used, loading `mo2-salma.dll` through
+`LoadLibraryW`/`GetProcAddress`. With the includes cut, the closure collapsed
+and **39 files** were deleted.
+
+Two behaviors the bridge has to preserve, neither obvious:
+
+- **Install failure must THROW.** The former `InstallationService::install_mod`
+  threw, and both controller call sites are wrapped in `catch (std::exception)`.
+  The C ABI instead returns the error text and sets `installSucceeded()` false,
+  so the bridge converts that back into a `std::runtime_error` carrying the
+  engine's own message. Returning an error string would have made every failed
+  install look like a success to the dashboard.
+- **`installSucceeded()` is a process-global flag**, and the server runs
+  installs on overlapping background jobs. The bridge serializes the call and
+  its flag read under a mutex. The old in-process service needed no such guard
+  because each call had its own instance.
+
+### What was kept
+
+`Utils.cpp`, `Logger.cpp`, `SecurityContext.cpp` (as the new `salma-support`
+STATIC library) plus the 13 server translation units. `salma-support` is
+deliberately NOT a shared library named `mo2-salma`: that name belongs to the
+Rust artifact now, and two different DLLs claiming it is how the wrong engine
+gets shipped.
+
+`Export.hpp`'s `MO2_API` now expands to nothing, since static linkage needs no
+decoration. The dllexport/dllimport spellings are kept behind `MO2_CORE_SHARED`
+in case a DLL target ever returns. Leaving `MO2_API` as `dllimport` against a
+static library is what the first build attempt failed on.
+
+`Utils` lost `get_ordered_nodes` and `xml_bool_attribute_true`: pugixml-typed
+helpers that only the deleted XML parser used. Removing them dropped pugixml,
+libarchive and bit7z from `vcpkg.json` entirely, which is why the C++ now
+configures in ~20s instead of a multi-minute vcpkg build.
+
+### The oracle is gone, and two tools would have lied about it
+
+`build/bin/Release/mo2-salma.dll` used to be the C++ oracle. It is now where
+CMake copies the RUST DLL so `mo2-server` can load it at runtime. Anything still
+treating that path as the oracle would compare the port against itself:
+
+- `run_harness.py --baseline` now exits with an explanation instead of staging
+  the Rust DLL and labelling it "baseline". It would have reported a flawless
+  self-comparison.
+- `gen_golden.py`'s default `--dll` is annotated for the same reason.
+  Regenerating the corpus now would bless the port's own output as the
+  reference.
+
+The committed golden cases under `tests/golden/cases/` are unaffected: they are
+captured C++ output from before the deletion, so `compare_infer.py --curated`
+still validates against a genuine oracle. The gitignored 197-fixture full corpus
+cannot be regenerated without checking out a commit that still has the C++.
+
+### Coverage for the new bridge
+
+`tests/salma_engine_test.cpp` is the only coverage of the boundary every
+dashboard install/infer/resolve request crosses: DLL load, ABI version match
+against `src/capi.rs`, the empty-result contracts for infer and resolve, and the
+throw-on-failure contract for install. The tests fail loudly rather than
+skipping when the DLL is absent, because a server that cannot load its engine is
+not a working server.
+
+CMake copies `target/package/mo2-salma.dll` next to `mo2-server.exe` as a
+post-build step and warns when it is missing. Without that the dashboard starts
+fine and then fails every engine request at runtime.
+
+### Numbers
+
+C++ went from 68 files to 31 (`src/`) and from 4 test files to 3. `salma_tests`
+went from 106 assertions to 76; the drop is the deleted engine suites, offset by
+the 5 new bridge tests. `cargo test` is unchanged at 594.
