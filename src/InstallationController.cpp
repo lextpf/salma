@@ -1,6 +1,6 @@
 #include "InstallationController.hpp"
 #include "ConfigService.hpp"
-#include "InstallationService.hpp"
+#include "SalmaEngine.hpp"
 #include "Logger.hpp"
 #include "MultipartHandler.hpp"
 #include "Utils.hpp"
@@ -305,8 +305,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
                     {
                         log.log(std::format("[install] Starting installation to {}", mod_path));
 
-                        mo2core::InstallationService service;
-                        auto result = service.install_mod(temp_path, mod_path, json_path);
+                        auto result = mo2server::SalmaEngine::install_mod(temp_path, mod_path, json_path);
 
                         log.log(std::format("[install] Installation completed. Mod installed to {}",
                                             result));
@@ -531,8 +530,7 @@ crow::response InstallationController::handle_install(const crow::request& req)
                     {
                         log.log(std::format("[install] Starting installation to {}", mod_path_val));
 
-                        mo2core::InstallationService service;
-                        auto result = service.install_mod(archive_path, mod_path_val, json_path);
+                        auto result = mo2server::SalmaEngine::install_mod(archive_path, mod_path_val, json_path);
 
                         log.log(std::format("[install] Installation completed. Mod installed to {}",
                                             result));

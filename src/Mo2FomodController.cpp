@@ -2,8 +2,7 @@
 #include "Mo2Helpers.hpp"
 
 #include "ConfigService.hpp"
-#include "FomodArchiveResolver.hpp"
-#include "FomodInferenceService.hpp"
+#include "SalmaEngine.hpp"
 #include "Logger.hpp"
 #include "Utils.hpp"
 
@@ -105,10 +104,9 @@ static std::string read_installation_file(const fs::path& meta_ini_path)
     return "";
 }
 
-// Archive resolution moved to mo2core::resolve_mod_archive in
-// FomodArchiveResolver.h so the MO2 plugin can call the same logic via the
-// `resolveModArchive` C-API entry point. Calls inside this file delegate to
-// the shared helper.
+// Archive resolution lives in the engine DLL and is reached through
+// `SalmaEngine::resolve_mod_archive` (the `resolveModArchive` C-API export), so
+// the dashboard and the MO2 plugin run the same implementation.
 
 /// SAX callback that counts the number of objects in the top-level "steps"
 /// array of a FOMOD JSON file and, in the same pass, captures the overall
@@ -436,7 +434,7 @@ static ModResult process_single_mod(const fs::path& mod_folder,
         return ModResult::ArchiveSkipNoValue;
     }
 
-    fs::path archive_path = mo2core::resolve_mod_archive(archive_value, mod_folder, mods_dir);
+    fs::path archive_path = mo2server::SalmaEngine::resolve_mod_archive(archive_value, mod_folder, mods_dir);
     if (archive_path.empty() || !fs::exists(archive_path))
     {
         logger.log(infer_status(index, mod_name, "SKIP", "(archive missing)"));
@@ -449,8 +447,7 @@ static ModResult process_single_mod(const fs::path& mod_folder,
     try
     {
         auto item_start = std::chrono::steady_clock::now();
-        mo2core::FomodInferenceService service;
-        std::string result = service.infer_selections(archive_path.string(), mod_folder.string());
+        std::string result = mo2server::SalmaEngine::infer_selections(archive_path.string(), mod_folder.string());
         double elapsed_s =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - item_start).count();
 
