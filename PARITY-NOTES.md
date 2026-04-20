@@ -3878,3 +3878,71 @@ fine and then fails every engine request at runtime.
 C++ went from 68 files to 31 (`src/`) and from 4 test files to 3. `salma_tests`
 went from 106 assertions to 76; the drop is the deleted engine suites, offset by
 the 5 new bridge tests. `cargo test` is unchanged at 594.
+
+## Replacing the hand-written JSON with serde_json
+
+`src/json.rs` was written to reproduce `nlohmann::json::dump(2)` byte for byte,
+and said so: "there is no `serde_json` dependency (and none is allowed)". That
+claim was tested rather than assumed before being overturned.
+
+### The probe
+
+Every golden `expected.json` IS a C++ `dump(2)`. Parsing each one with
+serde_json and re-serializing with `to_string_pretty` isolates exactly where the
+two disagree. Across the whole committed corpus the ONLY differences were float
+values; sorted keys, the two-space pretty layout, empty containers inline, the
+integer/double split, lowercase `\u00XX` control escapes, unescaped `/`, raw
+non-ASCII passthrough and the absent trailing newline all matched.
+
+That made the swap safe on the output path, which is the path the byte-parity
+guarantee is about.
+
+### What was kept, and why
+
+The `Value` enum stays. Its `Int` / `UInt` / `Double` split is load-bearing (the
+same numeric zero is `0` as a count and `0.0` as a confidence component), and
+collapsing it into `serde_json::Number` would have meant editing 191 variant
+sites plus ~660 method sites - churn through the exact code the module exists to
+protect. `parse()` and `dump()` now delegate to serde_json and convert at the
+boundary; every call site is untouched. 1067 -> 731 lines, with the
+recursive-descent parser (35 internal functions) and the pretty-printer gone.
+
+`format_double` is retained: the diagnostics tests assert confidence rendering
+against it independently of the JSON layer.
+
+### Divergences the swap introduced
+
+Both are on the PARSE side, both asserted as tests rather than left implicit,
+and neither is reachable. The engine parses exactly two things - the fomod-plus
+cache blob and the install selections JSON - and both carry only strings,
+booleans and small integers; parsed values never re-enter the output document.
+
+| Input | Hand-written (nlohmann) | serde_json |
+| --- | --- | --- |
+| `-0` | `Int(0)` | `Double(-0.0)` |
+| nesting depth | capped at 512 | capped at 128 |
+
+Everything that mattered held: serde_json rejects `01`, `-01`, `+5`, `.5`, `1.`,
+`1e`, `1e+` and `-` exactly as nlohmann does. Leniency there would flip a Tier-1
+MISS into a Tier-1 HIT and change the whole output document, which is why the
+strictness, not the leniency, was the property under test.
+
+### A serde_json limitation worth recording
+
+**Its float parser is not correctly-rounded.** `0.9999999999999999` parses 1 ULP
+high, to exactly `1.0`. Reproduced on 1.0.140 (ryu) and 1.0.151 (zmij), so it is
+long-standing rather than a regression. The value is not hypothetical: it is a
+real composite-confidence result in the fixtures.
+
+It does not affect this port, because the engine only ever WRITES floats -
+serde_json's printing of those same bits is exact, verified against every
+golden. It would matter to anyone who round-trips a float through JSON text here
+and expects the bits back.
+
+### Gates
+
+`cargo test --release` 594/594; `cargo fmt --check` and
+`cargo clippy --all-targets --release -- -D warnings` clean; `compare_infer`
+curated 1 EXACT / 15 METRICS_EQUAL / 0 DIVERGE; full corpus **197 cases, 0
+DIVERGE** (152 EXACT / 44 METRICS_EQUAL / 1 SKIP), identical to the pre-swap
+run; `smoke_ctypes.py` 13/13; `smoke_plugin.py` 12/12.
