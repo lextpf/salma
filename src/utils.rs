@@ -1030,34 +1030,33 @@ mod tests {
         assert_eq!(H, fnv1a_hash(b"flagDependency"));
     }
 
-    /// Fixture-driven FNV check against two committed golden ModuleConfig.xml
-    /// files. Expected constants were computed once from the committed bytes
-    /// with the harness's reference implementation:
+    /// FNV-1a 64 reference vectors, each computed with an INDEPENDENT Python
+    /// implementation of the same algorithm the C++ `Utils.cpp` uses
+    /// (offset basis 14695981039346656037, prime 1099511628211).
     ///
-    /// ```text
-    /// python -c "import sys; sys.path.insert(0,'rust/tools'); import gen_golden;
-    ///   print(gen_golden.fnv1a_hex(open(r'rust/tests/golden/cases/<case>/ModuleConfig.xml','rb').read()))"
-    /// ```
-    ///
-    /// zip_exactlyone_mu_joint_fix -> 91d7af004eea83d1 (2876 bytes)
-    /// sevenz_3step_tk_dodge       -> 777a83236a2c8541 (5910 bytes)
+    /// These used to hash two committed mod fixtures. They are inline vectors
+    /// now: the fixture corpus was replaced with synthetic cases when the real
+    /// one was retired, and an inline vector tests the hash function more
+    /// directly anyway - it cannot silently start passing because a fixture
+    /// changed underneath it.
     #[test]
-    fn fnv1a_hash_matches_golden_fixture_hashes() {
-        let cases: &[(&str, u64, usize)] = &[
-            ("zip_exactlyone_mu_joint_fix", 0x91d7af004eea83d1, 2876),
-            ("sevenz_3step_tk_dodge", 0x777a83236a2c8541, 5910),
+    fn fnv1a_hash_matches_reference_vectors() {
+        let cases: &[(&[u8], u64)] = &[
+            (b"", 0xcbf29ce484222325),
+            (b"a", 0xaf63dc4c8601ec8c),
+            (b"salma", 0xbacb1f0d8e9d1005),
+            (
+                b"The quick brown fox jumps over the lazy dog",
+                0xf3f9b7f5e7e47110,
+            ),
         ];
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/cases");
-        for (case, expected_hash, expected_len) in cases {
-            let path = root.join(case).join("ModuleConfig.xml");
-            let bytes = std::fs::read(&path)
-                .unwrap_or_else(|e| panic!("read fixture {}: {e}", path.display()));
+        for (input, expected) in cases {
             assert_eq!(
-                bytes.len(),
-                *expected_len,
-                "fixture byte length drifted: {case}"
+                fnv1a_hash(input),
+                *expected,
+                "fnv1a mismatch for {:?}",
+                String::from_utf8_lossy(input)
             );
-            assert_eq!(fnv1a_hash(&bytes), *expected_hash, "fnv1a mismatch: {case}");
         }
     }
 

@@ -531,8 +531,8 @@ fn write_extracted_file(output: &Path, bytes: &[u8]) -> ArchiveResult<()> {
 /// libarchive and `ArchiveService.cpp:459-474` pushes every
 /// `archive_entry_pathname` with no explicit `AE_IFDIR` skip, the
 /// C++-generated `archive_entries.json` for the four corpus zips that DO store
-/// explicit directory entries (`zip_11step_cbbe_3ba`, `zip_atmostone_heels_srd`,
-/// `zip_exactlyone_mu_joint_fix`, `zip_exactlyone_racecompat`) contains ZERO
+/// explicit directory entries (an 11-step ZIP fixture, a SelectAtMostOne ZIP fixture,
+/// a SelectExactlyOne ZIP fixture, a SelectExactlyOne ZIP fixture) contains ZERO
 /// directory entries (e.g. cbbe: 466 golden entries vs 1156 stored). libarchive
 /// does not surface these zip directory markers, so skipping `is_dir()` is the
 /// FAITHFUL reproduction, not a coincidence; including them breaks 16/16 parity.

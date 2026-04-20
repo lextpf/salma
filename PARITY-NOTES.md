@@ -141,8 +141,8 @@ the C++ suite does not exercise directly.
   u64 wrapping multiply, byte-stream order. Validated three ways: published
   FNV-1a-64 vectors (`""`, `"a"`, `"foobar"`), and a fixture test hashing the
   committed bytes of two golden `ModuleConfig.xml` files
-  (`zip_exactlyone_mu_joint_fix` -> `91d7af004eea83d1`,
-  `sevenz_3step_tk_dodge` -> `777a83236a2c8541`) against constants computed
+  (a SelectExactlyOne ZIP fixture -> `91d7af004eea83d1`,
+  a 3-step 7z fixture -> `777a83236a2c8541`) against constants computed
   once with `tools/gen_golden.py`'s `fnv1a_hex` reference.
 - `FomodCSPPrecompute.cpp hash_combine` -> `utils::hash_combine`: this helper
   lives in the CSP module in C++, not in Utils; it is hosted in `utils.rs` so
@@ -313,7 +313,7 @@ behavior below was read from that exact source, not from docs.
 - `FomodIR.hpp total_flat_plugins` / `compute_flat_starts` ->
   `fomod_ir::total_flat_plugins` / `fomod_ir::compute_flat_starts`, `i32`
   like the C++ `int`. Validated by synthetic-shape tests plus
-  `zip_11step_cbbe_3ba` (100 plugins; spot-checked start rows).
+  an 11-step ZIP fixture (100 plugins; spot-checked start rows).
 - `FomodIR.hpp enum_map<FomodConditionOp>` / `enum_map<FomodGroupType>` ->
   `fomod_ir::parse_condition_op` / `parse_group_type` (+ `..._to_string`).
   Read from `Utils.hpp EnumStringMap::from_string`: EXACT case-sensitive
@@ -338,8 +338,8 @@ behavior below was read from that exact source, not from docs.
 - Corpus scan (committed `tests/golden/cases/*/ModuleConfig.xml`, 15
   files; the gitignored `full/` tree has no ModuleConfig.xml on this machine,
   only JSON fixtures): 11 UTF-16 LE with BOM (`FF FE`), 2 UTF-8 with BOM
-  (sevenz_4step_lewdmarks, sevenz_9step_the_pure), 2 UTF-8 without BOM
-  (rar_7step_sos, zip_exactlyone_racecompat). All parse through the byte
+  (a 4-step 7z fixture, a 9-step 7z fixture), 2 UTF-8 without BOM
+  (a 7-step RAR fixture, a SelectExactlyOne ZIP fixture). All parse through the byte
   pipeline in the fixture suite.
 - BOM handling matches pugixml `parse_skip_bom`: the BOM scalar is stripped
   from the decoded text before parsing (pugixml strips it post-conversion).
@@ -540,7 +540,7 @@ behavior below was read from that exact source, not from docs.
   as documented in Task 3 - equal names remain an accepted nondeterminism
   site). A missing parent behaves like pugixml's null node: empty list.
   Validated by Explicit/Ascending/Descending/missing/garbage micro-tests and
-  by zip_exactlyone_racecompat, whose group order is genuinely re-sorted
+  by a SelectExactlyOne ZIP fixture, whose group order is genuinely re-sorted
   (missing order attr -> Ascending differs from document order there).
 - `step.ordinal` is assigned AFTER ordering (zero-based index into the
   ordered sequence), `FomodIRParser.cpp:218`. Validated by
@@ -618,8 +618,8 @@ behavior below was read from that exact source, not from docs.
   ordinals, per-step visible presence, per-step group count, group names in
   order, group types, per-group plugin count, required-file count,
   conditional-pattern count, moduleDependencies absence. Detail fixtures
-  (zip_exactlyone_mu_joint_fix, sevenz_3step_tk_dodge,
-  rar_exactlyone_heel_volume, and zip_11step_cbbe_3ba as the largest):
+  (a SelectExactlyOne ZIP fixture, a 3-step 7z fixture,
+  a SelectExactlyOne RAR fixture, and an 11-step ZIP fixture as the largest):
   plugin names in order, plugin types (incl. Required/Recommended and a
   dependencyType default), FomodFileEntry field values
   (source/destination/priority/is_folder incl. present-empty destination),
@@ -1084,10 +1084,10 @@ Each site carries a source comment naming the dropped C++ log line.
   the 3-pass expansion, index/exclusion - directly from each fixture's
   ModuleConfig.xml + archive_entries.json. Three diverse fixtures were then
   HAND-VERIFIED against the raw XML and archive entries before freezing the
-  literals: zip_exactlyone_mu_joint_fix (all 8 atoms checked by hand),
-  zip_exactlyone_racecompat (group Ascending re-sort, flat indices 0-9, the
+  literals: a SelectExactlyOne ZIP fixture (all 8 atoms checked by hand),
+  a SelectExactlyOne ZIP fixture (group Ascending re-sort, flat indices 0-9, the
   full doc_order sequence 0-25, priorities 0/1/2/3, the
-  destination-fallback-to-source readme file entry), and zip_11step_cbbe_3ba
+  destination-fallback-to-source readme file entry), and an 11-step ZIP fixture
   (stress: 100 plugins, 97 conditional patterns; independent grep-level
   counts confirmed 123 plugin-side entries -> first conditional at doc 123,
   35 archive files under the plugin-0 folder, and pattern 95's
@@ -1103,7 +1103,7 @@ Each site carries a source comment naming the dropped C++ log line.
 - Reachability property test: every destination in target_tree.json (except
   MO2's meta.ini) must be present in the atom index. Holds for 14 of 15
   fixtures. DOCUMENTED EXCEPTION, investigated before touching anything:
-  rar_exactlyone_heel_volume's archive contains only 8 entries (3 esp
+  a SelectExactlyOne RAR fixture's archive contains only 8 entries (3 esp
   variants + fomod metadata + screenshots), while its installed mod folder
   holds 36 files including 34 base-mod .wav files and a readme that are NOT
   in the archive at all - the FOMOD patch was installed into an existing mod
@@ -1244,21 +1244,21 @@ leaves (`gameDependency`/`fileDependency`/`pluginDependency`/`fomodDependency`/
 
 | fixture                          | steps | cond patterns | visible ext | conditional ext |
 |----------------------------------|-------|---------------|-------------|-----------------|
-| rar_7step_sos                    | 7     | 0             | none        | none            |
-| rar_exactlyone_heel_volume       | 1     | 0             | none        | none            |
-| rar_selectall_cbpc_config        | 1     | 0             | none        | none            |
-| sevenz_2step_nec_feet            | 2     | 0             | none        | none            |
-| sevenz_3step_tk_dodge            | 3     | 0             | none        | none            |
-| sevenz_3step_yorha_patches       | 3     | 0             | none        | none            |
-| sevenz_4step_lewdmarks           | 4     | 10            | none        | none            |
-| sevenz_9step_the_pure            | 9     | 0             | none        | none            |
-| sevenz_atmostone_slavetats_riek  | 1     | 0             | none        | none            |
-| sevenz_selectall_hh_walk         | 1     | 0             | none        | none            |
-| sevenz_selectany_racemenu_plugins| 1     | 0             | none        | none            |
-| zip_11step_cbbe_3ba              | 11    | 97            | none        | none            |
-| zip_atmostone_heels_srd          | 1     | 0             | none        | none            |
-| zip_exactlyone_mu_joint_fix      | 1     | 0             | none        | none            |
-| zip_exactlyone_racecompat        | 1     | 2             | none        | none            |
+| a 7-step RAR fixture                    | 7     | 0             | none        | none            |
+| a SelectExactlyOne RAR fixture       | 1     | 0             | none        | none            |
+| a SelectAll RAR fixture        | 1     | 0             | none        | none            |
+| a 2-step 7z fixture            | 2     | 0             | none        | none            |
+| a 3-step 7z fixture            | 3     | 0             | none        | none            |
+| a 3-step 7z patch fixture       | 3     | 0             | none        | none            |
+| a 4-step 7z fixture           | 4     | 10            | none        | none            |
+| a 9-step 7z fixture            | 9     | 0             | none        | none            |
+| a SelectAtMostOne 7z fixture  | 1     | 0             | none        | none            |
+| a SelectAll 7z fixture         | 1     | 0             | none        | none            |
+| a SelectAny 7z fixture| 1     | 0             | none        | none            |
+| an 11-step ZIP fixture              | 11    | 97            | none        | none            |
+| a SelectAtMostOne ZIP fixture          | 1     | 0             | none        | none            |
+| a SelectExactlyOne ZIP fixture      | 1     | 0             | none        | none            |
+| a SelectExactlyOne ZIP fixture        | 1     | 2             | none        | none            |
 
 ALL 15 fixtures are flag-only in visibility and conditional blocks. Since a flag
 leaf evaluates identically in normal and inferred-with-any-override mode, running
@@ -1280,17 +1280,17 @@ deselected == IR plugin count`) guard the reconstruction and passed for all 15.
 
 ### Metrics oracle and the archive-listing size discrepancy (IMPORTANT)
 
-TWO fixtures are non-exact in the C++ output, not one: `rar_exactlyone_heel_volume`
+TWO fixtures are non-exact in the C++ output, not one: a SelectExactlyOne RAR fixture
 (missing=35, reproduced=1 - the documented pre-existing-mod-folder case) AND
-`rar_7step_sos` (size_mismatch=5, reproduced=139). `rar_7step_sos` has no
+a 7-step RAR fixture (size_mismatch=5, reproduced=139). a 7-step RAR fixture has no
 external-dependency conditions (table above), so overrides are irrelevant and the
 C++ pipeline is non-exact regardless - task option (1). Investigating it surfaced
-a fixture-DATA inconsistency that also affects `sevenz_2step_nec_feet` and
-`zip_11step_cbbe_3ba`:
+a fixture-DATA inconsistency that also affects a 2-step 7z fixture and
+an 11-step ZIP fixture:
 
 - `outputTree.size` IS `atom->file_size` (`FomodInferenceService.cpp:495`). The
   golden inference run recorded `file_size = 0` for many output atoms (e.g.
-  120 of 144 in `rar_7step_sos`, all with nonzero size in `archive_entries.json`);
+  120 of 144 in a 7-step RAR fixture, all with nonzero size in `archive_entries.json`);
   its live archive listing did not populate uncompressed sizes for those entries,
   while the committed `archive_entries.json` snapshots carry populated sizes. This
   is the libarchive/bit7z size-reporting split that CLAUDE.md warns about, between
@@ -1300,8 +1300,8 @@ a fixture-DATA inconsistency that also affects `sevenz_2step_nec_feet` and
   never populated. A faithful end-to-end run over the FIXTURE atoms (nonzero sizes)
   instead reports `size_mismatch` for exactly those destinations whose fixture
   size differs from the installed target size. Three fixtures have such
-  differences: `rar_7step_sos` (10 vs 5), `sevenz_2step_nec_feet` (12 vs 0),
-  `zip_11step_cbbe_3ba` (3 vs 0). In every case the size-independent coverage total
+  differences: a 7-step RAR fixture (10 vs 5), a 2-step 7z fixture (12 vs 0),
+  an 11-step ZIP fixture (3 vs 0). In every case the size-independent coverage total
   `size_mismatch + reproduced` is unchanged (144, 31, 177 respectively) and
   `missing`/`extra`/`hash_mismatch` match the golden `diagnostics.repro`.
 
@@ -1495,7 +1495,7 @@ narrowed domain IS the selection, so the fixture test
 `fully_resolved_fixtures_match_the_selection_grid` asserts
 `narrowed_domains == expected.json` selection grid for each such fixture. Over
 the 15 committed cases, propagation fully resolves exactly 2
-(`sevenz_selectall_hh_walk`, `sevenz_3step_tk_dodge`); the count is pinned (the
+(a SelectAll 7z fixture, a 3-step 7z fixture); the count is pinned (the
 identities are derived at runtime, not hardcoded).
 
 ### `record_plugin_reason` first-wins + bounds
@@ -1770,19 +1770,19 @@ consequence, realized in `tests/fomod_csp_solver_fixtures.rs`:
 The Task 6 note records that the golden run scored atoms with `file_size = 0`
 (its live archive listing did not populate uncompressed sizes) while the committed
 `archive_entries.json` snapshots carry populated sizes; for 3 fixtures
-(`rar_7step_sos`, `sevenz_2step_nec_feet`, `zip_11step_cbbe_3ba`) some populated
+(a 7-step RAR fixture, a 2-step 7z fixture, an 11-step ZIP fixture) some populated
 sizes differ from the installed target size. Task 9 inherits this: the SOLVER
 optimizes against the fixture atoms, so for these 3 it scores the extra size
 mismatches the golden run never saw. Verified behavior:
 - 12 "consistent" fixtures (expected-grid metrics == `diagnostics.repro`): full
   solver parity - grid, all five repro counters, `exact_match`, `phase_reached`.
-- `sevenz_2step_nec_feet`, `rar_7step_sos`: terminate quickly but score the extra
+- a 2-step 7z fixture, a 7-step RAR fixture: terminate quickly but score the extra
   size mismatches, so `exact_match`/`phase_reached`/`size_mismatch` diverge; only
   the size-INDEPENDENT counters (missing/extra/hash) and `size+reproduced`
-  coverage match. `sevenz_2step_nec_feet` still returns the correct grid (the
-  mismatches are unfixable so the greedy grid is kept); `rar_7step_sos` returns a
+  coverage match. a 2-step 7z fixture still returns the correct grid (the
+  mismatches are unfixable so the greedy grid is kept); a 7-step RAR fixture returns a
   different grid.
-- `zip_11step_cbbe_3ba` (100 plugins): with the golden size-0 atoms the C++ run
+- an 11-step ZIP fixture (100 plugins): with the golden size-0 atoms the C++ run
   reached exact in the greedy phase (89 nodes); with the fixture atoms it can
   never short-circuit on exact and searches the full space to the 600s wall-clock
   deadline (measured: 544s / ~603k nodes in RELEASE, returning a different grid).
@@ -1868,7 +1868,7 @@ to completion).
 phase 5 ran, else `"csp.focused"` (4), `"csp.repair"` (3), `"csp.local_search"`
 (2), in that if/elif order - it names the DEEPEST phase that RAN, not the phase
 that found the result (so a fixture solved by local search inside phase 1 still
-reports `"csp.greedy"`; `sevenz_atmostone_slavetats_riek` does exactly this at 5
+reports `"csp.greedy"`; a SelectAtMostOne 7z fixture does exactly this at 5
 nodes). `phase_per_group[s][g]` = `""` when `(s,g)` is in
 `propagation.resolved_groups` (linear search), else `final_phase`.
 `alternatives_per_group` is ALWAYS all zeros (the C++ `assign(groups, 0)`; never
@@ -1927,7 +1927,7 @@ past/`None`) and 5 fixture tests in `tests/fomod_csp_solver_fixtures.rs`
 subset, count pinned at 12 with the two propagation-resolved fixtures asserted by
 name; the inconsistent 3 diverge only on the size split; solver coverage on the 2
 fast inconsistent fixtures via size-independent invariants; determinism over
-`zip_exactlyone_racecompat` + `rar_7step_sos`).
+a SelectExactlyOne ZIP fixture + a 7-step RAR fixture).
 
 ## Task 10 - Diagnostics + assemble_json (schema-v2 byte parity)
 
@@ -2091,7 +2091,7 @@ the tests rather than papered over.
   timings, cache, step visibility, key ordering, indentation, escaping, and the
   float format ALL match byte-for-byte. It then counts fixtures whose UNnormalized
   document is byte-identical (sizes and files included) and PINS that count at
-  **1** (`rar_exactlyone_heel_volume` - the only consistent fixture with no
+  **1** (a SelectExactlyOne RAR fixture - the only consistent fixture with no
   size-0 outputTree atom AND no multi-hit `UNIQUE_FILE_EVIDENCE` example list).
 - `unique_file_evidence_content_matches_over_consistent_fixtures` recovers the
   coverage the `files` normalization drops: `count` matches at every position,
@@ -2099,7 +2099,7 @@ the tests rather than papered over.
   the normalization hides only ORDER, never content.
 - `skeleton_and_output_tree_over_all_fixtures` asserts, for EVERY committed
   fixture (consistent, the 3 size-split inconsistent, and the non-terminating
-  `zip_11step_cbbe_3ba`, all driven from the KNOWN expected grid so the solver is
+  an 11-step ZIP fixture, all driven from the KNOWN expected grid so the solver is
   never run on the non-terminating case), that `schema_version`, the
   step/group/plugin skeleton (names + selected/deselected split), and the
   `outputTree` (path, source) pairs byte-match. The size-split fixtures are ONLY
@@ -2159,8 +2159,8 @@ per format:
     no `AE_IFDIR` skip) includes directory entries and that skipping `is_dir()`
     only "coincidentally" reproduces the golden because "no corpus zip has
     directory entries". Both premises are false. FOUR corpus zips DO store
-    explicit directory entries (`zip_11step_cbbe_3ba`, `zip_atmostone_heels_srd`,
-    `zip_exactlyone_mu_joint_fix`, `zip_exactlyone_racecompat`), yet the
+    explicit directory entries (an 11-step ZIP fixture, a SelectAtMostOne ZIP fixture,
+    a SelectExactlyOne ZIP fixture, a SelectExactlyOne ZIP fixture), yet the
     C++-generated `archive_entries.json` for every one of them contains ZERO
     directory markers (cbbe: 466 golden entries vs 1156 stored; the 690
     directories are absent). libarchive does not surface these zip directory
@@ -2342,7 +2342,7 @@ traversal-skipped entries in `extract_7z`). Skipping a preceding entry without
 draining left the shared stream mid-file, so the NEXT kept entry decoded from a
 misaligned offset -> wrong bytes, or (when the file carries a CRC) a
 `Crc32VerifyingReader` failure surfacing as empty/absent/`Err`. EMPIRICALLY: on
-the solid corpus 7z `sevenz_3step_tk_dodge` (23 files, `fomod\info.xml` precedes
+the solid corpus 7z a 3-step 7z fixture (23 files, `fomod\info.xml` precedes
 `fomod\ModuleConfig.xml` in the block), `read_entry("fomod/moduleconfig.xml")`
 returned 0 bytes vs the golden 5910; `read_entries_batch` of only the config
 returned it absent; `extract_prefix("meshes")` failed with
@@ -2966,12 +2966,12 @@ check asserts real `missing.len() <= repro.missing` (the produced tree and the
 simulated tree the `repro` counts come from target the same dest set, so the
 replay must not DROP more dests than predicted - this catches under-production,
 e.g. an optional pass that enqueues nothing, which a bare `missing == 0` guard
-missed for `rar_exactlyone_heel_volume` at `repro.missing == 35`; a Task 14
+missed for a SelectExactlyOne RAR fixture at `repro.missing == 35`; a Task 14
 review finding) plus `extra.is_empty()` when `repro.extra == 0`.
 
 #### Stale golden vs committed archive - the simulator/installer/scan three-way split
 
-The end-to-end oracle initially FAILED on `sevenz_2step_nec_feet`: 12 mesh files
+The end-to-end oracle initially FAILED on a 2-step 7z fixture: 12 mesh files
 "replayed at the wrong size" (e.g. `femalefeet_0.nif` got 825938, want 786505).
 Root cause, fully traced, is NOT a replay defect:
 
@@ -2989,10 +2989,10 @@ Root cause, fully traced, is NOT a replay defect:
   (`FileOperation`-based) therefore disagree only because the simulator is
   looking at size-0 atoms.
 - Two further committed cases carry the same class of stale-golden file, for
-  different real-world reasons: `zip_11step_cbbe_3ba` (3 shared `.tri` morph
+  different real-world reasons: an 11-step ZIP fixture (3 shared `.tri` morph
   files; the archive ships 3048-byte stubs, the installed mod has 645644-byte
   versions - overwritten by a later mod, or a different build) and
-  `zip_exactlyone_mu_joint_fix` (`skse/plugins/mujointfix.log`; the archive ships
+  a SelectExactlyOne ZIP fixture (`skse/plugins/mujointfix.log`; the archive ships
   an empty 0-byte placeholder, the golden captured the 31378-byte RUNTIME log).
   All three are "the installed file at this dest is not what THIS archive
   produces."
@@ -3024,7 +3024,7 @@ sides).
 ### Scratch removed
 
 A temporary `tests/zz_diag.rs` (a one-off print harness used while tracing the
-`sevenz_2step_nec_feet` conflict above) was deleted before commit, per its own
+a 2-step 7z fixture conflict above) was deleted before commit, per its own
 header and the plan's git-hygiene rule.
 
 ### Test-suite delta
@@ -3259,8 +3259,8 @@ the export; `scripts/` is a never-modify path and was not touched.
   archive and the same committed schema-v2 `expected.json` selections, then the
   produced trees diffed by relative path and size:
   **16 SAME, 0 DIFF, 0 SKIP** across all 16 committed cases, covering zip / 7z /
-  rar, the non-FOMOD content-root fallback (`sevenz_empty_no_moduleconfig`), and
-  the 177-file 11-step FOMOD (`zip_11step_cbbe_3ba`). Each DLL frees only its own
+  rar, the non-FOMOD content-root fallback (the no-installer fixture), and
+  the 177-file 11-step FOMOD (an 11-step ZIP fixture). Each DLL frees only its own
   strings, since the two use different allocators. The script is scratch, not
   committed; Task 16 turns this into `tools/run_harness.py`.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
@@ -3946,3 +3946,73 @@ and expects the bits back.
 curated 1 EXACT / 15 METRICS_EQUAL / 0 DIVERGE; full corpus **197 cases, 0
 DIVERGE** (152 EXACT / 44 METRICS_EQUAL / 1 SKIP), identical to the pre-swap
 run; `smoke_ctypes.py` 13/13; `smoke_plugin.py` 12/12.
+
+## Retiring the real-mod corpus
+
+The committed golden corpus was removed, and with it every test that consumed
+it. It was not a code-quality decision.
+
+### What it exposed
+
+Sixteen case directories, 901 KB, 79 files. Each one carried:
+
+- a directory name identifying the mod;
+- `case.json` with `mod_name` (including its Nexus id) and
+  `source_archive_path`, an absolute local path of the form
+  `D:\Nolvus Artifacts\<category>\<archive>`, which also disclosed the drive
+  layout and the mod manager's category structure;
+- the mod's real `ModuleConfig.xml`, i.e. a third party's FOMOD document;
+- `archive_entries.json`, its full file listing.
+
+Test files added to this: hardcoded case names in assertion tables, per-mod
+"details" tests pinning that mod's step, group and plugin names, and archive
+prefixes such as a versioned mod folder name embedded in expectation tables.
+
+Together these described the owner's mod setup, including adult-content mods.
+
+### Why the tests went too
+
+The corpus was an ORACLE: every `expected.json` was a real
+`nlohmann::json::dump(2)` from the C++ DLL, so a diff proved the port matched
+the reference implementation. That is what those ~60 tests were for.
+
+Synthetic fixtures cannot do that job. An `expected.json` regenerated by the
+Rust engine is a recording of the engine's own output; comparing the engine
+against it proves only that behavior has not changed, not that it is correct.
+Keeping the tests with synthetic data would have preserved their shape while
+quietly voiding their purpose, which is worse than removing them: a suite that
+looks like a parity gate but is not is a trap for whoever reads it next.
+
+The C++ engine had already been deleted by this point, so no oracle could be
+regenerated either.
+
+### What replaced them
+
+Nothing in the repo, deliberately. Validation against real mods now happens only
+against a live MO2 instance, through `tools/run_harness.py`, `test_all.py` and
+`test_one.py --full`, all of which read from `SALMA_MODS_PATH` and write nothing
+back. `tools/gen_golden.py` still builds a corpus under `tests/golden/full/`,
+which `.gitignore` keeps local.
+
+Suite size went 594 -> 533. The remainder is self-contained: 524 inline unit
+tests plus `tests/inference_diagnostics_test.rs`. The C++ side is unaffected at
+76.
+
+Historical parity evidence is not lost, only frozen: the 197-fixture, 0 DIVERGE
+runs recorded in this document were real, and were produced while both engines
+and the corpus existed.
+
+### Tools that had to be told
+
+`compare_infer.py --curated` read the committed cases and now exits with an
+explanation instead of silently iterating an empty directory and reporting a
+clean run over zero fixtures. `gen_golden.py curate` is annotated that anything
+it writes is local-only.
+
+### If this ever needs redoing
+
+Two properties made the leak easy to miss. The identifying data was in fixture
+METADATA (`case.json`) rather than in the file names, so a scan of directory
+listings understated it. And the test files themselves had absorbed mod
+identifiers into assertion tables, far from the fixtures, so deleting the
+corpus alone would have left them behind.

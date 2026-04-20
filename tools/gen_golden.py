@@ -17,7 +17,9 @@ Subcommands
              fixture per mod under tests/golden/full/ plus a manifest.json.
   candidates Print a diversity table (format, size, entry/file counts, group
              types) for curation. Reads the full/ fixtures produced by generate.
-  curate     Materialize one committed case under tests/golden/cases/<name>/
+  curate     Materialize one case under tests/golden/cases/<name>/. NOTE: the
+             committed corpus was removed (real-mod data); anything written
+             here is local-only and tests/golden/ is gitignored.
              (expected.json, ModuleConfig.xml, archive_entries.json,
              target_tree.json, case.json).
   selftest   Verify the FNV-1a-64 implementation against known vectors.
