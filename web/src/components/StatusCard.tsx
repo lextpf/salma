@@ -6,41 +6,61 @@ interface StatusCardProps {
   color?: 'primary' | 'secondary' | 'tertiary' | 'success' | 'warning' | 'error'
 }
 
-const gradientClass = {
-  primary:   'icon-gradient-ocean',
-  secondary: 'icon-gradient-forest',
-  tertiary:  'icon-gradient-orchid',
-  success:   'icon-gradient-spring',
-  warning:   'icon-gradient-ember',
-  error:     'icon-gradient-ember',
-}
-
-const colorConfig = {
-  primary:   { text: 'text-primary' },
-  secondary: { text: 'text-secondary' },
-  tertiary:  { text: 'text-tertiary' },
-  success:   { text: 'text-success' },
-  warning:   { text: 'text-warning' },
-  error:     { text: 'text-error' },
+const colorVar: Record<NonNullable<StatusCardProps['color']>, string> = {
+  primary:   'var(--accent)',
+  secondary: 'var(--ink-blue)',
+  tertiary:  'var(--ink-2)',
+  success:   'var(--moss)',
+  warning:   'var(--ochre)',
+  error:     'var(--accent)',
 }
 
 export default function StatusCard({ label, value, detail, icon, color = 'primary' }: StatusCardProps) {
-  const c = colorConfig[color]
-  const g = gradientClass[color]
   return (
     <div
-      className="relative overflow-hidden rounded-2xl aurora-card p-5
-                  status-card-soft group border-0"
+      style={{
+        position: 'relative',
+        background: 'var(--card)',
+        border: '1px solid var(--rule)',
+        borderRadius: 'var(--radius-md)',
+        padding: '18px 20px',
+      }}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-on-surface-variant mb-2">{label}</p>
-          <p className={`text-2xl font-bold tracking-tight ${c.text}`}>{value}</p>
-          {detail && <p className="text-[0.7rem] text-on-surface-variant mt-2 truncate leading-relaxed">{detail}</p>}
+      <div className="flex items-start justify-between" style={{ gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p className="ui-label" style={{ marginBottom: 8, fontSize: 9.5 }}>{label}</p>
+          <p
+            className="display-serif-tight tabular-nums"
+            style={{ fontSize: 26, color: colorVar[color], lineHeight: 1, margin: 0 }}
+          >
+            {value}
+          </p>
+          {detail && (
+            <p
+              className="timestamp-print"
+              style={{ marginTop: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={detail}
+            >
+              {detail}
+            </p>
+          )}
         </div>
         {icon && (
-          <div className="shrink-0 w-10 h-10 rounded-xl bg-surface-container-high/55 border border-outline-variant/25 flex items-center justify-center shadow-[0_10px_20px_-16px_rgba(92,207,255,0.55)]">
-            <i className={`${icon} icon-gradient ${g} text-lg`} />
+          <div
+            style={{
+              flexShrink: 0,
+              width: 36,
+              height: 36,
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--paper-2)',
+              border: '1px solid var(--rule-soft)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: colorVar[color],
+            }}
+          >
+            <i className={icon} style={{ fontSize: 14 }} />
           </div>
         )}
       </div>
