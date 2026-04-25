@@ -1,19 +1,16 @@
 @echo off
 REM ============================================================================
-REM setup-env.bat - One-time configuration of MO2 paths used by salma scripts
+REM setup.bat - One-time configuration of MO2 paths used by salma scripts
 REM ============================================================================
 REM Prompts for the three MO2-instance paths salma's tooling needs and writes
 REM them to the user's environment via setx so they persist across new shells.
 REM
-REM This replaces the previous Nolvus-specific defaults that were baked into
-REM deploy.bat / purge.bat / scripts\common.py. After running this once, open
-REM a fresh shell and the scripts will pick up the configured paths.
 REM ============================================================================
 
 setlocal
 
 echo ============================================================================
-echo                       SALMA ENVIRONMENT SETUP
+echo                            SALMA ENVIRONMENT SETUP
 echo ============================================================================
 echo.
 echo This will set three persistent user-environment variables for salma:
@@ -58,4 +55,3 @@ echo ===========================================================================
 
 endlocal
 if "%SALMA_NO_PAUSE%"=="1" exit /b 0
-pause
