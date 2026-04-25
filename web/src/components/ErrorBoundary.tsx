@@ -23,16 +23,29 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-          <h2 className="text-xl font-semibold text-on-surface">Something went wrong</h2>
-          <p className="text-secondary text-sm">
-            {this.state.error?.message || 'An unexpected error occurred'}
+        <div
+          className="flex flex-col items-center justify-center"
+          style={{ minHeight: '60vh', gap: 16, padding: 24 }}
+        >
+          <h2
+            className="display-serif-tight"
+            style={{ fontSize: 32, color: 'var(--ink)' }}
+          >
+            Something went wrong<span className="display-period">.</span>
+          </h2>
+          <p
+            className="timestamp-print"
+            style={{ fontSize: 12, textAlign: 'center', maxWidth: 520 }}
+          >
+            // {this.state.error?.message || 'An unexpected error occurred'}
           </p>
           <button
-            className="btn-primary px-4 py-2 rounded"
+            type="button"
+            className="tool-btn tool-btn-ink"
             onClick={() => this.setState({ hasError: false, error: null })}
           >
-            Try Again
+            <i className="fa-duotone fa-solid fa-rotate-right" style={{ fontSize: 12 }} />
+            <span>Try again</span>
           </button>
         </div>
       )
