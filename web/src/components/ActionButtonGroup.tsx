@@ -16,6 +16,40 @@ interface ActionButtonGroupProps {
   handleRunTests: () => void
 }
 
+function ToolGroup({ n, label, children }: { n: string; label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center" style={{ gap: 12 }}>
+      <span
+        style={{
+          fontFamily: 'var(--font-mono)',
+          fontStyle: 'italic',
+          fontSize: 9,
+          letterSpacing: '0.2em',
+          textTransform: 'uppercase',
+          color: 'var(--ink-4)',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {n} · {label}
+      </span>
+      <div className="flex" style={{ gap: 6, flexWrap: 'wrap' }}>{children}</div>
+    </div>
+  )
+}
+
+function ToolDivider() {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        width: 1,
+        height: 32,
+        background: 'var(--rule)',
+      }}
+    />
+  )
+}
+
 export default function ActionButtonGroup({
   pluginInstalled,
   systemUnavailable,
@@ -33,115 +67,205 @@ export default function ActionButtonGroup({
 }: ActionButtonGroupProps) {
   if (systemUnavailable) {
     return (
-      <div className="flex flex-wrap gap-2">
-        <div className="skeleton-line h-[1.875rem] w-20 rounded-lg" />
-        <div className="skeleton-line h-[1.875rem] w-20 rounded-lg" />
-        <div className="skeleton-line h-[1.875rem] w-20 rounded-lg" />
+      <div className="flex items-center" style={{ gap: 28, flexWrap: 'wrap' }}>
+        <div className="flex items-center" style={{ gap: 12 }}>
+          <div className="skeleton-line" style={{ width: 60, height: 10 }} />
+          <div className="flex" style={{ gap: 6 }}>
+            <div className="skeleton-line" style={{ width: 120, height: 30, borderRadius: 'var(--radius-sm)' }} />
+            <div className="skeleton-line" style={{ width: 110, height: 30, borderRadius: 'var(--radius-sm)' }} />
+          </div>
+        </div>
+        <ToolDivider />
+        <div className="flex items-center" style={{ gap: 12 }}>
+          <div className="skeleton-line" style={{ width: 60, height: 10 }} />
+          <div className="flex" style={{ gap: 6 }}>
+            <div className="skeleton-line" style={{ width: 130, height: 30, borderRadius: 'var(--radius-sm)' }} />
+            <div className="skeleton-line" style={{ width: 100, height: 30, borderRadius: 'var(--radius-sm)' }} />
+          </div>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-3">
-      <button
-        onClick={handleDeployPlugin}
-        disabled={pluginActionRunning !== null}
-        className={`rounded-xl px-5 py-2.5 text-xs font-semibold transition-all flex items-center gap-2 action-btn action-btn-success
-          ${pluginActionRunning === 'deploy'
-            ? 'bg-surface-container-high text-on-surface-variant border border-outline-variant/40 cursor-not-allowed opacity-70'
-            : 'bg-success/12 text-on-surface border border-success/20 hover:bg-success/24 hover:border-success/40'
-          }`}
-      >
-        <i className={`fa-duotone fa-solid icon-sm ${pluginActionRunning === 'deploy' ? 'fa-spinner fa-spin' : 'fa-plug-circle-check icon-gradient icon-gradient-spring'}`} />
-        {pluginActionRunning === 'deploy' ? 'Deploying...' : 'Deploy Plugin'}
-      </button>
+    <div>
+      <div className="flex items-center" style={{ gap: 28, flexWrap: 'wrap' }}>
+        <ToolGroup n="i" label="Plugin">
+          <button
+            type="button"
+            className="tool-btn"
+            onClick={handleDeployPlugin}
+            disabled={pluginActionRunning !== null}
+          >
+            <i
+              className={`fa-duotone fa-solid fa-rocket-launch${pluginActionRunning === 'deploy' ? ' fa-bounce' : ''}`}
+              style={{ fontSize: 13 }}
+            />
+            <span>{pluginActionRunning === 'deploy' ? 'Deploying...' : 'Deploy plugin'}</span>
+          </button>
+          <button
+            type="button"
+            className="tool-btn"
+            onClick={handlePurgePlugin}
+            disabled={pluginActionRunning !== null}
+          >
+            <i
+              className={`fa-duotone fa-solid fa-fire-flame-curved${pluginActionRunning === 'purge' ? ' fa-beat-fade' : ''}`}
+              style={{ fontSize: 13 }}
+            />
+            <span>{pluginActionRunning === 'purge' ? 'Purging...' : 'Purge plugin'}</span>
+          </button>
+        </ToolGroup>
 
-      <button
-        onClick={handlePurgePlugin}
-        disabled={pluginActionRunning !== null}
-        className={`rounded-xl px-5 py-2.5 text-xs font-semibold transition-all flex items-center gap-2 action-btn action-btn-error
-          ${pluginActionRunning === 'purge'
-            ? 'bg-surface-container-high text-on-surface-variant border border-outline-variant/40 cursor-not-allowed opacity-70'
-            : 'bg-error/10 text-on-surface border border-error/20 hover:bg-error/18 hover:border-error/35'
-          }`}
-      >
-        <i className={`fa-duotone fa-solid icon-sm ${pluginActionRunning === 'purge' ? 'fa-spinner fa-spin' : 'fa-trash-can icon-gradient icon-gradient-ember'}`} />
-        {pluginActionRunning === 'purge' ? 'Purging...' : 'Purge Plugin'}
-      </button>
+        <ToolDivider />
 
-      <button
-        onClick={handleScanFomods}
-        disabled={scanRunning || !pluginInstalled}
-        className={`rounded-xl px-5 py-2.5 text-xs font-semibold transition-all flex items-center gap-2 action-btn action-btn-primary
-          ${!pluginInstalled
-            ? 'bg-surface-container-high text-error/75 border border-outline-variant/45 cursor-not-allowed opacity-90'
-            : scanRunning
-            ? 'bg-surface-container-high text-on-surface-variant border border-outline-variant/40 cursor-not-allowed opacity-70'
-            : 'bg-primary/12 text-on-surface border border-primary/20 hover:bg-primary/22 hover:border-primary/40'
-          }`}
-      >
-        <i className={`fa-duotone fa-solid icon-sm ${
-          !pluginInstalled
-            ? 'fa-lock text-error/70'
-            : (scanRunning ? 'fa-spinner fa-spin' : 'fa-arrows-rotate icon-gradient icon-gradient-atlas')
-        }`} />
-        {scanRunning ? 'Scanning...' : 'Scan FOMODs'}
-      </button>
-      {actionChip?.key === 'scan' && (
-        <span className="inline-flex items-center gap-1 rounded-full border border-success/25 bg-success/10 px-2 py-1 text-[0.68rem] text-success">
-          <i className="fa-duotone fa-solid fa-circle-check text-[0.64rem]" />
-          {actionChip.text}
-        </span>
-      )}
-      {scanRunning && (
-        <Link
-          to="/logs"
-          className="inline whitespace-nowrap text-xs leading-tight text-primary hover:text-primary-light transition-colors border-b border-current"
+        <ToolGroup n="ii" label="Fomods">
+          <button
+            type="button"
+            className="tool-btn"
+            onClick={handleScanFomods}
+            disabled={scanRunning || !pluginInstalled}
+          >
+            <i
+              className={`fa-duotone fa-solid ${
+                !pluginInstalled
+                  ? 'fa-link-slash'
+                  : `fa-radar${scanRunning ? ' fa-spin' : ''}`
+              }`}
+              style={{ fontSize: 13 }}
+            />
+            <span>{scanRunning ? 'Scanning...' : 'Scan FOMODs'}</span>
+          </button>
+          <button
+            type="button"
+            className="tool-btn tool-btn-primary"
+            onClick={handleRunTests}
+            disabled={testRunning || !pluginInstalled}
+          >
+            <i
+              className={`fa-duotone fa-solid ${
+                !pluginInstalled
+                  ? 'fa-ban'
+                  : `fa-flask${testRunning ? ' fa-shake' : ''}`
+              }`}
+              style={{ fontSize: 13 }}
+            />
+            <span>{testRunning ? 'Tests running...' : 'Run tests'}</span>
+          </button>
+        </ToolGroup>
+
+        <div style={{ flex: 1 }} />
+
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10.5,
+            color: 'var(--ink-4)',
+            letterSpacing: '0.08em',
+            whiteSpace: 'nowrap',
+          }}
         >
-          <i className="fa-duotone fa-solid fa-arrow-right text-[0.6rem] align-[-0.04em]" />&nbsp;View salma.log
-        </Link>
-      )}
+          <span style={{ color: 'var(--accent)' }}>⌘</span> + <span>U</span> to upload
+        </span>
+      </div>
 
-      <button
-        onClick={handleRunTests}
-        disabled={testRunning || !pluginInstalled}
-        className={`rounded-xl px-5 py-2.5 text-xs font-semibold transition-all flex items-center gap-2 action-btn action-btn-warning
-          ${!pluginInstalled
-            ? 'bg-surface-container-high text-error/75 border border-outline-variant/45 cursor-not-allowed opacity-90'
-            : testRunning
-            ? 'bg-surface-container-high text-on-surface-variant border border-outline-variant/40 cursor-not-allowed opacity-70'
-            : 'bg-warning/15 text-on-surface border border-warning/25 hover:bg-warning/30 hover:border-warning/45'
-          }`}
-      >
-        <i className={`fa-duotone fa-solid icon-sm ${
-          !pluginInstalled
-            ? 'fa-lock text-error/70'
-            : (testRunning ? 'fa-spinner fa-spin' : 'fa-flask-vial icon-gradient icon-gradient-ember')
-        }`} />
-        {testRunning ? 'Tests Running...' : 'Run Tests'}
-      </button>
-      {testRunning && (
-        <Link
-          to="/logs"
-          className="inline whitespace-nowrap text-xs leading-tight text-primary hover:text-primary-light transition-colors border-b border-current"
+      {/* Status messages line */}
+      {(actionChip?.key === 'scan' || scanRunning || testRunning || scanError || testError || pluginActionError) && (
+        <div
+          className="flex items-center"
+          style={{ gap: 14, flexWrap: 'wrap', marginTop: 12 }}
         >
-          <i className="fa-duotone fa-solid fa-arrow-right text-[0.6rem] align-[-0.04em]" />&nbsp;View test.log
-        </Link>
-      )}
-      {pluginActionError && (
-        <span className="text-xs text-error flex items-center gap-1.5">
-          <i className="fa-duotone fa-solid fa-circle-exclamation" />{pluginActionError}
-        </span>
-      )}
-      {testError && (
-        <span className="text-xs text-error flex items-center gap-1.5">
-          <i className="fa-duotone fa-solid fa-circle-exclamation" />{testError}
-        </span>
-      )}
-      {scanError && (
-        <span className="text-xs text-error flex items-center gap-1.5">
-          <i className="fa-duotone fa-solid fa-circle-exclamation" />{scanError}
-        </span>
+          {actionChip?.key === 'scan' && (
+            <span
+              className="flex items-center"
+              style={{
+                gap: 6,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10.5,
+                letterSpacing: '0.1em',
+                textTransform: 'uppercase',
+                color: 'var(--moss)',
+              }}
+            >
+              <span className="dot-status dot-status-on" />
+              {actionChip.text}
+            </span>
+          )}
+          {scanRunning && (
+            <Link
+              to="/logs"
+              className="flex items-center"
+              style={{
+                gap: 6,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10.5,
+                color: 'var(--ink-blue)',
+                textDecoration: 'none',
+              }}
+            >
+              <span className="dot-status dot-status-warn dot-status-pulse" />
+              // tail salma.log →
+            </Link>
+          )}
+          {testRunning && (
+            <Link
+              to="/logs"
+              className="flex items-center"
+              style={{
+                gap: 6,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10.5,
+                color: 'var(--ink-blue)',
+                textDecoration: 'none',
+              }}
+            >
+              <span className="dot-status dot-status-warn dot-status-pulse" />
+              // tail test.log →
+            </Link>
+          )}
+          {pluginActionError && (
+            <span
+              className="flex items-center"
+              style={{
+                gap: 6,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10.5,
+                color: 'var(--accent)',
+              }}
+            >
+              <span className="dot-status dot-status-error" />
+              {pluginActionError}
+            </span>
+          )}
+          {scanError && (
+            <span
+              className="flex items-center"
+              style={{
+                gap: 6,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10.5,
+                color: 'var(--accent)',
+              }}
+            >
+              <span className="dot-status dot-status-error" />
+              {scanError}
+            </span>
+          )}
+          {testError && (
+            <span
+              className="flex items-center"
+              style={{
+                gap: 6,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10.5,
+                color: 'var(--accent)',
+              }}
+            >
+              <span className="dot-status dot-status-error" />
+              {testError}
+            </span>
+          )}
+        </div>
       )}
     </div>
   )
