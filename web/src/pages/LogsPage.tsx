@@ -229,7 +229,7 @@ export default function LogsPage() {
           >
             03.
           </span>
-          <span>§ Stream</span>
+          <span>Sec. Stream</span>
         </p>
 
         <div className="flex items-end reveal reveal-delay-2" style={{ gap: 20, flexWrap: 'wrap' }}>
@@ -275,11 +275,11 @@ export default function LogsPage() {
           <SourceSwitch active={source === 'salma'} onClick={() => setSource('salma')}>
             salma.log
           </SourceSwitch>
-          <span style={{ margin: '0 8px', color: 'var(--ink-5)' }}>·</span>
+          <span style={{ margin: '0 4px', color: 'var(--ink-5)' }}>-</span>
           <SourceSwitch active={source === 'test'} onClick={() => setSource('test')}>
             test.log
           </SourceSwitch>{' '}
-          stream — pause to inspect.
+          stream - pause to inspect.
         </p>
       </header>
 
@@ -289,7 +289,7 @@ export default function LogsPage() {
         title={sectionTitle}
         corner="01"
         bodyPadding="none"
-        className="atelier-section-fill reveal reveal-delay-4"
+        className={`reveal reveal-delay-4${loading ? '' : ' atelier-section-fill'}`}
         meta={
             <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
               {/* Line count dropdown */}
@@ -408,11 +408,17 @@ export default function LogsPage() {
             }}
           >
             {loading ? (
-              <div className="flex flex-col" style={{ padding: 20, gap: 8 }}>
-                <div className="skeleton-line" style={{ height: 12, width: '70%' }} />
-                <div className="skeleton-line" style={{ height: 12, width: '60%' }} />
-                <div className="skeleton-line" style={{ height: 12, width: '78%' }} />
-                <div className="skeleton-line" style={{ height: 12, width: '52%' }} />
+              <div style={{ padding: '8px 0' }}>
+                <div className="log-viewer" style={{ padding: '0 20px' }}>
+                  {[72, 58, 81, 49, 68, 55].map((w, i) => (
+                    <div
+                      key={i}
+                      style={{ height: LINE_HEIGHT, display: 'flex', alignItems: 'center' }}
+                    >
+                      <div className="skeleton-line" style={{ height: 11, width: `${w}%` }} />
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : lines.length === 0 ? (
               <div style={{ padding: 28 }}>
