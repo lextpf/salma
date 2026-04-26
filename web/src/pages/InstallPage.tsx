@@ -62,7 +62,7 @@ export default function InstallPage() {
     prevReadyRef.current = readyCount
   }, [readyCount])
 
-  // Mark isInstalling/scanRunning/testRunning as referenced — the page
+  // Mark isInstalling/scanRunning/testRunning as referenced - the page
   // itself doesn't need them anymore (Layout polls engine state) but the
   // hooks still need their callbacks fired.
   void isInstalling; void scanRunning; void testRunning
@@ -97,7 +97,7 @@ export default function InstallPage() {
           >
             01.
           </span>
-          <span>§ Upload and install mod archives</span>
+          <span>Sec. Upload and install mod archives</span>
         </p>
 
         <div className="flex items-end reveal reveal-delay-2" style={{ gap: 18, flexWrap: 'wrap' }}>
@@ -140,12 +140,12 @@ export default function InstallPage() {
             lineHeight: 1.55,
           }}
         >
-          Drop an archive — salma will extract, parse the FOMOD, and infer selections against your mod tree.
+          Drop an archive - salma will extract, parse the FOMOD, and infer selections against your mod tree.
         </p>
       </header>
 
       {/* ============================================================
-          SECTION 01 — UPLOAD (natural height)
+          SECTION 01 - UPLOAD (natural height)
           ============================================================ */}
       <div className="reveal reveal-delay-4" style={{ marginBottom: 16, flexShrink: 0 }}>
         <Section n="01" label="Upload" title="Select an archive" corner="01" bodyPadding="none">
@@ -153,9 +153,21 @@ export default function InstallPage() {
             <div style={{ borderRight: '1px solid var(--rule)', minWidth: 0 }}>
               {systemUnavailable ? (
                 <div style={{ padding: '32px 28px' }}>
-                  <div className="skeleton-line" style={{ height: 14, width: 220, marginBottom: 12 }} />
-                  <div className="skeleton-line" style={{ height: 24, width: 300, marginBottom: 10 }} />
-                  <div className="skeleton-line" style={{ height: 12, width: 260 }} />
+                  <div className="empty-state-card" style={{ gap: 18 }}>
+                    <div
+                      className="skeleton-line"
+                      style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: '50%',
+                        flexShrink: 0,
+                      }}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="skeleton-line" style={{ height: 22, width: 280, marginBottom: 8 }} />
+                      <div className="skeleton-line" style={{ height: 11, width: 220 }} />
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <FileUpload
@@ -187,7 +199,7 @@ export default function InstallPage() {
       </div>
 
       {/* ============================================================
-          SECTION 02 — ACTIVITY (natural height; queue caps + scrolls
+          SECTION 02 - ACTIVITY (natural height; queue caps + scrolls
           internally so it never dominates the page)
           ============================================================ */}
       <Section
@@ -205,11 +217,32 @@ export default function InstallPage() {
           </div>
         }
       >
-        <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+        <div style={systemUnavailable ? undefined : { maxHeight: 320, overflowY: 'auto' }}>
           {systemUnavailable ? (
-            <div style={{ padding: 24 }}>
-              <div className="skeleton-line" style={{ height: 14, width: 200, marginBottom: 12 }} />
-              <div className="skeleton-line" style={{ height: 14, width: 160 }} />
+            <div>
+              {[0, 1].map(i => (
+                <div
+                  key={i}
+                  className="grid"
+                  style={{
+                    gridTemplateColumns: '38px 1fr 130px 180px 70px 20px',
+                    gap: 18,
+                    padding: '16px 28px',
+                    borderBottom: i === 1 ? 'none' : '1px solid var(--rule-soft)',
+                    alignItems: 'center',
+                  }}
+                >
+                  <div className="skeleton-line" style={{ width: 38, height: 38, borderRadius: '50%' }} />
+                  <div>
+                    <div className="skeleton-line" style={{ height: 14, width: ['72%', '58%'][i], marginBottom: 6 }} />
+                    <div className="skeleton-line" style={{ height: 14, width: 110 }} />
+                  </div>
+                  <div className="skeleton-line" style={{ height: 14, width: 100 }} />
+                  <div className="skeleton-line" style={{ height: 14, width: '100%' }} />
+                  <div className="skeleton-line" style={{ height: 14, width: 40 }} />
+                  <div />
+                </div>
+              ))}
             </div>
           ) : (
             <InstallationQueue jobs={jobs} />
