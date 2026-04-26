@@ -34,15 +34,8 @@
 
 > [!IMPORTANT]
 > **Early release** - salma is under active development and has been tested against:
-> - **Nolvus Ascension 6.0.20** with **350 FOMODs** (see `TESTS.png`).
+> - **Nolvus Ascension 6.0.20** with **350 FOMODs**.
 > - Other mods should work without issues - if you run into a problem, please report it.
-
-<div align="center">
-<br>
-
-<img src="TESTS.png" alt="Preview" width="450"/>
-
-</div>
 
 ```
 /* ============================================================================================== *
@@ -127,10 +120,10 @@ graph LR
     P --- D --- F --- S
 ```
 
-- 📄 **XML Parser** — Parses `fomod/ModuleConfig.xml` for installation steps and options
-- 🧩 **Dependency Evaluator** — Resolves flag-based and file-based FOMOD dependencies
-- 📂 **File Operations** — Priority-sorted file copy, folder creation, and patching
-- 🔎 **Structure Detector** — Identifies mod folder layout (meshes/, textures/, SKSE/, etc.)
+- 📄 **XML Parser** - Parses `fomod/ModuleConfig.xml` for installation steps and options
+- 🧩 **Dependency Evaluator** - Resolves flag-based and file-based FOMOD dependencies
+- 📂 **File Operations** - Priority-sorted file copy, folder creation, and patching
+- 🔎 **Structure Detector** - Identifies mod folder layout (meshes/, textures/, SKSE/, etc.)
 
 ### Inference Engine
 
@@ -143,10 +136,10 @@ salma's inference service compares an archive's FOMOD options against an already
 
 ### MO2 Integration
 
-- 🐍 **Python Plugin** — `mo2-salma.py` loads the DLL via ctypes and exposes tools inside MO2
-- 🔬 **Scan FOMOD Choices** — Batch-scans all installed mods for FOMOD selections
-- 📁 **Centralized Output** — Reinstalled mods go to a dedicated "Salma FOMODs Output" folder
-- ⚡ **Deploy & Purge** — `deploy.bat` and `purge.bat` scripts for plugin lifecycle management
+- 🐍 **Python Plugin** - `mo2-salma.py` loads the DLL via ctypes and exposes tools inside MO2
+- 🔬 **Scan FOMOD Choices** - Batch-scans all installed mods for FOMOD selections
+- 📁 **Centralized Output** - Reinstalled mods go to a dedicated "Salma FOMODs Output" folder
+- ⚡ **Deploy & Purge** - `deploy.bat` and `purge.bat` scripts for plugin lifecycle management
 
 ### Archive Support
 
@@ -159,10 +152,10 @@ salma's inference service compares an archive's FOMOD options against an already
 
 ### Additional Capabilities
 
-- 🌐 **REST API** — Full programmatic access for custom installers and automation
-- 🎨 **Web UI** — React SPA with dark/light theme, served directly by the Crow backend
-- 📝 **Logging** — Unified thread-safe logger with subsystem tags (`[archive]` `[install]` `[fomod]` `[infer]` `[server]`)
-- 🧪 **Round-Trip Testing** — Infer selections, reinstall, and diff against the original mod
+- 🌐 **REST API** - Full programmatic access for custom installers and automation
+- 🎨 **Web UI** - React SPA with dark/light theme, served directly by the Crow backend
+- 📝 **Logging** - Unified thread-safe logger with subsystem tags (`[archive]` `[install]` `[fomod]` `[infer]` `[server]`)
+- 🧪 **Round-Trip Testing** - Infer selections, reinstall, and diff against the original mod
 
 ## Technology Stack
 
@@ -193,7 +186,7 @@ salma's inference service compares an archive's FOMOD options against an already
 - **vcpkg** with the toolchain at a known path
 - **Node.js** (for building the React frontend)
 - **Python 3** (for MO2 plugin and documentation post-processing)
-- **clang-format** (optional, for code formatting — CI enforces it)
+- **clang-format** (optional, for code formatting - CI enforces it)
 - **doxide** + **mkdocs** (optional, for API docs generation)
 
 ### Building
@@ -296,16 +289,26 @@ salma/
 |   |-- CApi.h/cpp                     # C-linkage DLL API (ctypes)
 |   |-- Export.h                       # MO2_API export macro
 |   |-- Types.h                        # Shared type definitions
+|   |-- Utils.h/cpp                    # Shared string/path helpers
+|   |-- BackgroundJob.h                # Async job runner
 |   |-- Logger.h/cpp                   # Thread-safe logging
 |   |-- ArchiveService.h/cpp           # Archive extraction
 |   |-- FileOperations.h/cpp           # Queued file operations
 |   |-- ModStructureDetector.h/cpp     # Mod folder structure detection
 |   |-- FomodService.h/cpp             # FOMOD installation logic
 |   |-- FomodDependencyEvaluator.h/cpp # FOMOD dependency evaluation
-|   |-- FomodInferenceService.h/cpp    # Selection inference engine
+|   |-- FomodInferenceService.h/cpp    # Selection inference engine (orchestrator)
+|   |-- FomodIR{,Parser}.h/cpp         # FOMOD intermediate representation + XML parser
+|   |-- FomodCSP*.h/cpp                # CSP solver, options, precompute, types
+|   |-- FomodPropagator.h/cpp          # Constraint propagator
+|   |-- FomodForwardSimulator.h/cpp    # Forward-simulates installs against the IR
+|   |-- FomodInferenceAtoms.h/cpp      # Atom-level inference helpers
+|   |-- FomodAtom.h                    # Atom type definitions
 |   |-- InstallationService.h/cpp      # Main orchestrator
 |   |-- InstallationController.h/cpp   # REST endpoint handlers
-|   |-- Mo2Controller.h/cpp            # MO2 status endpoints
+|   |-- Mo2Controller.h/cpp            # MO2 dashboard controller (shared state)
+|   |-- Mo2{Config,Fomod,Log,Plugin,Test}Controller.cpp # Per-subsystem endpoints
+|   |-- Mo2Helpers.h/cpp               # Shared helpers for MO2 controllers
 |   |-- ConfigService.h/cpp            # Configuration management
 |   |-- MultipartHandler.h/cpp         # Form data parsing
 |   +-- StaticFileHandler.h/cpp        # SPA serving
@@ -314,22 +317,24 @@ salma/
 |   |-- dist/                          # Built SPA (served by Crow)
 |   |-- package.json                   # Dependencies
 |   +-- vite.config.ts                 # Dev proxy to :5000
+|-- tests/                             # GoogleTest C++ unit tests
 |-- scripts/                           # MO2 plugin & utilities
 |   |-- mo2-salma.py                   # MO2 Python plugin
 |   |-- common.py                      # Shared utilities
 |   +-- _clean_docs.py                 # Doc post-processing
 |-- logs/                              # Runtime logs
-|   |-- salma.log                      # Application log
-|   +-- test.log                       # Test suite output
+|   +-- salma.log                      # Application log
 |-- .clang-format                      # Code formatting rules
-|-- CMakeLists.txt                     # Build configuration
+|-- CMakeLists.txt                     # Build configuration (mo2-core + mo2-server targets)
 |-- CMakePresets.json                  # Build presets (vcpkg)
 |-- vcpkg.json                         # Dependency manifest
 |-- build.bat                          # Build pipeline
 |-- deploy.bat                         # Deploy to MO2
 |-- purge.bat                          # Remove plugin & clean output
-|-- test.bat                           # Run test suite
-|-- test.py                            # Test runner
+|-- test.bat                           # Run C++ unit tests (salma_tests.exe)
+|-- test.py                            # Round-trip test runner (Python)
+|-- test_one.py                        # Round-trip test for a single mod
+|-- test.log                           # Round-trip test output
 |-- doxide.yml                         # API doc config
 +-- mkdocs.yml                         # Documentation site config
 ```
