@@ -145,7 +145,7 @@ export default function SettingsPage() {
           >
             04.
           </span>
-          <span>§ Configuration</span>
+          <span>Sec. Configuration</span>
         </p>
 
         <h1
@@ -207,16 +207,27 @@ export default function SettingsPage() {
       ) : !config ? (
         <div className="reveal reveal-delay-4" style={{ marginBottom: 28 }}>
           <Section n="01" label="Paths" title="MO2 instance" corner="01" bodyPadding="none">
-            <div style={{ padding: 24 }}>
-              <div className="skeleton-line" style={{ height: 10, width: 120, marginBottom: 12 }} />
-              <div className="skeleton-line" style={{ height: 36, width: '100%', marginBottom: 16 }} />
-              <div className="skeleton-line" style={{ height: 10, width: 200 }} />
+            <div
+              className="grid"
+              style={{
+                gridTemplateColumns: '220px 1fr',
+                gap: 24,
+                padding: '20px 28px',
+                borderBottom: '1px solid var(--rule-soft)',
+                alignItems: 'flex-start',
+              }}
+            >
+              <div>
+                <div className="skeleton-line" style={{ height: 10, width: 100, marginBottom: 8 }} />
+                <div className="skeleton-line" style={{ height: 11, width: 180 }} />
+              </div>
+              <div className="skeleton-line" style={{ height: 36, width: '100%' }} />
             </div>
           </Section>
         </div>
       ) : (
         <>
-          {/* Section 01 — Paths */}
+          {/* Section 01 - Paths */}
           <div className="reveal reveal-delay-4" style={{ marginBottom: 16, flexShrink: 0 }}>
             <Section n="01" label="Paths" title="MO2 instance" corner="01" bodyPadding="none">
               <FieldRow
@@ -254,7 +265,7 @@ export default function SettingsPage() {
               {config.fomodOutputDir && (
                 <FieldRow
                   label="FOMOD output"
-                  hint={<>// auto-generated from the mods path · read-only</>}
+                  hint={<>// auto-generated from the mods path - read-only</>}
                 >
                   <input
                     type="text"
@@ -268,7 +279,7 @@ export default function SettingsPage() {
             </Section>
           </div>
 
-          {/* Section 02 — Test runner */}
+          {/* Section 02 - Test runner */}
           <div className="reveal reveal-delay-5" style={{ flexShrink: 0 }}>
             <Section n="02" label="Test" title="Test runner" corner="02" bodyPadding="none">
               <FieldRow
@@ -311,7 +322,7 @@ export default function SettingsPage() {
                 <div style={{ flex: 1 }} />
                 <button
                   type="button"
-                  className="tool-btn tool-btn-ink"
+                  className="tool-btn tool-btn-primary"
                   onClick={handleSave}
                   disabled={saving || !pathValid}
                 >
