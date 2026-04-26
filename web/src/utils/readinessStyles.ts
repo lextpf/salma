@@ -18,7 +18,7 @@ export interface ReadinessStyles {
 /**
  * Circular ring mask with a 1px feathered inner edge.
  *
- * Spreading the stops ±0.5px around the target thickness gives the
+ * Spreading the stops +/-0.5px around the target thickness gives the
  * compositor a 1px band to feather the inner circle cleanly.
  */
 export function ringMaskStyle(thicknessPx: number): React.CSSProperties {

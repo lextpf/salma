@@ -123,7 +123,7 @@ export default function SystemStatusSection({
 
       <div style={{ height: 1, background: 'var(--rule-soft)' }} />
 
-      {/* MINI STATS — Installed + FOMODs only (Last scan/Session live in sidebar) */}
+      {/* MINI STATS - Installed + FOMODs only (Last scan/Session live in sidebar) */}
       <div className="grid" style={{ gridTemplateColumns: '1fr 1fr', gap: '8px 14px' }}>
         <MiniStat label="Installed" value={String(status.modCount)} sub="mods" />
         <MiniStat label="FOMODs"    value={String(status.jsonCount)} sub="parsed" />

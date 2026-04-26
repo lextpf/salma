@@ -111,7 +111,7 @@ export default function FileUpload({ onFileSelect, disabled = false }: FileUploa
             )}
           </p>
 
-          {/* Format list — plain colored mono text per type */}
+          {/* Format list - plain colored mono text per type */}
           {!disabled ? (
             <div className="flex items-baseline" style={{ gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
               <span
@@ -138,7 +138,7 @@ export default function FileUpload({ onFileSelect, disabled = false }: FileUploa
                   <span key={f.ext} style={{ color: f.color, fontWeight: 500 }}>{f.ext}</span>
                 ))}
               </span>
-              <span style={{ color: 'var(--ink-5)' }}>·</span>
+              <span style={{ color: 'var(--ink-5)' }}>-</span>
               <span
                 style={{
                   fontFamily: 'var(--font-mono)',
@@ -147,7 +147,7 @@ export default function FileUpload({ onFileSelect, disabled = false }: FileUploa
                   color: 'var(--ink-blue)',
                 }}
               >
-                browse →
+                browse -&gt;
               </span>
             </div>
           ) : (
