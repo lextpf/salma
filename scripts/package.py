@@ -1,24 +1,32 @@
 #!/usr/bin/env python
-"""Produce a deployable artifact directory for the Rust salma DLL.
+"""Produce a deployable artifact directory for the salma engine DLL.
 
-Builds `mo2_salma_rs.dll` in release, then stages it into
-`target/package/` under the name the MO2 plugin expects.
+Builds `mo2_salma_rs.dll` in release, then stages it into `target/package/`
+under the name the MO2 plugin expects.
 
-The rename is the whole point of this script. `scripts/mo2-salma.py::find_dll`
-looks for `mo2-salma.dll`; the cargo artifact is `mo2_salma_rs.dll`. During the
-parity phase the two names are kept distinct on purpose so a stray copy can
-never be mistaken for the C++ build. Staging under the deploy name is therefore
-an explicit, auditable step rather than something the build does silently.
+The rename is the point of this script. `scripts/mo2-salma.py::find_dll` looks
+for `mo2-salma.dll` while the cargo artifact is `mo2_salma_rs.dll`. Keeping the
+two names apart means a file called `mo2-salma.dll` has provably been through
+this step, and a raw cargo artifact sitting somewhere else can never be mistaken
+for a deployable one. Do not let the build rename silently; the auditable step
+is the guarantee.
 
 Usage:
-  python tools/package.py                  # build + stage
-  python tools/package.py --no-build       # stage an existing build
-  python tools/package.py --out DIR        # stage somewhere else
-  python tools/package.py --keep-rust-name # stage as mo2_salma_rs.dll
+  python scripts/package.py                  # build + stage
+  python scripts/package.py --no-build       # stage an existing build
+  python scripts/package.py --out DIR        # stage somewhere else
+  python scripts/package.py --keep-rust-name # stage as mo2_salma_rs.dll
 
-The artifact directory holds the DLL and nothing else: the engine has no
-runtime data files, and `logs/` is created next to the DLL on first use.
-See CUTOVER.md for how to deploy it and how to roll back.
+The artifact directory holds the DLL and nothing else: the engine has no runtime
+data files, and it creates `logs/` next to the DLL on first use. CUTOVER.md
+covers deploying it and rolling back.
+
+The printed SHA-256 is the only practical proof that a later deploy carries these
+exact bytes, because getApiVersion returns the same string for every build.
+
+Exits non-zero when `cargo build` fails, and when the built DLL is absent under
+`--no-build`. Apart from that build it writes only into the artifact directory,
+and it never deploys: copying the staged file to MO2 stays a manual step.
 """
 
 import argparse
@@ -91,9 +99,10 @@ def main() -> int:
         print(f"[package] NOTE   : renamed {BUILT_DLL.name} -> {name} for deployment.")
     print()
     print("[package] Next: see CUTOVER.md. Deploying is a deliberate step -")
-    print("[package] copy this file over %SALMA_DEPLOY_PATH%\\salma\\mo2-salma.dll")
-    print("[package] only after backing the C++ DLL up, and verify with")
-    print("[package] getApiVersion plus a fresh logs/salma.log line.")
+    print("[package] copy this file over %SALMA_DEPLOY_PATH%\\salma\\mo2-salma.dll,")
+    print("[package] then verify by comparing the deployed file's SHA-256")
+    print("[package] against the digest above. getApiVersion cannot confirm a")
+    print("[package] deploy: every build of the engine reports the same string.")
     return 0
 
 
