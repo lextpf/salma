@@ -33,7 +33,7 @@ function formatSize(bytes?: number): string {
 
 function fileNameSize(job: InstallationJob): string {
   const size = formatSize((job as InstallationJob & { size?: number }).size)
-  return size ? `${size} · archive` : 'archive'
+  return size ? `${size} - archive` : 'archive'
 }
 
 export default function InstallationQueue({ jobs }: InstallationQueueProps) {
@@ -66,9 +66,9 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
             </p>
             <p className="timestamp-print" style={{ marginTop: 4 }}>
               // drop archive files above to stage an install
-              <span style={{ margin: '0 6px', color: 'var(--ink-5)' }}>·</span>
+              <span style={{ margin: '0 6px', color: 'var(--ink-5)' }}>-</span>
               <Link to="/logs" style={{ color: 'var(--ink-blue)', textDecoration: 'none' }}>
-                tail log →
+                tail log -&gt;
               </Link>
             </p>
           </div>
@@ -201,7 +201,7 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
                 fontVariantNumeric: 'tabular-nums',
               }}
             >
-              {job.status === 'completed' ? '✓' : job.status === 'error' ? '!' : `${Math.round(progress)}%`}
+              {job.status === 'completed' ? 'OK' : job.status === 'error' ? '!' : `${Math.round(progress)}%`}
             </div>
 
             {/* Chevron */}
