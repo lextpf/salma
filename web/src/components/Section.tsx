@@ -3,15 +3,15 @@ import type { ReactNode } from 'react'
 interface SectionProps {
   /** Italic mono numeral shown in the header bar (e.g. "01", "02", "ii") */
   n: string
-  /** Cap-styled section label following the § glyph (e.g. "Upload", "Activity") */
+  /** Cap-styled section label following the section marker (e.g. "Upload", "Activity") */
   label: string
   /** Serif title shown alongside the label (e.g. "Select an archive") */
   title: string
   /** Big faded numeral floated in the section's top-right corner (usually equals `n`) */
   corner: string
-  /** Right-side header content — badges, action buttons, "Full log →" link */
+  /** Right-side header content - badges, action buttons, "Full log ->" link */
   meta?: ReactNode
-  /** When 'none', body has no padding (caller paints its own — used for tables/queues) */
+  /** When 'none', body has no padding (caller paints its own - used for tables/queues) */
   bodyPadding?: 'none' | 'normal'
   /** Extra utility classes for the outer section element */
   className?: string
@@ -35,7 +35,7 @@ export default function Section({
           <span className="atelier-section-num">{n}</span>
           <span className="atelier-section-dash" aria-hidden="true" />
           <span className="chapter-label" style={{ gap: '0.4rem' }}>
-            <span>§ {label}</span>
+            <span>Sec. {label}</span>
           </span>
           <span className="atelier-section-title">{title}</span>
         </div>
