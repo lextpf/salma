@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
-"""ctypes smoke test for the Rust mo2_salma_rs.dll.
+"""ctypes smoke test for mo2_salma_rs.dll.
 
-Loads the DLL from an explicit path and exercises the flat C ABI with the SAME
-argtypes/restype declarations as scripts/mo2-salma.py::_configure_dll, then
-asserts the Milestone 1 stub contract. Exit code 0 on success, 1 on a failed
-check, 2 on a usage error.
+Loads the DLL from an explicit path and exercises the flat C ABI with the same
+argtypes and restype declarations as scripts/mo2-salma.py::_configure_dll, then
+asserts the eight-export contract: every export is present, the version string
+matches, an owned string survives the round trip through freeResult,
+installSucceeded is False before any install, and callback registration and
+clearing do not crash.
+
+Those are production contracts, not scaffolding around a stub. Keep the
+declarations here identical to the plugin's, or the test stops saying anything
+about the loader MO2 actually uses.
+
+Exit code 0 on success, 1 on a failed check, 2 on a usage error. Nothing is
+installed: every call is given a path that does not exist. The engine still
+writes its own `logs/salma.log` next to the DLL, because the checks that call
+into it run before any log callback is registered.
 
 Usage:
     python smoke_ctypes.py <path-to-mo2_salma_rs.dll>
@@ -12,7 +23,7 @@ Usage:
 import ctypes
 import sys
 
-# Mirror of scripts/mo2-salma.py: the log-callback signature.
+# The log-callback signature, as scripts/mo2-salma.py declares it.
 CALLBACK_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p)
 
 # The exact set of symbols the MO2 plugin needs - no more, no less.
@@ -29,11 +40,11 @@ EXPORTS = (
 
 
 def _configure_dll(lib):
-    """Mirror of scripts/mo2-salma.py::_configure_dll.
+    """Declare the ABI exactly as scripts/mo2-salma.py::_configure_dll does.
 
     Owned-string returns are declared as c_void_p (raw heap pointer) so the
-    bytes can be copied and the pointer handed to freeResult, exactly as the
-    production plugin does to avoid leaking the allocation.
+    bytes can be copied and the pointer handed to freeResult, which is what the
+    plugin does to avoid leaking the allocation.
     """
     lib.getApiVersion.argtypes = []
     lib.getApiVersion.restype = ctypes.c_char_p  # static const char*, never freed
@@ -61,11 +72,11 @@ def _configure_dll(lib):
 
 
 def _call_owned_string(lib, fn, *args) -> str:
-    """Mirror of scripts/mo2-salma.py::_call_owned_string.
+    """Invoke an owned-string export the way the plugin's helper does.
 
-    Invokes an owned-string export, copies the bytes, and always frees the
-    underlying pointer via freeResult - proving the round-trip does not crash
-    and does not leak. Returns "" on a null pointer.
+    Copies the bytes and always frees the underlying pointer through
+    freeResult, which proves the round trip neither crashes nor leaks. Returns
+    "" on a null pointer.
     """
     addr = fn(*args)
     if not addr:
@@ -109,7 +120,9 @@ def main(argv):
         f'(got "{infer_null}")',
         infer_null == "archivePath and modPath must not be null",
     )
-    #    Empty (non-null) inputs -> "" placeholder.
+    #    Empty (non-null) inputs -> "". The empty string is the engine's
+    #    permanent failure contract, not a placeholder: inferFomodSelections
+    #    collapses every failure to "" because no error type can cross the ABI.
     infer_empty = _call_owned_string(lib, lib.inferFomodSelections, b"", b"")
     check(f'inferFomodSelections(b"", b"") == "" (got "{infer_empty}")', infer_empty == "")
 
