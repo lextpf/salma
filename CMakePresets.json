@@ -28,7 +28,7 @@
     {
       "name": "debug",
       "displayName": "Debug",
-      "description": "Debug build with the same triplet, suitable for stepping through services and the FOMOD solver.",
+      "description": "Debug build of mo2-server and salma_tests with the same triplet. The FOMOD engine is Rust: debug it with cargo, not this preset.",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
@@ -37,7 +37,7 @@
     {
       "name": "ci-release",
       "displayName": "CI Release",
-      "description": "Same as default; named explicitly so CI workflows do not silently track local preset edits.",
+      "description": "Release for CI. Inherits default, so edits to default reach CI too; the separate name exists so a workflow never has to spell out a preset that local tooling also owns.",
       "inherits": "default"
     },
     {
@@ -79,6 +79,7 @@
       "name": "tests-only",
       "configurePreset": "default",
       "displayName": "Build the salma_tests target only",
+      "description": "Skips mo2-server, and with it the post-build copy of mo2-salma.dll into build/bin/Release, so the SalmaEngine tests fail on ensure_loaded() unless that DLL is already there.",
       "configuration": "Release",
       "targets": ["salma_tests"]
     },
@@ -90,6 +91,7 @@
     {
       "name": "ci-tests",
       "configurePreset": "ci-release",
+      "description": "Skips mo2-server, and with it the post-build copy of mo2-salma.dll into build/bin/Release, so the SalmaEngine tests fail on ensure_loaded() unless that DLL is already there.",
       "configuration": "Release",
       "targets": ["salma_tests"]
     },
