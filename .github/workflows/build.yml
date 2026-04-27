@@ -10,9 +10,8 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "build.rs"
-      - "tools/**"
+      - "scripts/**"
       - "web/**"
-      - "scripts/mo2-salma.py"
       - "build.bat"
       - "test.bat"
       - ".github/workflows/build.yml"
@@ -23,9 +22,8 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "build.rs"
-      - "tools/**"
+      - "scripts/**"
       - "web/**"
-      - "scripts/mo2-salma.py"
       - "build.bat"
       - "test.bat"
       - ".github/workflows/build.yml"
@@ -60,17 +58,17 @@ jobs:
       - name: Test (release)
         run: cargo test --release
 
-      # The three checks below are corpus-free, so they run on a clean runner.
-      # The corpus-backed parity checks (compare_infer.py, run_harness.py) need
-      # the mod archives and the C++ oracle DLL, neither of which exists here.
+      # The three checks below are self-contained, so they run on a clean
+      # runner. `scripts/run_harness.py` is not among them: it drives the
+      # round-trip harness against a live MO2 install, which does not exist here.
       - name: Package the deployable DLL
-        run: python tools/package.py --no-build
+        run: python scripts/package.py --no-build
 
       - name: Smoke test the C ABI
-        run: python tools/smoke_ctypes.py target/release/mo2_salma_rs.dll
+        run: python scripts/smoke_ctypes.py target/release/mo2_salma_rs.dll
 
       - name: Smoke test the MO2 plugin loader
-        run: python tools/smoke_plugin.py
+        run: python scripts/smoke_plugin.py
 
       - name: Upload the deployable DLL
         uses: actions/upload-artifact@v4
