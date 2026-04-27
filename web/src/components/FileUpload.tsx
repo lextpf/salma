@@ -3,6 +3,7 @@ import { useRef, useState } from 'react'
 interface FileUploadProps {
   onFileSelect: (files: FileList) => void
   disabled?: boolean
+  purged?: boolean
 }
 
 const SUPPORTED_FORMATS: { ext: string; color: string }[] = [
@@ -13,7 +14,7 @@ const SUPPORTED_FORMATS: { ext: string; color: string }[] = [
   { ext: '.tar',   color: 'var(--ink-2)' },
 ]
 
-export default function FileUpload({ onFileSelect, disabled = false }: FileUploadProps) {
+export default function FileUpload({ onFileSelect, disabled = false, purged = false }: FileUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
@@ -38,16 +39,14 @@ export default function FileUpload({ onFileSelect, disabled = false }: FileUploa
 
   return (
     <div
+      className="upload-dropzone"
+      data-dragging={isDragging ? 'true' : 'false'}
+      data-disabled={disabled ? 'true' : 'false'}
+      data-purged={purged ? 'true' : 'false'}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onClick={() => { if (!disabled) fileInputRef.current?.click() }}
-      style={{
-        padding: '32px 28px',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        background: 'transparent',
-        opacity: disabled ? 0.7 : 1,
-      }}
     >
       <input
         ref={fileInputRef}
@@ -59,30 +58,13 @@ export default function FileUpload({ onFileSelect, disabled = false }: FileUploa
         className="hidden"
       />
 
-      <div
-        className="empty-state-card"
-        style={{
-          background: isDragging ? 'var(--paper-2)' : 'var(--card-2)',
-          borderColor: isDragging ? 'var(--accent)' : undefined,
-          gap: 18,
-          transition: 'background-color 200ms ease, border-color 200ms ease',
-        }}
-      >
+      <div className="empty-state-card upload-dropzone-card" style={{ gap: 18 }}>
         {/* Feather icon in oxblood circle */}
         <div
+          className="upload-dropzone-icon-ring"
           style={{
-            width: 38,
-            height: 38,
-            border: '1px solid var(--rule-strong)',
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: 'var(--paper-2)',
-            color: disabled ? 'var(--ink-4)' : 'var(--accent)',
+            color: purged ? 'var(--danger)' : disabled ? 'var(--ink-4)' : 'var(--accent)',
             transform: isDragging ? 'scale(1.05) rotate(-6deg)' : 'scale(1) rotate(0)',
-            transition: 'transform 300ms cubic-bezier(0.21, 0.9, 0.3, 1)',
-            flexShrink: 0,
           }}
         >
           <i
@@ -117,7 +99,7 @@ export default function FileUpload({ onFileSelect, disabled = false }: FileUploa
               <span
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
+                  fontSize: 13,
                   letterSpacing: '0.04em',
                   color: 'var(--ink-4)',
                 }}
@@ -128,7 +110,7 @@ export default function FileUpload({ onFileSelect, disabled = false }: FileUploa
                 className="flex items-baseline"
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
+                  fontSize: 13,
                   letterSpacing: '0.04em',
                   gap: 10,
                   flexWrap: 'wrap',
@@ -140,14 +122,14 @@ export default function FileUpload({ onFileSelect, disabled = false }: FileUploa
               </span>
               <span style={{ color: 'var(--ink-5)' }}>-</span>
               <span
+                className="serif-link-arrow"
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
+                  fontSize: 13,
                   letterSpacing: '0.04em',
-                  color: 'var(--ink-blue)',
                 }}
               >
-                browse -&gt;
+                browse <span className="arrow" aria-hidden="true">&rarr;</span>
               </span>
             </div>
           ) : (
