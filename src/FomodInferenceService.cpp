@@ -511,30 +511,43 @@ InferenceOverrides FomodInferenceService::compute_overrides(
                     "ambiguous_skipped={}",
                     cond_unique_forced,
                     cond_ambiguous_skipped));
-    // Pre-compute step visibility: a step is visible if any of its plugins'
-    // atoms have a dest in the target tree (evidence that the step was selected)
+    // Pre-compute step visibility using STEP-UNIQUE evidence.
+    //
+    // Older versions marked a step as ForceTrue whenever any of its plugins'
+    // atoms hit a dest in the target tree. That breaks mods with mutually-
+    // exclusive conditional steps (e.g. Schlongs of Skyrim's duplicate-name
+    // "Skin Texture" steps gated on `BodyBuilder=Off|On`, or its four
+    // "Schlong Addons - X - Y" sibling steps): every sibling shares dest paths
+    // through overlapping source folders, so every sibling got ForceTrue and
+    // the simulator ran them all, with last-applied wins corrupting the tree.
+    //
+    // The new rule: ForceTrue iff the step has at least one dest reached by
+    // its own plugins' atoms that is NOT also reached by atoms from a
+    // different step's plugins. Single-step FOMODs always meet this trivially.
+    // Steps that share their entire dest set with a sibling fall back to
+    // Unknown so `evaluate_condition_inferred` can decide based on accumulated
+    // flags during simulation.
     overrides.step_visible.resize(installer.steps.size(), ExternalConditionOverride::Unknown);
     {
+        std::vector<std::unordered_set<std::string>> step_dests(installer.steps.size());
         int flat_idx_sv = 0;
         for (size_t si = 0; si < installer.steps.size(); ++si)
         {
-            bool has_target_hit = false;
             for (const auto& group : installer.steps[si].groups)
             {
                 for (size_t pi = 0; pi < group.plugins.size(); ++pi)
                 {
-                    if (!has_target_hit && flat_idx_sv < static_cast<int>(atoms.per_plugin.size()))
+                    if (flat_idx_sv < static_cast<int>(atoms.per_plugin.size()))
                     {
                         for (const auto& atom : atoms.per_plugin[flat_idx_sv])
                         {
                             if (!excluded.count(atom.dest_path) && target.count(atom.dest_path))
                             {
-                                has_target_hit = true;
-                                break;
+                                step_dests[si].insert(atom.dest_path);
                             }
                         }
                     }
-                    else if (flat_idx_sv >= static_cast<int>(atoms.per_plugin.size()))
+                    else
                     {
                         Logger::instance().log_warning(
                             std::format("[infer] compute_overrides: flat_idx {} out of range ({}), "
@@ -545,8 +558,28 @@ InferenceOverrides FomodInferenceService::compute_overrides(
                     flat_idx_sv++;
                 }
             }
-            if (has_target_hit)
-                overrides.step_visible[si] = ExternalConditionOverride::ForceTrue;
+        }
+
+        // Count how many distinct steps each dest belongs to.
+        std::unordered_map<std::string, int> dest_step_count;
+        for (const auto& s : step_dests)
+        {
+            for (const auto& d : s)
+                dest_step_count[d]++;
+        }
+
+        // ForceTrue iff this step has a target-hit dest unique to it.
+        for (size_t si = 0; si < installer.steps.size(); ++si)
+        {
+            for (const auto& d : step_dests[si])
+            {
+                auto it = dest_step_count.find(d);
+                if (it != dest_step_count.end() && it->second == 1)
+                {
+                    overrides.step_visible[si] = ExternalConditionOverride::ForceTrue;
+                    break;
+                }
+            }
         }
     }
 

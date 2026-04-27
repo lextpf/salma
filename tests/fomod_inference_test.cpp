@@ -6,6 +6,7 @@
 #include "FomodDependencyEvaluator.h"
 #include "FomodForwardSimulator.h"
 #include "FomodIR.h"
+#include "FomodInferenceService.h"
 #include "FomodIRParser.h"
 #include "FomodPropagator.h"
 
@@ -545,4 +546,198 @@ TEST(FomodInference, PropagatorFlagPropagation)
     // Step 2, group 0: BasicPatch eliminated, AdvancedPatch selected
     EXPECT_FALSE(result.narrowed_domains[1][0][0]);
     EXPECT_TRUE(result.narrowed_domains[1][0][1]);
+}
+
+// ---------------------------------------------------------------------------
+// Test: simulator's install_if_usable evaluation matches real installer's
+// chronological flag order (regression for the CBBE 3BA exact=true vs
+// real-test-fail divergence).
+//
+// Pre-Patch-A bug: simulate_into ran a global Phase 3 that evaluated each
+// plugin's eff_type with flags accumulated through Phase 2 from EVERY selected
+// plugin (including ones lexically after the plugin being evaluated). When P1
+// has an install_if_usable atom whose dependencyType resolves to NotUsable
+// only after a flag set by P2 (later), the simulator suppressed P1's atom.
+// The real installer's enqueue_plugin_files queues P1's install_if_usable
+// atom unconditionally for a SELECTED plugin.
+// ---------------------------------------------------------------------------
+TEST(FomodInference, Simulate_FlagOrderForInstallIfUsable_MatchesRealInstaller)
+{
+    const char* xml = R"(
+    <config>
+      <installSteps>
+        <installStep name="Step1">
+          <optionalFileGroups>
+            <group name="G1" type="SelectExactlyOne">
+              <plugins>
+                <plugin name="P1">
+                  <files>
+                    <file source="x.dat" destination="x.dat" installIfUsable="true"/>
+                  </files>
+                  <typeDescriptor>
+                    <dependencyType>
+                      <defaultType name="Optional"/>
+                      <patterns>
+                        <pattern>
+                          <dependencies>
+                            <flagDependency flag="F" value="On"/>
+                          </dependencies>
+                          <type name="NotUsable"/>
+                        </pattern>
+                      </patterns>
+                    </dependencyType>
+                  </typeDescriptor>
+                </plugin>
+              </plugins>
+            </group>
+          </optionalFileGroups>
+        </installStep>
+        <installStep name="Step2">
+          <optionalFileGroups>
+            <group name="G2" type="SelectExactlyOne">
+              <plugins>
+                <plugin name="P2">
+                  <files>
+                    <file source="y.dat" destination="y.dat"/>
+                  </files>
+                  <conditionFlags>
+                    <flag name="F">On</flag>
+                  </conditionFlags>
+                  <typeDescriptor><type name="Optional"/></typeDescriptor>
+                </plugin>
+              </plugins>
+            </group>
+          </optionalFileGroups>
+        </installStep>
+      </installSteps>
+    </config>)";
+
+    auto installer = parse_xml(xml);
+    auto atoms = build_atoms(installer);
+
+    // Both P1 and P2 selected.
+    std::vector<std::vector<std::vector<bool>>> selections = {{{true}}, {{true}}};
+
+    InferenceOverrides overrides;
+    overrides.step_visible.assign(installer.steps.size(), ExternalConditionOverride::ForceTrue);
+    overrides.conditional_active.assign(installer.conditional_patterns.size(),
+                                        ExternalConditionOverride::Unknown);
+
+    auto sim = simulate(installer, atoms, selections, nullptr, &overrides);
+
+    // P1's install_if_usable atom must be present even though P2 sets F=On.
+    // The real installer queues P1's entry at step-1 enqueue time when F is
+    // still unset (eff_type Optional), so x.dat ends up installed.
+    EXPECT_TRUE(sim.files.count("x.dat")) << "install_if_usable atom from P1 was suppressed by "
+                                             "flag set by a later plugin (P2)";
+    EXPECT_TRUE(sim.files.count("y.dat"));
+}
+
+// ---------------------------------------------------------------------------
+// Test: compute_overrides leaves duplicate-name conditional sibling steps as
+// Unknown (regression for the Schlongs of Skyrim "all 7 steps ForceTrue" bug).
+//
+// Two installSteps both named "Skin Texture", each with a single plugin whose
+// folder source produces the same dest paths. With the old "any atom hits
+// target -> ForceTrue" rule, both steps got ForceTrue and the simulator ran
+// them both, with last-applied content winning. The new rule requires at
+// least one dest unique to the step.
+// ---------------------------------------------------------------------------
+TEST(FomodInference, Overrides_DuplicateNameStepsLeaveUnknown)
+{
+    FomodInstaller installer;
+
+    // Two siblings with identical dest sets.
+    for (int i = 0; i < 2; ++i)
+    {
+        FomodStep step;
+        step.name = "Skin Texture";
+        step.visible.emplace();
+        step.visible->type = FomodConditionType::Flag;
+        step.visible->flag_name = "BodyBuilder";
+        step.visible->flag_value = (i == 0) ? "Off" : "On";
+
+        FomodGroup group;
+        group.name = "Skin Texture";
+        group.type = FomodGroupType::SelectExactlyOne;
+
+        FomodPlugin plugin;
+        plugin.name = "Hairless";
+        plugin.type = PluginType::Optional;
+
+        step.groups.push_back(std::move(group));
+        step.groups[0].plugins.push_back(std::move(plugin));
+        installer.steps.push_back(std::move(step));
+    }
+
+    // Two atoms per step, all sharing the same dest set.
+    ExpandedAtoms atoms;
+    atoms.per_plugin.resize(2);
+    auto make_atom = [](const std::string& src, const std::string& dst, int doc) {
+        FomodAtom a;
+        a.source_path = src;
+        a.dest_path = dst;
+        a.document_order = doc;
+        a.file_size = 100;
+        a.origin = FomodAtom::Origin::Plugin;
+        return a;
+    };
+    atoms.per_plugin[0].push_back(make_atom("off/textures/body.dds", "textures/body.dds", 0));
+    atoms.per_plugin[0].push_back(make_atom("off/textures/face.dds", "textures/face.dds", 1));
+    atoms.per_plugin[1].push_back(make_atom("on/textures/body.dds", "textures/body.dds", 2));
+    atoms.per_plugin[1].push_back(make_atom("on/textures/face.dds", "textures/face.dds", 3));
+
+    AtomIndex idx = build_atom_index(atoms);
+    auto target = build_target({"textures/body.dds", "textures/face.dds"});
+    std::unordered_set<std::string> excluded;
+
+    auto overrides =
+        FomodInferenceService::compute_overrides(installer, atoms, idx, target, excluded);
+
+    ASSERT_EQ(overrides.step_visible.size(), 2u);
+    EXPECT_EQ(overrides.step_visible[0], ExternalConditionOverride::Unknown);
+    EXPECT_EQ(overrides.step_visible[1], ExternalConditionOverride::Unknown);
+}
+
+// ---------------------------------------------------------------------------
+// Test: compute_overrides forces step visibility True when the step has at
+// least one dest unique to it (regression guard for the simple case).
+// ---------------------------------------------------------------------------
+TEST(FomodInference, Overrides_UniqueDestForcesTrue)
+{
+    FomodInstaller installer;
+    FomodStep step;
+    step.name = "Step1";
+
+    FomodGroup group;
+    group.name = "G1";
+    group.type = FomodGroupType::SelectExactlyOne;
+
+    FomodPlugin plugin;
+    plugin.name = "P1";
+    plugin.type = PluginType::Optional;
+
+    step.groups.push_back(std::move(group));
+    step.groups[0].plugins.push_back(std::move(plugin));
+    installer.steps.push_back(std::move(step));
+
+    ExpandedAtoms atoms;
+    atoms.per_plugin.resize(1);
+    FomodAtom a;
+    a.source_path = "src/file.dat";
+    a.dest_path = "file.dat";
+    a.document_order = 0;
+    a.file_size = 100;
+    a.origin = FomodAtom::Origin::Plugin;
+    atoms.per_plugin[0].push_back(a);
+
+    AtomIndex idx = build_atom_index(atoms);
+    auto target = build_target({"file.dat"});
+    std::unordered_set<std::string> excluded;
+
+    auto overrides =
+        FomodInferenceService::compute_overrides(installer, atoms, idx, target, excluded);
+
+    ASSERT_EQ(overrides.step_visible.size(), 1u);
+    EXPECT_EQ(overrides.step_visible[0], ExternalConditionOverride::ForceTrue);
 }

@@ -47,25 +47,27 @@ void simulate_into(SimulatedTree& tree,
         return evaluate_condition(*step.visible, flags, context);
     };
 
-    auto count_step_plugins = [](const FomodStep& step) -> int
-    {
-        int count = 0;
-        for (const auto& group : step.groups)
-        {
-            count += static_cast<int>(group.plugins.size());
-        }
-        return count;
-    };
-
     // Phase 1: Required files
     for (const auto& atom : atoms.required)
     {
         apply_atom(tree, atom);
     }
 
-    // Phase 2: Selected plugin files (normal, non-always) in step order.
-    // Also accumulate flags. Auto-select Required-type plugins.
-
+    // Phase 2 (chronological pass for selected/Required plugins).
+    // Mirrors FomodService::process_optional_files's Pass 1 + per-step Required
+    // catch-all. For each plugin in step/group/plugin order, in a visible step:
+    //   - eff_type is evaluated against the flag state at this plugin's position
+    //     (matches the real installer, which detects Required-type plugins per
+    //     step using flags accumulated up to that step).
+    //   - If selected (via CSP) or Required-typed, accumulate condition_flags
+    //     then apply ALL of this plugin's atoms unconditionally. The real
+    //     installer's enqueue_plugin_files queues every entry without an
+    //     eff_type filter, so for selected plugins install_if_usable atoms
+    //     apply regardless of eff_type.
+    // Unselected non-Required plugins are deferred to Phase 3 (their auto
+    // atoms get evaluated against the FINAL flag state, like Pass 3 of the
+    // real installer).
+    std::vector<bool> processed_in_phase2(atoms.per_plugin.size(), false);
     int flat_idx = 0;
     for (size_t si = 0; si < installer.steps.size(); ++si)
     {
@@ -93,59 +95,68 @@ void simulate_into(SimulatedTree& tree,
                     selected = selections[si][gi][pi];
                 }
 
-                // Also include Required-type plugins even if not explicitly selected
-                auto eff_type = evaluate_plugin_type(plugin, flags, context);
-                if (eff_type == PluginType::Required)
-                    selected = true;
-
-                if (selected)
+                if (!selected)
                 {
-                    // Accumulate flags
+                    auto eff_type = evaluate_plugin_type(plugin, flags, context);
+                    if (eff_type == PluginType::Required)
+                        selected = true;
+                }
+
+                if (selected && flat_idx < static_cast<int>(atoms.per_plugin.size()))
+                {
                     for (const auto& [name, value] : plugin.condition_flags)
                     {
                         flags[name] = value;
                     }
-
-                    // Add normal (non-auto) atoms
-                    if (flat_idx < static_cast<int>(atoms.per_plugin.size()))
+                    for (const auto& atom : atoms.per_plugin[flat_idx])
                     {
-                        for (const auto& atom : atoms.per_plugin[flat_idx])
-                        {
-                            if (!atom.always_install && !atom.install_if_usable)
-                            {
-                                apply_atom(tree, atom);
-                            }
-                        }
+                        apply_atom(tree, atom);
                     }
+                    processed_in_phase2[flat_idx] = true;
                 }
                 flat_idx++;
             }
         }
     }
 
-    // Phase 3: Always-install and installIfUsable atoms from ALL plugins.
-    // These flags mean "install regardless of selection", so we must process
-    // every plugin including those in invisible steps.
+    // Phase 3 (final-flag-state pass for unselected non-Required plugins).
+    // Mirrors FomodService::process_optional_files's Pass 3: for each plugin
+    // not already processed, in a visible step, evaluate eff_type against the
+    // FINAL flag state and apply auto atoms accordingly. always_install runs
+    // unconditionally; install_if_usable runs only when eff_type != NotUsable.
     flat_idx = 0;
-    for (const auto& step : installer.steps)
+    for (size_t si = 0; si < installer.steps.size(); ++si)
     {
+        const auto& step = installer.steps[si];
+        bool visible = compute_step_visibility(si, step);
+
+        if (!visible)
+        {
+            for (const auto& group : step.groups)
+                flat_idx += static_cast<int>(group.plugins.size());
+            continue;
+        }
+
         for (const auto& group : step.groups)
         {
             for (const auto& plugin : group.plugins)
             {
-                auto eff_type = evaluate_plugin_type(plugin, flags, context);
-                if (flat_idx < static_cast<int>(atoms.per_plugin.size()))
+                if (flat_idx >= static_cast<int>(atoms.per_plugin.size()) ||
+                    processed_in_phase2[flat_idx])
                 {
-                    for (const auto& atom : atoms.per_plugin[flat_idx])
+                    flat_idx++;
+                    continue;
+                }
+                auto eff_type = evaluate_plugin_type(plugin, flags, context);
+                for (const auto& atom : atoms.per_plugin[flat_idx])
+                {
+                    if (atom.always_install)
                     {
-                        if (atom.always_install)
-                        {
-                            apply_atom(tree, atom);
-                        }
-                        else if (atom.install_if_usable && eff_type != PluginType::NotUsable)
-                        {
-                            apply_atom(tree, atom);
-                        }
+                        apply_atom(tree, atom);
+                    }
+                    else if (atom.install_if_usable && eff_type != PluginType::NotUsable)
+                    {
+                        apply_atom(tree, atom);
                     }
                 }
                 flat_idx++;
