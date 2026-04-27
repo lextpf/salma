@@ -164,7 +164,7 @@ export default function FomodBrowserPage() {
           }}
         >
           <span className="dot-status dot-status-error" />
-          <span style={{ flex: 1, fontSize: 12, color: 'var(--accent)' }}>{deleteError}</span>
+          <span style={{ flex: 1, fontSize: 12, color: 'var(--danger)' }}>{deleteError}</span>
           <button
             onClick={() => setDeleteError(null)}
             type="button"

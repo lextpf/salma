@@ -249,7 +249,7 @@ export default function SettingsPage() {
                     style={{
                       gap: 6,
                       marginTop: 8,
-                      color: config.mo2ModsPathValid ? 'var(--moss)' : 'var(--accent)',
+                      color: config.mo2ModsPathValid ? 'var(--moss)' : 'var(--danger)',
                     }}
                   >
                     <span
@@ -310,7 +310,7 @@ export default function SettingsPage() {
                       gap: 6,
                       fontFamily: 'var(--font-mono)',
                       fontSize: 11,
-                      color: message.type === 'success' ? 'var(--moss)' : 'var(--accent)',
+                      color: message.type === 'success' ? 'var(--moss)' : 'var(--danger)',
                     }}
                   >
                     <span

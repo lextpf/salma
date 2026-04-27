@@ -21,7 +21,7 @@ function targetNameFromPath(path?: string): string {
 function MiniStat({ label, value, sub }: { label: string; value: string; sub: string }) {
   return (
     <div>
-      <p className="ui-label" style={{ marginBottom: 2, fontSize: 9.5 }}>{label}</p>
+      <p className="ui-label" style={{ marginBottom: 2, fontSize: 11 }}>{label}</p>
       <div className="flex items-baseline" style={{ gap: 4 }}>
         <span
           className="display-serif tabular-nums"
@@ -32,7 +32,7 @@ function MiniStat({ label, value, sub }: { label: string; value: string; sub: st
         <span
           style={{
             fontFamily: 'var(--font-mono)',
-            fontSize: 9.5,
+            fontSize: 11,
             color: 'var(--ink-4)',
             letterSpacing: '0.04em',
           }}
@@ -93,7 +93,7 @@ export default function SystemStatusSection({
     >
       {/* TARGET */}
       <div>
-        <p className="ui-label" style={{ marginBottom: 4, fontSize: 9.5 }}>Target</p>
+        <p className="ui-label" style={{ marginBottom: 4, fontSize: 11 }}>Target</p>
         <p
           className="display-serif"
           style={{
@@ -144,7 +144,7 @@ export default function SystemStatusSection({
             <p className="ui-label" style={{ marginBottom: 4, color: 'var(--ochre)' }}>
               Setup needed
             </p>
-            <p className="timestamp-print" style={{ fontSize: 11, color: 'var(--ink-3)' }}>
+            <p className="timestamp-print" style={{ fontSize: 13, color: 'var(--ink-3)' }}>
               // configure mo2 paths in{' '}
               <Link
                 to="/settings"

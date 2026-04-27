@@ -12,7 +12,7 @@ const colorVar: Record<NonNullable<StatusCardProps['color']>, string> = {
   tertiary:  'var(--ink-2)',
   success:   'var(--moss)',
   warning:   'var(--ochre)',
-  error:     'var(--accent)',
+  error:     'var(--danger)',
 }
 
 export default function StatusCard({ label, value, detail, icon, color = 'primary' }: StatusCardProps) {
@@ -28,7 +28,7 @@ export default function StatusCard({ label, value, detail, icon, color = 'primar
     >
       <div className="flex items-start justify-between" style={{ gap: 12 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <p className="ui-label" style={{ marginBottom: 8, fontSize: 9.5 }}>{label}</p>
+          <p className="ui-label" style={{ marginBottom: 8, fontSize: 11 }}>{label}</p>
           <p
             className="display-serif-tight tabular-nums"
             style={{ fontSize: 26, color: colorVar[color], lineHeight: 1, margin: 0 }}

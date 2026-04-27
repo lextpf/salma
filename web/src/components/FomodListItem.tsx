@@ -22,7 +22,7 @@ function formatDate(epochMs: number): string {
 export default function FomodListItem({ fomod, onDelete, disabled }: FomodListItemProps) {
   return (
     <div
-      className="group"
+      className="group fomod-list-item"
       style={{
         display: 'grid',
         gridTemplateColumns: '32px 1fr 110px 90px 100px 28px 24px',
@@ -49,14 +49,14 @@ export default function FomodListItem({ fomod, onDelete, disabled }: FomodListIt
           color: 'var(--ink-3)',
         }}
       >
-        <i className="fa-duotone fa-solid fa-folder" style={{ fontSize: 13 }} />
+        <i className="fa-duotone fa-solid fa-folder" style={{ fontSize: 14 }} />
       </div>
 
       {/* Name */}
       <Link
         to={`/fomods/${encodeURIComponent(fomod.name)}`}
         style={{
-          fontSize: 14,
+          fontSize: 15.5,
           color: 'var(--ink)',
           textDecoration: 'none',
           letterSpacing: '-0.005em',
@@ -72,7 +72,7 @@ export default function FomodListItem({ fomod, onDelete, disabled }: FomodListIt
       <div
         style={{
           fontFamily: 'var(--font-mono)',
-          fontSize: 10.5,
+          fontSize: 12,
           letterSpacing: '0.06em',
           color: 'var(--ink-3)',
         }}
@@ -85,7 +85,7 @@ export default function FomodListItem({ fomod, onDelete, disabled }: FomodListIt
         className="tabular-nums"
         style={{
           fontFamily: 'var(--font-mono)',
-          fontSize: 10.5,
+          fontSize: 12,
           color: 'var(--ink-3)',
           letterSpacing: '0.04em',
         }}
@@ -97,7 +97,7 @@ export default function FomodListItem({ fomod, onDelete, disabled }: FomodListIt
       <div
         style={{
           fontFamily: 'var(--font-mono)',
-          fontSize: 10.5,
+          fontSize: 12,
           color: 'var(--ink-4)',
           letterSpacing: '0.04em',
           whiteSpace: 'nowrap',
@@ -128,7 +128,7 @@ export default function FomodListItem({ fomod, onDelete, disabled }: FomodListIt
         }}
         onMouseEnter={e => {
           if (!disabled) {
-            e.currentTarget.style.color = 'var(--accent)'
+            e.currentTarget.style.color = 'var(--danger)'
             e.currentTarget.style.borderColor = 'var(--rule)'
           }
         }}
@@ -137,7 +137,7 @@ export default function FomodListItem({ fomod, onDelete, disabled }: FomodListIt
           e.currentTarget.style.borderColor = 'transparent'
         }}
       >
-        <i className="fa-duotone fa-solid fa-trash-can" style={{ fontSize: 11 }} />
+        <i className="fa-duotone fa-solid fa-trash-can" style={{ fontSize: 13 }} />
       </button>
 
       {/* Chevron */}
@@ -154,7 +154,7 @@ export default function FomodListItem({ fomod, onDelete, disabled }: FomodListIt
           textDecoration: 'none',
         }}
       >
-        <i className="fa-duotone fa-solid fa-angle-right" style={{ fontSize: 12 }} />
+        <i className="fa-duotone fa-solid fa-angle-right" style={{ fontSize: 14 }} />
       </Link>
     </div>
   )

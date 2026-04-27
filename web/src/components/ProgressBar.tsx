@@ -24,7 +24,7 @@ export default function ProgressBar({ progress, status, color, active = true }: 
         className="flex justify-between mt-1.5"
         style={{
           fontFamily: 'var(--font-mono)',
-          fontSize: 10.5,
+          fontSize: 12,
           color: 'var(--ink-3)',
           letterSpacing: '0.04em',
         }}

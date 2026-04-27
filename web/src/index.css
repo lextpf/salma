@@ -1,11 +1,33 @@
 @import "tailwindcss";
 
+/* Register Font Awesome duotone CSS vars as typed @property values so
+   transitions on them actually animate (without this, color/opacity
+   transitions are an instant snap because CSS can't interpolate
+   untyped custom properties). */
+@property --fa-primary-color {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #5b6373;
+}
+@property --fa-secondary-color {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: #2b8e9c;
+}
+@property --fa-secondary-opacity {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0.8;
+}
+
 /* ================================================================
    ATELIER - editorial paper aesthetic for salma's web UI.
 
    Light is the default; [data-theme="dark"] flips to ash. Single
-   oxblood accent. Typography: EB Garamond (display, italic),
-   Inter Tight (body), JetBrains Mono (labels, numbers, timestamps).
+   peacock-teal accent; oxblood is retained as `--danger` for error
+   and destructive states only. Typography: EB Garamond (display,
+   italic), Inter Tight (body), JetBrains Mono (labels, numbers,
+   timestamps).
 
    The @theme block defines Atelier tokens at the top, then aliases
    the legacy `--color-*` token names so existing Tailwind utilities
@@ -15,35 +37,43 @@
    ================================================================ */
 
 @theme {
-  /* ---------- Atelier palette (warm paper, light default) ----- */
-  --paper:        #f2ede3;
-  --paper-2:      #ece6d9;
-  --paper-3:      #e4ddce;
-  --card:         #faf7f0;
-  --card-2:       #f6f2e8;
+  /* ---------- Atelier palette (cool slate, light default) ------ */
+  --paper:        #eef0f4;
+  --paper-2:      #e6e9ef;
+  --paper-3:      #dadee6;
+  --card:         #f7f8fa;
+  --card-2:       #eef1f5;
 
-  --ink:          #1a1814;
-  --ink-2:        #3a352d;
-  --ink-3:        #6b6455;
-  --ink-4:        #9a927f;
-  --ink-5:        #b8b19c;
+  --ink:          #181c25;
+  --ink-2:        #363c48;
+  --ink-3:        #5b6373;
+  --ink-4:        #7d8593;
+  --ink-5:        #a4abb8;
 
-  --rule:         #d4cdbb;
-  --rule-soft:    #e3dcc9;
-  --rule-strong:  #9a927f;
+  --rule:         #cdd2da;
+  --rule-soft:    #dde1e8;
+  --rule-strong:  #7d8593;
 
-  --accent:       #8a2a1f;  /* oxblood */
-  --accent-2:     #b24a38;
-  --accent-soft:  #e8d4cc;
-  --accent-ink:   #5a1a12;
+  --accent:       #1f6e7a;  /* peacock teal - brand anchor */
+  --accent-2:     #2b8e9c;
+  --accent-soft:  #d4e5e9;
+  --accent-ink:   #114049;
 
-  --teal:         #1f6e7a;  /* peacock - complementary cool */
-  --teal-2:       #3a8e9b;
-  --teal-soft:    #cfe2e6;
-  --teal-ink:     #134048;
+  --danger:       #8a2a1f;  /* retired oxblood - error / destructive only */
+  --danger-2:     #b24a38;
+  --danger-soft:  #e8d4cc;
+  --danger-ink:   #5a1a12;
+
+  /* Legacy --teal* slots: now alias the brand accent so .fa-duotone
+     secondary fills, hairline cap dots, log/json info colors and
+     --color-info all track the cooled accent without renames. */
+  --teal:         var(--accent);
+  --teal-2:       var(--accent-2);
+  --teal-soft:    var(--accent-soft);
+  --teal-ink:     var(--accent-ink);
 
   --ink-blue:     #2a3a5a;
-  --ochre:        #a67a2a;
+  --ochre:        #8a7032;
   --moss:         #3d7a3d;
 
   /* ---------- Typography ------------------------------------- */
@@ -64,9 +94,9 @@
   --radius-full: 9999px;
 
   /* ---------- Elevation (subtle paper lifts) ----------------- */
-  --shadow-elevation-1: 0 1px 2px 0 rgba(26, 24, 20, 0.06);
-  --shadow-elevation-2: 0 4px 12px -4px rgba(26, 24, 20, 0.10), 0 0 0 1px rgba(26, 24, 20, 0.03);
-  --shadow-elevation-3: 0 12px 24px -8px rgba(26, 24, 20, 0.14), 0 0 0 1px rgba(26, 24, 20, 0.04);
+  --shadow-elevation-1: 0 1px 2px 0 rgba(24, 28, 37, 0.06);
+  --shadow-elevation-2: 0 4px 12px -4px rgba(24, 28, 37, 0.10), 0 0 0 1px rgba(24, 28, 37, 0.03);
+  --shadow-elevation-3: 0 12px 24px -8px rgba(24, 28, 37, 0.14), 0 0 0 1px rgba(24, 28, 37, 0.04);
 
   /* ---------- Layout ----------------------------------------- */
   --spacing-sidebar: 236px;
@@ -115,8 +145,8 @@
   --color-success-light:          #5a9a5a;
   --color-warning:                var(--ochre);
   --color-warning-light:          #c49848;
-  --color-error:                  var(--accent);
-  --color-error-light:            var(--accent-2);
+  --color-error:                  var(--danger);
+  --color-error-light:            var(--danger-2);
   --color-info:                   var(--teal);
   --color-info-light:             var(--teal-2);
 
@@ -130,25 +160,25 @@
   --accent-violet:     var(--ink-2);
   --accent-amber:      var(--ochre);
   --accent-amber-deep: #6e4411;
-  --accent-rose:       var(--accent);
-  --accent-rose-deep:  var(--accent-ink);
+  --accent-rose:       var(--danger);
+  --accent-rose-deep:  var(--danger-ink);
   --accent-steel:      var(--ink-3);
   --accent-slate:      var(--ink-4);
 
   /* Glow tokens - neutralised; box-shadow utilities still resolve
      but render as quiet ink-tinted shadows. */
   --glow-success: rgba(61, 122, 61, 0.20);
-  --glow-warning: rgba(166, 122, 42, 0.20);
+  --glow-warning: rgba(138, 112, 50, 0.20);
   --glow-error:   rgba(138, 42, 31, 0.20);
   --glow-info:    rgba(31, 110, 122, 0.20);
-  --glow-primary-soft:   rgba(138, 42, 31, 0.14);
+  --glow-primary-soft:   rgba(31, 110, 122, 0.14);
   --glow-secondary-soft: rgba(42, 58, 90, 0.12);
-  --glow-tertiary-soft:  rgba(58, 53, 45, 0.10);
-  --glow-copper-soft:    rgba(138, 42, 31, 0.16);
+  --glow-tertiary-soft:  rgba(54, 60, 72, 0.10);
+  --glow-copper-soft:    rgba(31, 110, 122, 0.16);
 
   /* Readiness ring tokens (single-tone) */
-  --readiness-ring-track:    rgba(154, 146, 127, 0.30);
-  --readiness-ring-tertiary: rgba(138, 42, 31, 0.86);
+  --readiness-ring-track:    rgba(125, 133, 147, 0.30);
+  --readiness-ring-tertiary: rgba(31, 110, 122, 0.86);
 
   /* ---------- Animations ------------------------------------- */
   --animate-fade-in:  fade-in 0.3s ease-out;
@@ -209,7 +239,7 @@
     font-family: var(--font-body);
     background: var(--paper);
     color: var(--ink);
-    font-size: 14px;
+    font-size: 16px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -226,9 +256,9 @@
     pointer-events: none;
     z-index: 0;
     background-image:
-      radial-gradient(circle at 20% 30%, rgba(154, 146, 127, 0.04) 0, transparent 50%),
-      radial-gradient(circle at 80% 70%, rgba(138, 42, 31, 0.025) 0, transparent 60%),
-      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.09 0 0 0 0 0.07 0 0 0 0.04 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+      radial-gradient(circle at 20% 30%, rgba(125, 133, 147, 0.04) 0, transparent 50%),
+      radial-gradient(circle at 80% 70%, rgba(31, 110, 122, 0.025) 0, transparent 60%),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.094 0 0 0 0 0.110 0 0 0 0 0.145 0 0 0 0.04 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
   }
 
   #root {
@@ -261,19 +291,29 @@
   }
 
   /* ============================================================
-     FONT AWESOME DUOTONE - peacock-led with faint warm silhouette.
-     Primary draws a soft warm-gray outline in --ink-5; secondary
-     fills decorative shapes in --teal-2 at ~80% opacity, doing the
-     real visibility work. Lifts to ~90% on hover and active nav.
-     Inverted on oxblood backgrounds (paper-on-accent) and overridden
-     by .icon-error to oxblood for error states. Dark mode bumps
-     primary back to --ink-2 so icons stay legible on near-black paper.
+     FONT AWESOME DUOTONE - teal-led, ink-3 silhouette.
+     Primary draws a confident cool-gray outline in --ink-3
+     (matched to body-text weight); secondary fills decorative
+     shapes in --teal-2 (= --accent-2, teal) at ~80% opacity. The
+     teal does the chromatic work; the ink-3 stroke gives the icon
+     enough luminance contrast to clear WCAG 3:1 on the paper
+     surfaces. Lifts to ~90% / 100% opacity on active nav and
+     hover. Inverted on accent backgrounds (paper-on-accent) and
+     overridden by .icon-error to --danger (oxblood) for error
+     states. Dark mode bumps primary to --ink-2 for parity against
+     near-black paper.
      ============================================================ */
   .fa-duotone {
-    --fa-primary-color: var(--ink-5);
+    --fa-primary-color: var(--ink-3);
     --fa-secondary-color: var(--teal-2);
     --fa-primary-opacity: 1;
     --fa-secondary-opacity: 0.8;
+    transition:
+      --fa-primary-color 200ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      --fa-secondary-color 200ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      --fa-secondary-opacity 200ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      transform 200ms cubic-bezier(0.21, 0.9, 0.3, 1);
+    transform-origin: center;
   }
 
   .tool-btn-primary .fa-duotone,
@@ -284,15 +324,50 @@
   }
 
   .nav-rail-item-active .fa-duotone {
-    --fa-primary-color: var(--ink-4);
+    --fa-primary-color: var(--ink-2);
     --fa-secondary-color: var(--teal-2);
     --fa-secondary-opacity: 0.9;
   }
 
+  /* Coordinated duotone hover: primary darkens, secondary becomes fully
+     opaque, icon scales 1.06. Triggered by the parent control's hover
+     state so every duotone in a button/link/row reacts together. */
   .tool-btn:hover .fa-duotone,
   .nav-rail-item:hover .fa-duotone,
-  .fomod-list-item:hover .fa-duotone {
+  .fomod-list-item:hover .fa-duotone,
+  .card-lift:hover .fa-duotone,
+  .queue-ledger:hover .fa-duotone,
+  .serif-link-arrow:hover .fa-duotone,
+  .upload-dropzone:not([data-disabled="true"]):hover .fa-duotone,
+  a:hover .fa-duotone,
+  button:hover .fa-duotone {
+    --fa-primary-color: var(--ink-2);
+    --fa-secondary-opacity: 1;
+    transform: scale(1.06);
+  }
+  /* Dragging state: icon shifts to deep-accent family to harmonise
+     with the accent-soft (pale teal) fill behind it. */
+  .upload-dropzone[data-dragging="true"] .fa-duotone {
+    --fa-primary-color: var(--accent-ink);
+    --fa-secondary-color: var(--accent);
+    --fa-secondary-opacity: 0.85;
+  }
+  /* Inverted-bg buttons: primary stays paper-on-accent, but lift secondary
+     opacity so the hover still reads. */
+  .tool-btn-primary:hover .fa-duotone,
+  .tool-btn-ink:hover .fa-duotone {
+    --fa-primary-color: var(--paper);
     --fa-secondary-opacity: 0.9;
+    transform: scale(1.06);
+  }
+  /* Press state - icon snaps slightly inward */
+  .tool-btn:active .fa-duotone,
+  .nav-rail-item:active .fa-duotone,
+  .queue-ledger:active .fa-duotone,
+  button:active .fa-duotone,
+  a:active .fa-duotone {
+    transform: scale(0.97);
+    transition-duration: 80ms;
   }
 
   /* Status-tinted modifier classes (opt-in) */
@@ -305,8 +380,8 @@
     --fa-secondary-color: var(--ochre);
   }
   .fa-duotone.icon-error {
-    --fa-primary-color: var(--accent);
-    --fa-secondary-color: var(--accent);
+    --fa-primary-color: var(--danger);
+    --fa-secondary-color: var(--danger);
   }
 
   ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -361,7 +436,7 @@
     letter-spacing: -0.015em;
   }
 
-  /* Oxblood period at the end of big titles */
+  /* Teal period at the end of big titles */
   .display-period {
     color: var(--accent);
     font-style: italic;
@@ -395,7 +470,7 @@
     align-items: baseline;
     gap: 0.55rem;
     font-family: var(--font-mono);
-    font-size: 0.66rem;
+    font-size: 0.75rem;
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.18em;
@@ -415,7 +490,7 @@
   /* Mono micro-text for build-log style metadata */
   .timestamp-print {
     font-family: var(--font-mono);
-    font-size: 0.68rem;
+    font-size: 0.75rem;
     letter-spacing: 0.02em;
     color: var(--ink-4);
     font-weight: 400;
@@ -448,7 +523,7 @@
   /* Mono micro caption family */
   .ui-label {
     font-family: var(--font-mono);
-    font-size: 0.62rem;
+    font-size: 0.7rem;
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.18em;
@@ -456,7 +531,7 @@
   }
   .ui-micro {
     font-family: var(--font-mono);
-    font-size: 0.66rem;
+    font-size: 0.75rem;
     color: var(--ink-4);
   }
   .ui-xs { font-size: 0.75rem; }
@@ -491,7 +566,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 22px 8px;
+    padding: 8px 22px 7px;
     border-bottom: 1px solid var(--rule-soft);
     background: var(--card-2);
     position: relative;
@@ -508,7 +583,7 @@
   .atelier-section-num {
     font-family: var(--font-mono);
     font-style: italic;
-    font-size: 0.78rem;
+    font-size: 0.85rem;
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--accent);
@@ -523,7 +598,7 @@
   }
   .atelier-section-title {
     font-family: var(--font-display);
-    font-size: 0.95rem;
+    font-size: 1.0625rem;
     font-weight: 500;
     letter-spacing: -0.01em;
     color: var(--ink);
@@ -534,7 +609,7 @@
     right: 18px;
     top: 4px;
     font-family: var(--font-display);
-    font-size: 78px;
+    font-size: 64px;
     line-height: 1;
     color: var(--rule-strong);
     font-weight: 400;
@@ -550,7 +625,7 @@
     z-index: 1;
   }
   .atelier-section-body-pad {
-    padding: 22px 28px;
+    padding: 16px 24px;
   }
 
   /* Fill mode - grow into the parent flex column. Body is a flex column
@@ -584,10 +659,122 @@
     display: flex;
     align-items: center;
     gap: 22px;
-    padding: 9px 22px;
+    padding: 8px 22px;
     border-top: 1px solid var(--rule);
     background: var(--paper-2);
     flex-wrap: wrap;
+  }
+
+  /* ============================================================
+     COLLAPSIBLE QUEUE WRAPPER - animates body height via grid-row
+     ============================================================ */
+
+  .queue-collapse-wrap {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 280ms cubic-bezier(0.21, 0.9, 0.3, 1);
+  }
+  .queue-collapse-wrap[data-collapsed="true"] {
+    grid-template-rows: 0fr;
+  }
+  .queue-collapse-wrap > .queue-collapse-inner {
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* Inner scroller inside the queue body. Caps height so the queue can never
+     dominate the page; cap shrinks on shorter viewports so the page itself
+     never scrolls (the inner scroller does instead). */
+  .queue-scroll {
+    max-height: 320px;
+    overflow-y: auto;
+  }
+  @media (max-height: 760px) {
+    .queue-scroll { max-height: 220px; }
+  }
+  @media (max-height: 660px) {
+    .queue-scroll { max-height: 160px; }
+  }
+
+  /* ============================================================
+     QUEUE LEDGER - editorial single-line summary shown in Section 02's
+     header meta slot when the queue body is collapsed. Filename in
+     EB Garamond italic, percent paired with it, teal vertical rule
+     before the expand link, and a thin teal progress sweep along the
+     bottom edge giving live feedback even when collapsed.
+     ============================================================ */
+
+  .queue-ledger {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    flex: 1;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 6px 10px 8px;
+    margin: -6px -10px -8px;
+    border-radius: 3px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    transition: background-color 150ms ease;
+  }
+  .queue-ledger:hover {
+    background: var(--card-2);
+  }
+  .queue-ledger:active {
+    background: var(--card);
+    transform: scale(0.997);
+  }
+  .queue-ledger-left {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+    max-width: 360px;
+  }
+  .queue-ledger-filename {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+    letter-spacing: -0.005em;
+    line-height: 1.2;
+  }
+  .queue-ledger-dots {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .queue-ledger-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .queue-ledger-rule {
+    display: inline-block;
+    width: 1px;
+    height: 12px;
+    background: var(--rule-strong);
+    opacity: 0.55;
+  }
+  .queue-ledger-progress {
+    position: absolute;
+    left: 10px;
+    bottom: 4px;
+    height: 1.5px;
+    background: var(--accent);
+    transition: width 320ms cubic-bezier(0.21, 0.9, 0.3, 1);
+    pointer-events: none;
+    border-radius: 1px;
+  }
+  .queue-ledger[data-active="true"] .queue-ledger-progress {
+    box-shadow: 0 0 8px rgba(31, 110, 122, 0.25);
   }
 
   /* ============================================================
@@ -607,8 +794,8 @@
                 border-color 220ms ease;
   }
   .card-lift:hover {
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-elevation-2);
+    transform: translateY(-2px);
+    box-shadow: 0 1px 0 var(--rule-soft), 0 10px 20px -12px rgba(24, 28, 37, 0.16);
     border-color: var(--rule-strong);
   }
 
@@ -623,12 +810,112 @@
 
   .empty-state-card {
     border-radius: var(--radius-md);
-    border: 1px dashed rgba(154, 146, 127, 0.55);
+    border: 1px dashed rgba(125, 133, 147, 0.55);
     background: var(--card-2);
     padding: 1.25rem;
     display: flex;
     align-items: center;
     gap: 0.875rem;
+  }
+
+  /* ============================================================
+     UPLOAD DROPZONE - the "Click or drag to install" file-upload
+     surface. Three states resolve through nested selectors:
+       default → hover → dragging
+     The inner `.upload-dropzone-card` reuses `.empty-state-card`
+     for its dashed border and base layout, then layers state-driven
+     bg / border-color shifts. The icon-ring follows along.
+     ============================================================ */
+
+  .upload-dropzone {
+    padding: 32px 28px;
+    cursor: pointer;
+    background: transparent;
+  }
+  .upload-dropzone[data-disabled="true"] {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+  /* Plugin-purged blocked state. The lightest red of the three
+     (vs. dots and buttons) since the dropzone is a large surface -
+     a faint danger wash reads as "blocked" without overwhelming
+     the editorial paper aesthetic. data-purged wins over
+     data-disabled by source order. */
+  .upload-dropzone[data-purged="true"] {
+    cursor: not-allowed;
+    opacity: 1;
+  }
+  .upload-dropzone[data-purged="true"] .upload-dropzone-card {
+    border-color: var(--danger);
+    background: color-mix(in oklab, var(--danger-soft) 35%, var(--card));
+  }
+  .upload-dropzone[data-purged="true"] .upload-dropzone-icon-ring {
+    border-color: var(--danger);
+    background: var(--danger-soft);
+  }
+  .upload-dropzone[data-purged="true"] .fa-duotone {
+    --fa-primary-color: var(--danger);
+    --fa-secondary-color: var(--danger);
+    --fa-secondary-opacity: 0.7;
+  }
+
+  .upload-dropzone-card {
+    transition:
+      background-color 220ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      border-color 220ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      box-shadow 220ms cubic-bezier(0.21, 0.9, 0.3, 1);
+  }
+
+  /* Hover (mouse over, not dragging): card takes on a cool ink-blue
+     accent. Subtle blue-tinted fill, ink-blue dashed border, blue-cast
+     shadow halo. Navy counterpoint to the teal drag-armed state. */
+  .upload-dropzone:not([data-disabled="true"]):not([data-dragging="true"]):hover
+    .upload-dropzone-card {
+    background: color-mix(in oklab, var(--ink-blue) 6%, var(--card));
+    border-color: var(--ink-blue);
+    box-shadow: 0 1px 0 var(--rule-soft), 0 6px 14px -10px rgba(42, 58, 90, 0.28);
+  }
+
+  /* Dragging: the area inside the dashed border fills with the soft
+     accent tint, the border becomes teal, the whole card pulses
+     gently. Reads as "drop target armed". */
+  .upload-dropzone[data-dragging="true"] .upload-dropzone-card {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    border-style: dashed;
+    box-shadow: 0 0 0 4px rgba(31, 110, 122, 0.10);
+    animation: upload-dropzone-pulse 1.4s ease-in-out infinite;
+  }
+
+  @keyframes upload-dropzone-pulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(31, 110, 122, 0.10); }
+    50%      { box-shadow: 0 0 0 6px rgba(31, 110, 122, 0.18); }
+  }
+
+  /* Icon ring inside the dropzone. Tracks hover + dragging states. */
+  .upload-dropzone-icon-ring {
+    width: 38px;
+    height: 38px;
+    border: 1px solid var(--rule-strong);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--paper-2);
+    flex-shrink: 0;
+    transition:
+      transform 300ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      background-color 220ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      border-color 220ms cubic-bezier(0.21, 0.9, 0.3, 1);
+  }
+  .upload-dropzone:not([data-disabled="true"]):not([data-dragging="true"]):hover
+    .upload-dropzone-icon-ring {
+    background: color-mix(in oklab, var(--ink-blue) 8%, var(--paper-2));
+    border-color: var(--ink-blue);
+  }
+  .upload-dropzone[data-dragging="true"] .upload-dropzone-icon-ring {
+    background: var(--paper);
+    border-color: var(--accent);
   }
 
   /* ============================================================
@@ -645,15 +932,25 @@
     background: var(--card-2);
     color: var(--ink-2);
     font-family: var(--font-body);
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.2;
     letter-spacing: -0.005em;
-    transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
+    transition:
+      border-color 180ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      background-color 180ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      color 180ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      box-shadow 180ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      transform 80ms cubic-bezier(0.21, 0.9, 0.3, 1);
     white-space: nowrap;
   }
   .tool-btn:hover {
     border-color: var(--ink-4);
     background: var(--card);
+    box-shadow: 0 1px 0 var(--rule-soft), 0 6px 12px -8px rgba(24, 28, 37, 0.12);
+  }
+  .tool-btn:active {
+    transform: translateY(1px);
+    box-shadow: none;
   }
   .tool-btn:disabled {
     opacity: 0.55;
@@ -664,6 +961,38 @@
     border-color: var(--rule);
     background: var(--paper-2);
   }
+  /* Plugin-purged blocked state. Still :disabled (cursor, prevented
+     click), but visually communicates "blocked because the plugin was
+     purged" rather than the generic faded-grey disabled look. The
+     opacity:1 deliberately overrides the .tool-btn:disabled fade so
+     the danger-soft fill carries the signal at full saturation.
+     Selectors include :disabled to bump specificity above the
+     existing .tool-btn:disabled / .tool-btn-primary:disabled rules
+     (which otherwise win on source order and re-apply the teal
+     accent fill on the Run tests button). */
+  .tool-btn[data-purged="true"]:disabled {
+    border-color: var(--danger);
+    background: var(--danger-soft);
+    color: var(--danger);
+    opacity: 1;
+  }
+  .tool-btn[data-purged="true"]:disabled:hover {
+    border-color: var(--danger);
+    background: var(--danger-soft);
+    box-shadow: none;
+    transform: none;
+  }
+  .tool-btn[data-purged="true"]:disabled .fa-duotone {
+    --fa-primary-color: var(--danger);
+    --fa-secondary-color: var(--danger);
+    --fa-secondary-opacity: 0.7;
+  }
+  .tool-btn-primary[data-purged="true"]:disabled {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    color: var(--danger);
+    opacity: 1;
+  }
   .tool-btn-primary {
     background: var(--accent);
     border-color: var(--accent);
@@ -672,6 +1001,7 @@
   .tool-btn-primary:hover {
     background: var(--accent-ink);
     border-color: var(--accent-ink);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.06), 0 8px 18px -10px rgba(31, 110, 122, 0.42);
   }
   .tool-btn-primary:disabled {
     background: var(--accent);
@@ -689,7 +1019,7 @@
     background: var(--ink-2);
     border-color: var(--ink-2);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px -4px rgba(26, 24, 20, 0.30);
+    box-shadow: 0 4px 12px -4px rgba(24, 28, 37, 0.30);
   }
 
   /* Legacy action-btn base - kept so any references still resolve */
@@ -719,10 +1049,10 @@
   }
   .dot-status-warn {
     background: var(--ochre);
-    box-shadow: 0 0 0 3px rgba(166, 122, 42, 0.12);
+    box-shadow: 0 0 0 3px rgba(138, 112, 50, 0.12);
   }
   .dot-status-error {
-    background: var(--accent);
+    background: var(--danger);
     box-shadow: 0 0 0 3px rgba(138, 42, 31, 0.14);
   }
   .dot-status-pulse {
@@ -738,7 +1068,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 3px 0;
-    font-size: 10.5px;
+    font-size: 12px;
     font-family: var(--font-mono);
     color: var(--ink-3);
     letter-spacing: 0.04em;
@@ -772,6 +1102,11 @@
   .nav-rail-item:hover {
     background: var(--card-2);
   }
+  .nav-rail-item:hover .nav-rail-num,
+  .nav-rail-item:hover .nav-rail-label {
+    color: var(--ink-2);
+    transition: color 180ms cubic-bezier(0.21, 0.9, 0.3, 1);
+  }
   .nav-rail-item-active {
     background: var(--card);
     border-color: var(--rule);
@@ -789,7 +1124,7 @@
   .nav-rail-num {
     font-family: var(--font-mono);
     font-style: italic;
-    font-size: 10px;
+    font-size: 12px;
     letter-spacing: 0.1em;
     color: var(--ink-4);
   }
@@ -809,13 +1144,13 @@
     color: var(--ink);
   }
   .nav-rail-label {
-    font-size: 13.5px;
+    font-size: 14.5px;
     color: var(--ink-2);
     letter-spacing: -0.005em;
   }
   .nav-rail-count {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 12px;
     color: var(--ink-4);
     padding: 2px 6px;
     background: var(--paper-3);
@@ -874,7 +1209,7 @@
     padding: 3px 7px;
     border-radius: var(--radius-sm);
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 400;
     letter-spacing: 0.02em;
     border: 1px solid var(--rule-soft);
@@ -890,9 +1225,9 @@
   .skeleton-line {
     border-radius: 999px;
     background: linear-gradient(90deg,
-      rgba(154, 146, 127, 0.18),
-      rgba(212, 205, 187, 0.32),
-      rgba(154, 146, 127, 0.18));
+      rgba(125, 133, 147, 0.18),
+      rgba(218, 222, 230, 0.32),
+      rgba(125, 133, 147, 0.18));
     background-size: 200% 100%;
     animation: skeleton-shimmer 1.4s linear infinite;
   }
@@ -939,6 +1274,53 @@
   }
 
   /* ============================================================
+     SERIF LINK WITH ANIMATED ARROW - editorial pattern used for
+     "expand", "collapse", "tail log", "browse", and back links.
+     Wraps the arrow glyph in a `.arrow` span so it can translate
+     on hover without dragging the label letterforms with it.
+     Use `.serif-link-arrow-back` for left-pointing variants so
+     the arrow slides leftward on hover.
+     ============================================================ */
+  .serif-link-arrow {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.35em;
+    color: var(--ink-blue);
+    text-decoration: none;
+    transition: color 180ms cubic-bezier(0.21, 0.9, 0.3, 1);
+  }
+  .serif-link-arrow > .arrow {
+    display: inline-block;
+    transition: transform 220ms cubic-bezier(0.21, 0.9, 0.3, 1);
+  }
+  .serif-link-arrow:hover {
+    color: var(--accent);
+  }
+  .serif-link-arrow:hover > .arrow {
+    transform: translateX(3px);
+  }
+  .serif-link-arrow.serif-link-arrow-back:hover > .arrow {
+    transform: translateX(-3px);
+  }
+
+  /* ============================================================
+     FOCUS-VISIBLE - keyboard-only ring keyed off the accent.
+     Browser default rings are removed by Tailwind's reset; this
+     restores a clean, brand-coherent focus state.
+     ============================================================ */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+  .tool-btn:focus-visible,
+  .queue-ledger:focus-visible,
+  .nav-rail-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* ============================================================
      SYNTAX HIGHLIGHTING - JSON & log lines
      Colors resolve through theme tokens so dark/light auto-flip.
      ============================================================ */
@@ -957,7 +1339,7 @@
   .log-level-info    { color: var(--ink-blue); font-weight: 500; }
   .log-level-debug   { color: var(--ink-3); }
   .log-level-warning { color: var(--ochre); font-weight: 600; }
-  .log-level-error   { color: var(--accent); font-weight: 600; }
+  .log-level-error   { color: var(--danger); font-weight: 600; }
   .log-path          { color: var(--ochre); font-weight: 500; }
   .log-protocol      { color: var(--ink-blue); font-weight: 500; }
   .log-url           { color: var(--ink-blue); text-decoration: underline; text-decoration-color: rgba(42, 58, 90, 0.32); text-underline-offset: 2px; }
@@ -969,7 +1351,7 @@
   .log-operator      { color: var(--ink-3); }
   .log-method        { color: var(--ink-blue); font-weight: 500; }
   .log-status-ok     { color: var(--moss); font-weight: 500; }
-  .log-status-err    { color: var(--accent); font-weight: 600; }
+  .log-status-err    { color: var(--danger); font-weight: 600; }
   .log-ip            { color: var(--ink-4); }
   .log-key           { color: var(--moss); }
   .log-guid          { color: var(--ink-4); font-style: italic; }
@@ -986,12 +1368,12 @@
 
   .log-progress-line {
     position: relative;
-    background: rgba(138, 42, 31, 0.04);
+    background: rgba(31, 110, 122, 0.04);
   }
   .log-collapsed-count {
     display: inline-block;
     margin-right: 0.75em;
-    font-size: 0.68rem;
+    font-size: 0.78rem;
     color: var(--ink-4);
     font-style: italic;
   }
@@ -1016,39 +1398,49 @@
 
 /* ================================================================
    DARK THEME - "ash"
-   Single override block; flips paper/ink/card/rule. Oxblood accent
-   stays. Dark mode is a tonal inversion, not a separate aesthetic.
+   Single override block; flips paper/ink/card/rule. Teal accent
+   brightens; --danger (oxblood) stays preserved for error states.
+   Dark mode is a tonal inversion, not a separate aesthetic.
    ================================================================ */
 
 [data-theme="dark"] {
-  --paper:        #1a1814;
-  --paper-2:      #221f1a;
-  --paper-3:      #2a2620;
-  --card:         #14120f;
-  --card-2:       #1c1a16;
+  --paper:        #14171f;
+  --paper-2:      #1c1f28;
+  --paper-3:      #232733;
+  --card:         #10131a;
+  --card-2:       #181c24;
 
-  --ink:          #f2ede3;
-  --ink-2:        #d8d2c3;
-  --ink-3:        #a8a290;
-  --ink-4:        #7a7464;
-  --ink-5:        #4a453c;
+  /* Ink scale: light theme steps ~14 L units between tiers; the original
+     dark scale collapsed to L=24 at --ink-5 (~2.5:1 against --card, fails
+     AA). These values restore even ~14 L stepping so muted text, dim
+     dots, and metadata stay legible on near-black surfaces. */
+  --ink:          #eef0f4;
+  --ink-2:        #c8cdd6;
+  --ink-3:        #a0a8b6;
+  --ink-4:        #7a8290;
+  --ink-5:        #565c69;
 
-  --rule:         #3a352d;
-  --rule-soft:    #2a2620;
-  --rule-strong:  #6a6454;
+  --rule:         #353a45;
+  --rule-soft:    #282d37;
+  --rule-strong:  #6a7383;
 
-  --accent:       #b24a38;
-  --accent-2:     #d06a52;
-  --accent-soft:  #3a201a;
-  --accent-ink:   #e8a496;
+  --accent:       #2b8e9c;
+  --accent-2:     #4cb0bd;
+  --accent-soft:  #1a3a40;
+  --accent-ink:   #a4d6dd;
 
-  --teal:         #3aa0ad;
-  --teal-2:       #5cbcc8;
-  --teal-soft:    #1a3a40;
-  --teal-ink:     #a4d6dd;
+  --danger:       #c45643;
+  --danger-2:     #de7560;
+  --danger-soft:  #3a201a;
+  --danger-ink:   #e8a496;
+
+  --teal:         var(--accent);
+  --teal-2:       var(--accent-2);
+  --teal-soft:    var(--accent-soft);
+  --teal-ink:     var(--accent-ink);
 
   --ink-blue:     #6a82a8;
-  --ochre:        #c89a4a;
+  --ochre:        #b89456;
   --moss:         #6a9a6a;
 
   /* Re-aliases to keep legacy color tokens in sync */
@@ -1067,11 +1459,26 @@
   --color-surface-container-highest: var(--paper-3);
   --color-success:                var(--moss);
   --color-warning:                var(--ochre);
-  --color-error:                  var(--accent);
+  --color-error:                  var(--danger);
+  --color-error-light:            var(--danger-2);
   --color-info:                   var(--teal);
   --color-secondary:              var(--ink-blue);
   --color-tertiary:               var(--ink-2);
   --color-copper:                 var(--accent);
+
+  /* Glow tokens re-tuned for near-black surfaces. The light-theme
+     defaults sit at 0.10-0.20 alpha which is invisible against --card
+     (#10131a). Matching hues, brighter alphas. */
+  --glow-success:        rgba(106, 154, 106, 0.28);
+  --glow-warning:        rgba(184, 148, 86,  0.28);
+  --glow-error:          rgba(196, 86,  67,  0.32);
+  --glow-info:           rgba( 43, 142, 156, 0.30);
+  --glow-primary-soft:   rgba( 43, 142, 156, 0.22);
+  --glow-secondary-soft: rgba(106, 130, 168, 0.18);
+  --glow-tertiary-soft:  rgba(200, 205, 214, 0.10);
+  --glow-copper-soft:    rgba( 43, 142, 156, 0.24);
+
+  --readiness-ring-track: rgba(138, 147, 163, 0.18);
 
   --shadow-elevation-1: 0 1px 3px 0 rgba(0, 0, 0, 0.45);
   --shadow-elevation-2: 0 4px 16px -2px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
@@ -1079,8 +1486,10 @@
 }
 
 /* Icons: hold the primary stroke one tier brighter than the light-mode
-   default because --ink-3 (#a8a290) is too dim against near-black paper.
-   Active nav lifts to --ink (full cream) for emphasis. */
+   default. In dark mode --ink-3 (#8a93a3) clears 3:1 against near-black
+   paper but feels muddy; --ink-2 (#c8cdd6) gives the silhouette the
+   substance the inky surface wants. Active nav lifts to --ink for
+   emphasis. */
 [data-theme="dark"] .fa-duotone {
   --fa-primary-color: var(--ink-2);
 }
@@ -1090,16 +1499,16 @@
 
 [data-theme="dark"] body::before {
   background-image:
-    radial-gradient(circle at 20% 30%, rgba(212, 205, 187, 0.04) 0, transparent 50%),
-    radial-gradient(circle at 80% 70%, rgba(178, 74, 56, 0.03) 0, transparent 60%),
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.95 0 0 0 0 0.93 0 0 0 0 0.89 0 0 0 0.04 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    radial-gradient(circle at 20% 30%, rgba(200, 205, 214, 0.04) 0, transparent 50%),
+    radial-gradient(circle at 80% 70%, rgba(43, 142, 156, 0.03) 0, transparent 60%),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.93 0 0 0 0 0.94 0 0 0 0 0.96 0 0 0 0.04 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 }
 
 [data-theme="dark"] .skeleton-line {
   background: linear-gradient(90deg,
-    rgba(122, 116, 100, 0.18),
-    rgba(168, 162, 144, 0.28),
-    rgba(122, 116, 100, 0.18));
+    rgba(155, 165, 180, 0.10),
+    rgba(200, 210, 224, 0.22),
+    rgba(155, 165, 180, 0.10));
   background-size: 200% 100%;
 }
 
@@ -1109,4 +1518,47 @@
 }
 [data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background: var(--ink-4);
+}
+
+/* ----------------------------------------------------------------
+   Dark-mode shadow overrides. Most :hover lifts and status-dot halos
+   in the base theme use `rgba(24, 28, 37, ...)` (light-theme ink) or
+   light-tuned status hues at ~0.12 alpha. Those drops render as
+   nothing against --card (#10131a). Restate them with deeper black
+   drops or rim-light hairlines so cards still lift, status dots
+   still halo, and the primary/ink button hover halos read.
+   ---------------------------------------------------------------- */
+
+[data-theme="dark"] .card-lift:hover {
+  box-shadow: 0 1px 0 var(--rule), 0 14px 32px -12px rgba(0, 0, 0, 0.65);
+  border-color: var(--rule-strong);
+}
+
+[data-theme="dark"] .upload-dropzone:not([data-disabled="true"]):not([data-dragging="true"]):hover .upload-dropzone-card {
+  box-shadow:
+    0 1px 0 var(--rule),
+    0 8px 18px -10px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(106, 130, 168, 0.18);
+}
+
+[data-theme="dark"] .tool-btn:hover {
+  box-shadow: 0 1px 0 var(--rule), 0 6px 14px -8px rgba(0, 0, 0, 0.55);
+}
+
+[data-theme="dark"] .tool-btn-primary:hover {
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 22px -10px rgba(76, 176, 189, 0.55);
+}
+
+[data-theme="dark"] .tool-btn-ink:hover {
+  box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.65);
+}
+
+[data-theme="dark"] .dot-status-on    { box-shadow: 0 0 0 3px rgba(106, 154, 106, 0.22); }
+[data-theme="dark"] .dot-status-warn  { box-shadow: 0 0 0 3px rgba(184, 148, 86,  0.22); }
+[data-theme="dark"] .dot-status-error { box-shadow: 0 0 0 3px rgba(196, 86,  67,  0.28); }
+
+[data-theme="dark"] .queue-ledger[data-active="true"] .queue-ledger-progress {
+  box-shadow: 0 0 10px rgba(76, 176, 189, 0.40);
 }
