@@ -3,24 +3,20 @@ REM ============================================================================
 REM test.bat - Run the salma Rust test suite and the ABI smoke tests
 REM ============================================================================
 REM This script:
-REM   1. cargo test        - the full unit + golden-fixture suite (release)
+REM   1. cargo test        - the full unit + integration suite (release)
 REM   2. smoke_ctypes.py   - raw C ABI surface through ctypes
 REM   3. smoke_plugin.py   - the MO2 plugin's OWN find_dll / load_dll /
 REM                          _configure_dll / _check_api_version, run verbatim
 REM                          against the packaged DLL
 REM
-REM All three are corpus-free. The corpus-backed parity checks are separate and
-REM need the SALMA_* env vars (scripts\setup-env.bat):
-REM   python tools\compare_infer.py target\release\mo2_salma_rs.dll --curated
-REM   python tools\run_harness.py
-REM
-REM CARGO_BUILD_JOBS is capped for the same reason as in build.bat.
+REM All three are self-contained. Validating against a live MO2 install is a
+REM separate step and needs the SALMA_* env vars through setup.bat
 REM ============================================================================
 
 setlocal enabledelayedexpansion
 
 echo ============================================================================
-echo                       SALMA TEST RUNNER (Rust)
+echo                              SALMA TEST RUNNER
 echo ============================================================================
 echo.
 
@@ -60,7 +56,7 @@ if errorlevel 1 (
         echo ERROR: target\release\mo2_salma_rs.dll not found. Run build.bat first.
         set ALL_PASSED=0
     ) else (
-        python "%REPO_ROOT%\tools\smoke_ctypes.py" "%REPO_ROOT%\target\release\mo2_salma_rs.dll"
+        python "%REPO_ROOT%\scripts\smoke_ctypes.py" "%REPO_ROOT%\target\release\mo2_salma_rs.dll"
         if errorlevel 1 set ALL_PASSED=0
     )
 )
@@ -77,10 +73,10 @@ if errorlevel 1 (
 ) else (
     if not exist "%REPO_ROOT%\target\package\mo2-salma.dll" (
         echo   Staging the packaged DLL first...
-        python "%REPO_ROOT%\tools\package.py" --no-build
+        python "%REPO_ROOT%\scripts\package.py" --no-build
         if errorlevel 1 set ALL_PASSED=0
     )
-    python "%REPO_ROOT%\tools\smoke_plugin.py"
+    python "%REPO_ROOT%\scripts\smoke_plugin.py"
     if errorlevel 1 set ALL_PASSED=0
 )
 echo.
