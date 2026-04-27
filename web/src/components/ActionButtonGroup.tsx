@@ -23,7 +23,7 @@ function ToolGroup({ n, label, children }: { n: string; label: string; children:
         style={{
           fontFamily: 'var(--font-mono)',
           fontStyle: 'italic',
-          fontSize: 9,
+          fontSize: 11,
           letterSpacing: '0.2em',
           textTransform: 'uppercase',
           color: 'var(--ink-4)',
@@ -99,7 +99,7 @@ export default function ActionButtonGroup({
           >
             <i
               className={`fa-duotone fa-solid fa-rocket-launch${pluginActionRunning === 'deploy' ? ' fa-bounce' : ''}`}
-              style={{ fontSize: 13 }}
+              style={{ fontSize: 14 }}
             />
             <span>{pluginActionRunning === 'deploy' ? 'Deploying...' : 'Deploy plugin'}</span>
           </button>
@@ -111,7 +111,7 @@ export default function ActionButtonGroup({
           >
             <i
               className={`fa-duotone fa-solid fa-fire-flame-curved${pluginActionRunning === 'purge' ? ' fa-beat-fade' : ''}`}
-              style={{ fontSize: 13 }}
+              style={{ fontSize: 14 }}
             />
             <span>{pluginActionRunning === 'purge' ? 'Purging...' : 'Purge plugin'}</span>
           </button>
@@ -123,6 +123,7 @@ export default function ActionButtonGroup({
           <button
             type="button"
             className="tool-btn"
+            data-purged={!pluginInstalled ? 'true' : 'false'}
             onClick={handleScanFomods}
             disabled={scanRunning || !pluginInstalled}
           >
@@ -132,13 +133,14 @@ export default function ActionButtonGroup({
                   ? 'fa-link-slash'
                   : `fa-radar${scanRunning ? ' fa-spin' : ''}`
               }`}
-              style={{ fontSize: 13 }}
+              style={{ fontSize: 14 }}
             />
             <span>{scanRunning ? 'Scanning...' : 'Scan FOMODs'}</span>
           </button>
           <button
             type="button"
             className="tool-btn tool-btn-primary"
+            data-purged={!pluginInstalled ? 'true' : 'false'}
             onClick={handleRunTests}
             disabled={testRunning || !pluginInstalled}
           >
@@ -148,15 +150,48 @@ export default function ActionButtonGroup({
                   ? 'fa-ban'
                   : `fa-flask${testRunning ? ' fa-shake' : ''}`
               }`}
-              style={{ fontSize: 13 }}
+              style={{ fontSize: 14 }}
             />
             <span>{testRunning ? 'Tests running...' : 'Run tests'}</span>
           </button>
         </ToolGroup>
+
+        {scanRunning && (
+          <Link
+            to="/logs"
+            className="flex items-center"
+            style={{
+              gap: 6,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              color: 'var(--ink-blue)',
+              textDecoration: 'none',
+            }}
+          >
+            <span className="dot-status dot-status-warn dot-status-pulse" />
+            // tail salma.log -&gt;
+          </Link>
+        )}
+        {testRunning && (
+          <Link
+            to="/logs"
+            className="flex items-center"
+            style={{
+              gap: 6,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 12,
+              color: 'var(--ink-blue)',
+              textDecoration: 'none',
+            }}
+          >
+            <span className="dot-status dot-status-warn dot-status-pulse" />
+            // tail test.log -&gt;
+          </Link>
+        )}
       </div>
 
       {/* Status messages line */}
-      {(actionChip?.key === 'scan' || scanRunning || testRunning || scanError || testError || pluginActionError) && (
+      {(actionChip?.key === 'scan' || scanError || testError || pluginActionError) && (
         <div
           className="flex items-center"
           style={{ gap: 14, flexWrap: 'wrap', marginTop: 12 }}
@@ -167,7 +202,7 @@ export default function ActionButtonGroup({
               style={{
                 gap: 6,
                 fontFamily: 'var(--font-mono)',
-                fontSize: 10.5,
+                fontSize: 12,
                 letterSpacing: '0.1em',
                 textTransform: 'uppercase',
                 color: 'var(--moss)',
@@ -177,46 +212,14 @@ export default function ActionButtonGroup({
               {actionChip.text}
             </span>
           )}
-          {scanRunning && (
-            <Link
-              to="/logs"
-              className="flex items-center"
-              style={{
-                gap: 6,
-                fontFamily: 'var(--font-mono)',
-                fontSize: 10.5,
-                color: 'var(--ink-blue)',
-                textDecoration: 'none',
-              }}
-            >
-              <span className="dot-status dot-status-warn dot-status-pulse" />
-              // tail salma.log -&gt;
-            </Link>
-          )}
-          {testRunning && (
-            <Link
-              to="/logs"
-              className="flex items-center"
-              style={{
-                gap: 6,
-                fontFamily: 'var(--font-mono)',
-                fontSize: 10.5,
-                color: 'var(--ink-blue)',
-                textDecoration: 'none',
-              }}
-            >
-              <span className="dot-status dot-status-warn dot-status-pulse" />
-              // tail test.log -&gt;
-            </Link>
-          )}
           {pluginActionError && (
             <span
               className="flex items-center"
               style={{
                 gap: 6,
                 fontFamily: 'var(--font-mono)',
-                fontSize: 10.5,
-                color: 'var(--accent)',
+                fontSize: 12,
+                color: 'var(--danger)',
               }}
             >
               <span className="dot-status dot-status-error" />
@@ -229,8 +232,8 @@ export default function ActionButtonGroup({
               style={{
                 gap: 6,
                 fontFamily: 'var(--font-mono)',
-                fontSize: 10.5,
-                color: 'var(--accent)',
+                fontSize: 12,
+                color: 'var(--danger)',
               }}
             >
               <span className="dot-status dot-status-error" />
@@ -243,8 +246,8 @@ export default function ActionButtonGroup({
               style={{
                 gap: 6,
                 fontFamily: 'var(--font-mono)',
-                fontSize: 10.5,
-                color: 'var(--accent)',
+                fontSize: 12,
+                color: 'var(--danger)',
               }}
             >
               <span className="dot-status dot-status-error" />

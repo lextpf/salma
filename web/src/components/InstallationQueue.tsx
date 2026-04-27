@@ -19,7 +19,7 @@ function statusColor(status: InstallationJob['status']): string {
     case 'pending':    return 'var(--ink-5)'
     case 'uploading':  return 'var(--accent)'
     case 'processing': return 'var(--ochre)'
-    case 'error':      return 'var(--accent)'
+    case 'error':      return 'var(--danger)'
     default:           return 'var(--ink-5)'
   }
 }
@@ -40,14 +40,14 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
   if (jobs.length === 0) {
     return (
       <div style={{ padding: '32px 28px' }}>
-        <div className="empty-state-card" style={{ borderStyle: 'dashed' }}>
+        <div className="empty-state-card" style={{ borderStyle: 'dashed', gap: 18 }}>
           <div
             style={{
-              width: 36,
-              height: 36,
+              width: 38,
+              height: 38,
               borderRadius: '50%',
               border: '1px solid var(--rule-strong)',
-              background: 'var(--paper-3)',
+              background: 'var(--paper-2)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -55,20 +55,20 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
               flexShrink: 0,
             }}
           >
-            <i className="fa-duotone fa-solid fa-cloud-moon" style={{ fontSize: 14 }} />
+            <i className="fa-duotone fa-solid fa-cloud-moon" style={{ fontSize: 16 }} />
           </div>
           <div style={{ flex: 1 }}>
             <p
               className="display-serif-italic"
-              style={{ fontSize: 18, color: 'var(--ink)', lineHeight: 1.2 }}
+              style={{ fontSize: 22, lineHeight: 1.15, color: 'var(--ink)', margin: 0 }}
             >
               Nothing in flight<span className="display-period">.</span>
             </p>
-            <p className="timestamp-print" style={{ marginTop: 4 }}>
+            <p className="timestamp-print" style={{ marginTop: 6 }}>
               // drop archive files above to stage an install
               <span style={{ margin: '0 6px', color: 'var(--ink-5)' }}>-</span>
-              <Link to="/logs" style={{ color: 'var(--ink-blue)', textDecoration: 'none' }}>
-                tail log -&gt;
+              <Link to="/logs" className="serif-link-arrow">
+                tail log <span className="arrow" aria-hidden="true">&rarr;</span>
               </Link>
             </p>
           </div>
@@ -93,7 +93,7 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
               gridTemplateColumns: '24px 1fr 130px 180px 70px 20px',
               alignItems: 'center',
               gap: 18,
-              padding: '16px 28px',
+              padding: '12px 24px',
               borderBottom: i === jobs.length - 1 ? 'none' : '1px solid var(--rule-soft)',
               transition: 'background-color 150ms ease',
             }}
@@ -111,7 +111,13 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
                   borderRadius: '50%',
                   background: color,
                   boxShadow: isActive
-                    ? `0 0 0 4px ${color === 'var(--accent)' ? 'rgba(138,42,31,0.10)' : 'rgba(166,122,42,0.10)'}`
+                    ? `0 0 0 4px ${
+                        color === 'var(--accent)'
+                          ? 'var(--glow-info)'
+                          : color === 'var(--danger)'
+                            ? 'var(--glow-error)'
+                            : 'var(--glow-warning)'
+                      }`
                     : 'none',
                 }}
               />
@@ -121,7 +127,7 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
             <div style={{ minWidth: 0 }}>
               <div
                 style={{
-                  fontSize: 14,
+                  fontSize: 16,
                   color: 'var(--ink)',
                   marginBottom: 2,
                   letterSpacing: '-0.005em',
@@ -135,7 +141,7 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
               <div
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 10.5,
+                  fontSize: 13,
                   color: 'var(--ink-4)',
                   letterSpacing: '0.04em',
                 }}
@@ -148,7 +154,7 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
             <div
               style={{
                 fontFamily: 'var(--font-mono)',
-                fontSize: 10.5,
+                fontSize: 13,
                 letterSpacing: '0.1em',
                 textTransform: 'uppercase',
                 color: job.status === 'completed' ? 'var(--ink-3)' : 'var(--ink-2)',
@@ -167,7 +173,7 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
                 <div
                   style={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 10.5,
+                    fontSize: 13,
                     color: 'var(--accent)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
@@ -194,7 +200,7 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
             <div
               style={{
                 fontFamily: 'var(--font-display)',
-                fontSize: 14,
+                fontSize: 16,
                 color: job.status === 'completed' ? 'var(--ink-3)' : 'var(--ink)',
                 textAlign: 'right',
                 letterSpacing: '-0.01em',
@@ -208,10 +214,10 @@ export default function InstallationQueue({ jobs }: InstallationQueueProps) {
             <div style={{ color: 'var(--ink-4)' }}>
               {job.modPath ? (
                 <span title={job.modPath}>
-                  <i className="fa-duotone fa-solid fa-chevron-right" style={{ fontSize: 13 }} />
+                  <i className="fa-duotone fa-solid fa-chevron-right" style={{ fontSize: 16 }} />
                 </span>
               ) : (
-                <i className="fa-duotone fa-solid fa-chevron-right" style={{ fontSize: 13, opacity: 0.5 }} />
+                <i className="fa-duotone fa-solid fa-chevron-right" style={{ fontSize: 16, opacity: 0.5 }} />
               )}
             </div>
           </div>
