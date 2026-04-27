@@ -6,6 +6,15 @@ into a temp folder using installWithConfig, then compares the resulting file
 tree against the original installed mod.  A mismatch means the scan or install
 has a bug.
 
+Known false-positive failures (not real inference bugs):
+  - "Heel Sound Volume FOMOD 2025-...": archive ships only 3 ESP variants and
+    FOMOD metadata; the user's installed mod folder also contains 35 walk-patch
+    sound files plus README_walk_patch.txt that don't exist anywhere in the
+    archive (likely merged in from a separate mod). Inference cannot fabricate
+    files outside the archive, so the test reports them as missing.
+  - Runtime-modified files (e.g. SKSE plugin .log placeholders) are filtered
+    via IGNORED_FILES in scripts/common.py.
+
 Environment variables (same as deploy.bat / purge.bat):
   SALMA_MODS_PATH      - mods directory (default: D:\\Nolvus\\Instance\\MODS\\mods)
   SALMA_DEPLOY_PATH    - MO2 plugins dir (default: D:\\Nolvus\\Instance\\MO2\\plugins)
@@ -246,7 +255,8 @@ def main():
             t_cmp_start = time.perf_counter()
             log_debug(f"  [compare] Comparing trees "
                       f"(full={args.full})...")
-            diff = compare_trees(mod_folder, Path(tmp), args.full)
+            diff = compare_trees(mod_folder, Path(tmp), args.full,
+                                 archive_path=archive)
             t_cmp = time.perf_counter() - t_cmp_start
             elapsed = time.perf_counter() - t0
             log_debug(f"  [compare] Done in {t_cmp:.2f}s -- "

@@ -6,6 +6,8 @@ Config constants, DLL loading, path helpers, and file-tree comparison.
 import configparser
 import ctypes
 import os
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -20,7 +22,7 @@ DEPLOY_PATH = Path(os.environ.get(
     "SALMA_DEPLOY_PATH", r"D:\Nolvus\Instance\MO2\plugins"))
 DOWNLOADS_PATH_ENV = os.environ.get("SALMA_DOWNLOADS_PATH", "")
 
-IGNORED_FILES = {"meta.ini", "mo_salma.log", "salma-install.log"}
+IGNORED_FILES = {"meta.ini", "mo_salma.log", "salma-install.log", "mujointfix.log"}
 
 DLL_NAME = "mo2-salma.dll"
 
@@ -223,15 +225,127 @@ def find_actual_file(root: Path, rel_lower: str) -> Path | None:
     return current if current.is_file() else None
 
 
-def compare_trees(expected: Path, actual: Path, full: bool) -> CompareResult:
-    """Compare two file trees and return a CompareResult."""
+def _find_7z() -> str | None:
+    """Locate the 7z command-line tool, or None if unavailable."""
+    for cand in ("7z", "7z.exe", r"C:\Program Files\7-Zip\7z.exe",
+                 r"C:\Program Files (x86)\7-Zip\7z.exe"):
+        path = shutil.which(cand) if not Path(cand).is_absolute() else cand
+        if path and Path(path).exists():
+            return path
+    return None
+
+
+def archive_entries_by_tail(archive_path: Path) -> dict[str, list[int]]:
+    """Build a {lowercased_path_tail -> [sizes]} index of archive entries.
+
+    Used by compare_trees to recognise user files that have been modified
+    externally (e.g. by another mod overwriting CBBE/SoS body NIFs after
+    install). The list of sizes preserves duplicates so callers can tell
+    "1 archive entry at this size" (no contested variant - user must be
+    external if content differs) from "multiple archive entries at this
+    size" (genuine FOMOD-disambiguable variant - a real failure if inference
+    picked the wrong one).
+
+    Returns an empty dict if 7z isn't on PATH; callers should treat that
+    as "external-file detection disabled" and proceed without filtering.
+    """
+    seven_zip = _find_7z()
+    if not seven_zip:
+        return {}
+
+    try:
+        result = subprocess.run(
+            [seven_zip, "l", "-slt", str(archive_path)],
+            capture_output=True, text=True, timeout=120, check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return {}
+
+    sizes_by_tail: dict[str, list[int]] = {}
+    cur_path: str | None = None
+    cur_size: int | None = None
+    for line in result.stdout.splitlines():
+        if line.startswith("Path = "):
+            cur_path = line[len("Path = "):].strip()
+            cur_size = None
+        elif line.startswith("Size = "):
+            try:
+                cur_size = int(line[len("Size = "):].strip())
+            except ValueError:
+                cur_size = None
+        elif not line.strip():
+            if cur_path and cur_size is not None and cur_size > 0:
+                norm = cur_path.replace("\\", "/").lower()
+                # Index by every relative-tail suffix of the entry, so
+                # comparisons don't depend on the FOMOD source-folder prefix.
+                parts = norm.split("/")
+                for i in range(len(parts)):
+                    tail = "/".join(parts[i:])
+                    sizes_by_tail.setdefault(tail, []).append(cur_size)
+            cur_path = None
+            cur_size = None
+    return sizes_by_tail
+
+
+def compare_trees(expected: Path, actual: Path, full: bool,
+                  archive_path: Path | None = None) -> CompareResult:
+    """Compare two file trees and return a CompareResult.
+
+    If `archive_path` is provided, files in `expected` (the user's installed
+    mod folder) that cannot have come from this archive are treated as
+    externally modified (e.g. a body replacer overwrote the FOMOD's NIFs)
+    and excluded from mismatch reporting. Two heuristics:
+
+    - Size mismatch: skipped if the user's size doesn't appear in the
+      archive's size-set for that path tail (e.g. user's 1.4MB malebody_0.nif
+      vs the Schlongs archive's only 186KB version).
+    - Content mismatch: skipped if exactly one archive entry exists at this
+      path tail with the user's size. A FOMOD with one source per dest cannot
+      produce two different contents, so a content divergence at a uniquely-
+      sized dest must be an external override.
+    """
     exp_files = list_files(expected)
     act_files = list_files(actual)
 
     exp_set = set(exp_files)
     act_set = set(act_files)
 
-    missing = sorted(exp_set - act_set)
+    archive_entries: dict[str, list[int]] = {}
+    if archive_path is not None:
+        archive_entries = archive_entry_sizes_by_tail = archive_entries_by_tail(
+            archive_path)
+
+    def is_external_size(rel: str, exp_size: int) -> bool:
+        if not archive_entries:
+            return False
+        sizes = archive_entries.get(rel)
+        return bool(sizes) and exp_size not in sizes
+
+    def is_external_content(rel: str, exp_size: int) -> bool:
+        if not archive_entries:
+            return False
+        sizes = archive_entries.get(rel)
+        if not sizes:
+            return False
+        # Count archive entries that match the user's size at this tail.
+        # If there's exactly one, the FOMOD has no variant to disambiguate;
+        # any content difference must be from an external mod.
+        return sum(1 for s in sizes if s == exp_size) <= 1
+
+    def is_external_missing(rel: str) -> bool:
+        # User has the file but test reinstall doesn't; if no archive entry
+        # could produce this path tail, the user's file is external (e.g.
+        # Heel Sound's user folder has 35 sound files manually merged from a
+        # walk-patch mod that aren't in the FOMOD archive).
+        if not archive_entries:
+            return False
+        return rel not in archive_entries
+
+    raw_missing = sorted(exp_set - act_set)
+    if archive_entries:
+        missing = [rel for rel in raw_missing if not is_external_missing(rel)]
+    else:
+        missing = raw_missing
     extra = sorted(act_set - exp_set)
     common = exp_set & act_set
 
@@ -239,12 +353,16 @@ def compare_trees(expected: Path, actual: Path, full: bool) -> CompareResult:
     content_mismatch = []
     for rel in sorted(common):
         if exp_files[rel] != act_files[rel]:
+            if is_external_size(rel, exp_files[rel]):
+                continue
             size_mismatch.append(rel)
         elif full:
             exp_actual = find_actual_file(expected, rel)
             act_actual = find_actual_file(actual, rel)
             if (exp_actual and act_actual
                     and not files_equal(exp_actual, act_actual)):
+                if is_external_content(rel, exp_files[rel]):
+                    continue
                 content_mismatch.append(rel)
 
     return CompareResult(

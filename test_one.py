@@ -43,7 +43,8 @@ def main():
             json_file.unlink(missing_ok=True)
 
         # Step 3: compare
-        result = compare_trees(mod_path, Path(tmp), args.full)
+        result = compare_trees(mod_path, Path(tmp), args.full,
+                               archive_path=archive)
 
     print(f"Installed: {result.total_files}  "
           f"Missing: {len(result.missing)}  "
