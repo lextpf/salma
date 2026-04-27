@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import FileUpload from '../components/FileUpload'
-import InstallationQueue from '../components/InstallationQueue'
+import InstallationQueueShell from '../components/InstallationQueueShell'
 import SystemStatusSection from '../components/SystemStatusSection'
 import ActionButtonGroup from '../components/ActionButtonGroup'
 import Section from '../components/Section'
@@ -22,6 +22,7 @@ export default function InstallPage() {
 
   const pluginInstalled = status?.pluginInstalled === true
   const systemUnavailable = statusLoading || !status || !config
+  const pluginPurged = !systemUnavailable && status?.pluginInstalled === false
   const { jobs, isInstalling, handleFileSelect } = useInstallation(pluginInstalled)
 
   const showActionChip = useCallback((key: ActionChipKey, text: string) => {
@@ -67,16 +68,12 @@ export default function InstallPage() {
   // hooks still need their callbacks fired.
   void isInstalling; void scanRunning; void testRunning
 
-  const activeCount    = jobs.filter(j => j.status === 'uploading' || j.status === 'processing').length
-  const queuedCount    = jobs.filter(j => j.status === 'pending').length
-  const completedCount = jobs.filter(j => j.status === 'completed').length
-
   return (
     <div className="page-fill">
       {/* ============================================================
-          PAGE HEADER (compact)
+          PAGE HEADER (compact for short viewports)
           ============================================================ */}
-      <header style={{ marginBottom: 28, flexShrink: 0 }}>
+      <header style={{ marginBottom: 14, flexShrink: 0 }}>
         <p
           className="reveal reveal-delay-1"
           style={{
@@ -84,16 +81,16 @@ export default function InstallPage() {
             alignItems: 'center',
             gap: 10,
             fontFamily: 'var(--font-mono)',
-            fontSize: 11,
+            fontSize: 13,
             letterSpacing: '0.18em',
             textTransform: 'uppercase',
             color: 'var(--ink-3)',
-            marginBottom: 18,
+            marginBottom: 10,
           }}
         >
           <span
             className="display-serif-italic"
-            style={{ fontSize: 12, color: 'var(--accent)', textTransform: 'none' }}
+            style={{ fontSize: 14, color: 'var(--accent)', textTransform: 'none' }}
           >
             01.
           </span>
@@ -103,23 +100,23 @@ export default function InstallPage() {
         <div className="flex items-end reveal reveal-delay-2" style={{ gap: 18, flexWrap: 'wrap' }}>
           <h1
             className="display-serif"
-            style={{ fontSize: 92, lineHeight: 0.92, color: 'var(--ink)', margin: 0 }}
+            style={{ fontSize: 64, lineHeight: 0.95, color: 'var(--ink)', margin: 0 }}
           >
             Install<span style={{ color: 'var(--accent)' }}>.</span>
           </h1>
           {!systemUnavailable && status && (
-            <span className={`ready-pip ${readyPulse ? 'ring-pulse-once' : ''}`} style={{ marginBottom: 12, padding: '6px 12px 6px 10px' }}>
+            <span className={`ready-pip ${readyPulse ? 'ring-pulse-once' : ''}`} style={{ marginBottom: 10, padding: '6px 12px 6px 10px' }}>
               <span className="dot-status dot-status-on dot-status-pulse" />
               <span
                 className="tabular-nums"
-                style={{ fontSize: 13, fontWeight: 500, color: 'var(--ink)' }}
+                style={{ fontSize: 15, fontWeight: 500, color: 'var(--ink)' }}
               >
                 {status.jsonCount}
               </span>
               <span
                 style={{
                   fontFamily: 'var(--font-mono)',
-                  fontSize: 10,
+                  fontSize: 12,
                   letterSpacing: '0.1em',
                   textTransform: 'uppercase',
                   color: 'var(--ink-4)',
@@ -133,7 +130,7 @@ export default function InstallPage() {
         <p
           className="reveal reveal-delay-3 display-serif-italic"
           style={{
-            margin: '18px 0 0',
+            margin: '8px 0 0',
             fontSize: 15,
             color: 'var(--ink-3)',
             maxWidth: 620,
@@ -173,6 +170,7 @@ export default function InstallPage() {
                 <FileUpload
                   onFileSelect={handleFileSelect}
                   disabled={!pluginInstalled || isInstalling}
+                  purged={pluginPurged}
                 />
               )}
             </div>
@@ -199,83 +197,10 @@ export default function InstallPage() {
       </div>
 
       {/* ============================================================
-          SECTION 02 - ACTIVITY (natural height; queue caps + scrolls
-          internally so it never dominates the page)
+          SECTION 02 - ACTIVITY (collapsible; ledger bar in meta when
+          collapsed, full queue table when expanded)
           ============================================================ */}
-      <Section
-        n="02"
-        label="Activity"
-        title="Installation queue"
-        corner="02"
-        bodyPadding="none"
-        className="reveal reveal-delay-5"
-        meta={
-          <div className="flex items-center" style={{ gap: 16, flexWrap: 'wrap' }}>
-            <Badge color="var(--moss)"  label={`${activeCount} active`} />
-            <Badge color="var(--ink-4)" label={`${queuedCount} queued`} />
-            <Badge color="var(--ink-5)" label={`${completedCount} complete`} dim />
-          </div>
-        }
-      >
-        <div style={systemUnavailable ? undefined : { maxHeight: 320, overflowY: 'auto' }}>
-          {systemUnavailable ? (
-            <div>
-              {[0, 1].map(i => (
-                <div
-                  key={i}
-                  className="grid"
-                  style={{
-                    gridTemplateColumns: '38px 1fr 130px 180px 70px 20px',
-                    gap: 18,
-                    padding: '16px 28px',
-                    borderBottom: i === 1 ? 'none' : '1px solid var(--rule-soft)',
-                    alignItems: 'center',
-                  }}
-                >
-                  <div className="skeleton-line" style={{ width: 38, height: 38, borderRadius: '50%' }} />
-                  <div>
-                    <div className="skeleton-line" style={{ height: 14, width: ['72%', '58%'][i], marginBottom: 6 }} />
-                    <div className="skeleton-line" style={{ height: 14, width: 110 }} />
-                  </div>
-                  <div className="skeleton-line" style={{ height: 14, width: 100 }} />
-                  <div className="skeleton-line" style={{ height: 14, width: '100%' }} />
-                  <div className="skeleton-line" style={{ height: 14, width: 40 }} />
-                  <div />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <InstallationQueue jobs={jobs} />
-          )}
-        </div>
-      </Section>
+      <InstallationQueueShell jobs={jobs} systemUnavailable={systemUnavailable} />
     </div>
-  )
-}
-
-function Badge({ color, label, dim }: { color: string; label: string; dim?: boolean }) {
-  return (
-    <span className="flex items-center" style={{ gap: 6 }}>
-      <span
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: '50%',
-          background: color,
-          opacity: dim ? 0.5 : 1,
-        }}
-      />
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 10.5,
-          letterSpacing: '0.1em',
-          textTransform: 'uppercase',
-          color: dim ? 'var(--ink-4)' : 'var(--ink-3)',
-        }}
-      >
-        {label}
-      </span>
-    </span>
   )
 }
