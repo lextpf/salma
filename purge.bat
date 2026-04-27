@@ -16,16 +16,16 @@ echo                           SALMA PURGE SCRIPT
 echo ============================================================================
 echo.
 
-:: MO2 plugins/mods folders. Required - run scripts\setup-env.bat once to configure.
+:: MO2 plugins/mods folders. Required - run setup.bat once to configure.
 if not defined SALMA_DEPLOY_PATH (
     echo ERROR: SALMA_DEPLOY_PATH is not set.
-    echo Run scripts\setup-env.bat once to configure paths,
+    echo Run setup.bat once to configure paths,
     echo or set the variable manually for this shell.
     exit /b 1
 )
 if not defined SALMA_MODS_PATH (
     echo ERROR: SALMA_MODS_PATH is not set.
-    echo Run scripts\setup-env.bat once to configure paths,
+    echo Run setup.bat once to configure paths,
     echo or set the variable manually for this shell.
     exit /b 1
 )
