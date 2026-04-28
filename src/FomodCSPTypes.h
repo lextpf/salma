@@ -22,14 +22,22 @@ namespace mo2core
  *
  * Counts are computed per destination file. Lower counts in every error category
  * means a better reproduction; `exact()` returns true when no errors remain.
+ *
+ * `better_than` defines a strict-weak (lexicographic) ordering. `M_a` strictly
+ * precedes `M_b` iff
+ *
+ * \f[ (m_a, e_a, s_a, h_a, -r_a) <_{\mathrm{lex}} (m_b, e_b, s_b, h_b, -r_b) \f]
+ *
+ * where `m`/`e`/`s`/`h` are the four mismatch counters (lower is better) and
+ * `r` is `reproduced` (higher is better, hence negated).
  */
 struct ReproMetrics
 {
-    int missing = 0;        ///< Target files not produced by the simulation.
-    int extra = 0;          ///< Simulated files absent from the target.
-    int size_mismatch = 0;  ///< Files present in both but with differing sizes.
-    int hash_mismatch = 0;  ///< Files matching in size but differing in content hash.
-    int reproduced = 0;     ///< Files successfully reproduced (size and hash match).
+    int missing = 0;       /**< Target files not produced by the simulation. */
+    int extra = 0;         /**< Simulated files absent from the target. */
+    int size_mismatch = 0; /**< Files present in both but with differing sizes. */
+    int hash_mismatch = 0; /**< Files matching in size but differing in content hash. */
+    int reproduced = 0;    /**< Files successfully reproduced (size and hash match). */
 
     bool exact() const
     {
@@ -61,10 +69,10 @@ struct ReproMetrics
  */
 struct GroupRef
 {
-    int step_idx = 0;      ///< Index of the containing step in `FomodInstaller::steps`.
-    int group_idx = 0;     ///< Index of the group within the step.
-    int flat_start = 0;    ///< Offset of the first plugin in the global flat plugin array.
-    int plugin_count = 0;  ///< Number of plugins in this group.
+    int step_idx = 0;     /**< Index of the containing step in `FomodInstaller::steps`. */
+    int group_idx = 0;    /**< Index of the group within the step. */
+    int flat_start = 0;   /**< Offset of the first plugin in the global flat plugin array. */
+    int plugin_count = 0; /**< Number of plugins in this group. */
 };
 
 using GroupOption = std::vector<bool>;
@@ -78,10 +86,10 @@ using GroupOption = std::vector<bool>;
 struct SolverSearchState
 {
     std::vector<std::vector<std::vector<bool>>>
-        selections;  ///< Current per-step/group/plugin selections.
-    std::unordered_map<std::string, std::string> flags;  ///< Current FOMOD condition-flag values.
-    int nodes_explored = 0;    ///< Total search nodes visited across all passes.
-    bool found_exact = false;  ///< True when an exact (zero-error) reproduction has been found.
+        selections; /**< Current per-step/group/plugin selections. */
+    std::unordered_map<std::string, std::string> flags; /**< Current FOMOD condition-flag values. */
+    int nodes_explored = 0;   /**< Total search nodes visited across all passes. */
+    bool found_exact = false; /**< True when an exact (zero-error) reproduction has been found. */
 };
 
 /**
@@ -91,9 +99,9 @@ struct SolverSearchState
  */
 struct SolverBestResult
 {
-    SolverResult best;          ///< The best selection set and its error counts.
-    ReproMetrics best_metrics;  ///< Metrics corresponding to `best`.
-    bool has_best = false;      ///< False until the first candidate is recorded.
+    SolverResult best;         /**< The best selection set and its error counts. */
+    ReproMetrics best_metrics; /**< Metrics corresponding to `best`. */
+    bool has_best = false;     /**< False until the first candidate is recorded. */
 };
 
 /**
@@ -105,19 +113,19 @@ struct SolverBestResult
  */
 struct SolverProgress
 {
-    int last_progress_nodes = 0;  ///< Node count at the last progress report.
+    int last_progress_nodes = 0; /**< Node count at the last progress report. */
     std::chrono::steady_clock::time_point last_progress_time = std::chrono::steady_clock::now();
-    static constexpr int PROGRESS_NODE_INTERVAL = 1'000;  ///< Min nodes between log lines.
+    static constexpr int PROGRESS_NODE_INTERVAL = 1'000; /**< Min nodes between log lines. */
     static constexpr int PROGRESS_TIME_INTERVAL_MS =
-        1'000;  ///< Min milliseconds between log lines.
+        1'000; /**< Min milliseconds between log lines. */
 
-    int64_t estimated_total = 0;  ///< Estimated total nodes for the current pass (0 = unknown).
+    int64_t estimated_total = 0; /**< Estimated total nodes for the current pass (0 = unknown). */
     std::chrono::steady_clock::time_point pass_start_time = std::chrono::steady_clock::now();
-    int64_t pass_start_nodes = 0;  ///< Node count at the start of the current pass.
+    int64_t pass_start_nodes = 0; /**< Node count at the start of the current pass. */
 
     std::chrono::steady_clock::time_point
-        deadline{};                  ///< Hard wall-clock deadline for the entire solve.
-    bool deadline_exceeded = false;  ///< Set to true once `deadline` is passed.
+        deadline{};                 /**< Hard wall-clock deadline for the entire solve. */
+    bool deadline_exceeded = false; /**< Set to true once `deadline` is passed. */
 };
 
 /**
@@ -128,9 +136,9 @@ struct SolverProgress
  */
 struct SolverState
 {
-    SolverSearchState search;  ///< Current mutable search state.
-    SolverBestResult best;     ///< Best solution found so far.
-    SolverProgress progress;   ///< Progress tracking and deadline.
+    SolverSearchState search; /**< Current mutable search state. */
+    SolverBestResult best;    /**< Best solution found so far. */
+    SolverProgress progress;  /**< Progress tracking and deadline. */
 };
 
 /**
@@ -145,25 +153,27 @@ struct SolverStats
      * @name Option-generation counters
      * @{
      */
-    int dropped_extra_only_options = 0;  ///< Options dropped because they only produce extra files.
-    int collapsed_equivalent_options = 0;  ///< Options collapsed due to identical destination sets.
-    int forced_unique_options = 0;         ///< Groups forced to a single option (unique evidence).
-    int capped_select_any_options = 0;     ///< Options trimmed by the SelectAny cap.
+    int dropped_extra_only_options =
+        0; /**< Options dropped because they only produce extra files. */
+    int collapsed_equivalent_options =
+        0;                             /**< Options collapsed due to identical destination sets. */
+    int forced_unique_options = 0;     /**< Groups forced to a single option (unique evidence). */
+    int capped_select_any_options = 0; /**< Options trimmed by the SelectAny cap. */
     /** @} */
 
     /**
      * @name Search-tree pruning counters
      * @{
      */
-    int pruned_extra_only = 0;   ///< Subtrees pruned because all options are extra-only.
-    int pruned_lower_bound = 0;  ///< Subtrees pruned by lower-bound comparison against best.
-    int pruned_memo = 0;         ///< Subtrees pruned by memoization hit.
-    int skipped_invisible = 0;   ///< Groups skipped because their step is not visible.
-    int pruned_node_limit = 0;   ///< Subtrees abandoned after exceeding the per-pass node limit.
+    int pruned_extra_only = 0;  /**< Subtrees pruned because all options are extra-only. */
+    int pruned_lower_bound = 0; /**< Subtrees pruned by lower-bound comparison against best. */
+    int pruned_memo = 0;        /**< Subtrees pruned by memoization hit. */
+    int skipped_invisible = 0;  /**< Groups skipped because their step is not visible. */
+    int pruned_node_limit = 0;  /**< Subtrees abandoned after exceeding the per-pass node limit. */
     /** @} */
 
-    std::vector<bool> logged_group_options;  ///< Tracks which groups have had their options logged
-                                             /** < (avoids duplicate log output). */
+    std::vector<bool> logged_group_options; /**< Tracks which groups have had their options logged
+                                               (avoids duplicate log output). */
 };
 
 /**
@@ -176,18 +186,18 @@ struct SolverStats
  */
 struct OptionProfile
 {
-    GroupOption option;      ///< Boolean mask of selected plugins in this group.
-    int evidence_score = 0;  ///< Sum of per-plugin evidence scores for selected plugins.
-    int unique_support = 0;  ///< Count of target destinations uniquely supplied by this option.
-    int useful_dests = 0;    ///< Destinations produced that exist in the target.
-    int extra_dests = 0;     ///< Destinations produced that are not in the target.
+    GroupOption option;     /**< Boolean mask of selected plugins in this group. */
+    int evidence_score = 0; /**< Sum of per-plugin evidence scores for selected plugins. */
+    int unique_support = 0; /**< Count of target destinations uniquely supplied by this option. */
+    int useful_dests = 0;   /**< Destinations produced that exist in the target. */
+    int extra_dests = 0;    /**< Destinations produced that are not in the target. */
     bool sets_needed_flag =
-        false;  ///< True if this option sets a flag required by a step/condition.
-    std::unordered_set<std::string> produced;  ///< Destination paths produced.
+        false; /**< True if this option sets a flag required by a step/condition. */
+    std::unordered_set<std::string> produced; /**< Destination paths produced. */
     std::unordered_set<std::string>
-        produced_atoms;  ///< Atom keys produced (source-level identifiers).
+        produced_atoms; /**< Atom keys produced (source-level identifiers). */
     std::unordered_map<std::string, std::string>
-        flags_written;  ///< Condition flags set by the selected plugins.
+        flags_written; /**< Condition flags set by the selected plugins. */
 
     OptionProfile() = default;
     OptionProfile(OptionProfile&&) noexcept = default;
@@ -202,8 +212,8 @@ struct OptionProfile
  */
 struct CachedOptions
 {
-    std::vector<GroupOption> options;     ///< Valid selection combinations for this group.
-    std::vector<OptionProfile> profiles;  ///< Corresponding profile for each option.
+    std::vector<GroupOption> options;    /**< Valid selection combinations for this group. */
+    std::vector<OptionProfile> profiles; /**< Corresponding profile for each option. */
 };
 
 /**
@@ -233,17 +243,17 @@ struct Precompute
      * @name Flattened group list and per-plugin evidence
      * @{
      */
-    std::vector<GroupRef> groups;  ///< All groups across all steps, in installer order.
-    std::vector<int> evidence;  ///< Per-flat-plugin evidence score (higher = more likely needed).
+    std::vector<GroupRef> groups; /**< All groups across all steps, in installer order. */
+    std::vector<int> evidence; /**< Per-flat-plugin evidence score (higher = more likely needed). */
     /** @} */
 
     /**
      * @name Per-plugin reverse indices
      * @{
      */
-    std::vector<int> plugin_to_group;  ///< Maps flat plugin index to its group index.
+    std::vector<int> plugin_to_group; /**< Maps flat plugin index to its group index. */
     std::vector<int>
-        plugin_unique_support;  ///< Count of target dests uniquely supplied by this plugin.
+        plugin_unique_support; /**< Count of target dests uniquely supplied by this plugin. */
     /** @} */
 
     /**
@@ -251,19 +261,19 @@ struct Precompute
      * @{
      */
     std::unordered_set<std::string>
-        needed_flags;  ///< All flags read by step-visibility or plugin-type conditions.
+        needed_flags; /**< All flags read by step-visibility or plugin-type conditions. */
     std::vector<std::unordered_set<std::string>>
-        group_sets_flags;  ///< Per-group: flags written by plugins.
+        group_sets_flags; /**< Per-group: flags written by plugins. */
     std::vector<std::unordered_set<std::string>>
-        group_reads_flags;  ///< Per-group: flags read by conditions.
+        group_reads_flags; /**< Per-group: flags read by conditions. */
     std::vector<std::vector<std::string>>
-        group_cache_flags;  ///< Per-group: sorted flag keys for cache hashing.
+        group_cache_flags; /**< Per-group: sorted flag keys for cache hashing. */
     std::unordered_map<std::string, std::vector<int>>
-        flag_to_setter_groups;  ///< Maps flag name to groups that can set it.
-    std::vector<std::string>
-        memo_flags;  ///< Sorted union of needed and written flags, used for memoization signatures.
+        flag_to_setter_groups;           /**< Maps flag name to groups that can set it. */
+    std::vector<std::string> memo_flags; /**< Sorted union of needed and written flags, used for
+                                            memoization signatures. */
     std::vector<std::unordered_set<std::string>>
-        group_dests;  ///< Per-group: destination paths any plugin in the group can produce.
+        group_dests; /**< Per-group: destination paths any plugin in the group can produce. */
     /** @} */
 
     /**
@@ -271,33 +281,29 @@ struct Precompute
      * @{
      */
     std::unordered_map<std::string, std::vector<int>>
-        dest_to_groups;  ///< Groups that can produce each destination.
+        dest_to_groups; /**< Groups that can produce each destination. */
     std::unordered_map<std::string, std::vector<int>>
-        dest_to_plugins;  ///< Flat plugin indices that can produce each destination.
+        dest_to_plugins; /**< Flat plugin indices that can produce each destination. */
     std::unordered_map<std::string, std::vector<int>>
-        dest_to_size_match_groups;  ///< Groups that can produce a size-matching file for the
-                                    /** < destination. */
+        dest_to_size_match_groups; /**< Groups that can produce a size-matching file for the
+                                      destination. */
     std::unordered_map<std::string, std::vector<int>>
-        dest_to_hash_capable_groups;  ///< Groups that can produce a hash-matching file for the
-                                      /**
-                                       * < destination.
-                                       * @}
-                                       */
+        dest_to_hash_capable_groups; /**< Groups that can produce a hash-matching file for the
+                                        destination. */
+    /** @} */
 
     /**
      * @name Contested destinations and component decomposition
      * @{
      */
     std::unordered_set<std::string>
-        conditional_dests;  ///< Destinations whose production depends on flags or conditions.
-    std::vector<int> contested_plugins;  ///< Flat plugin indices that appear in multiple
-                                         /** < destination-conflict sets. */
+        conditional_dests; /**< Destinations whose production depends on flags or conditions. */
+    std::vector<int> contested_plugins; /**< Flat plugin indices that appear in multiple
+                                           destination-conflict sets. */
     std::vector<std::vector<int>>
-        components;  ///< Independent group components (groups sharing no destinations or flags),
-                     /**
-                      * < for parallel backtracking.
-                      * @}
-                      */
+        components; /**< Independent group components (groups sharing no destinations or flags), for
+                       parallel backtracking. */
+    /** @} */
 
     Precompute() = default;
     Precompute(Precompute&&) noexcept = default;
@@ -312,10 +318,10 @@ struct Precompute
  */
 struct OptionCacheKey
 {
-    int group_idx = 0;        ///< Index into `Precompute::groups`.
-    uint64_t flags_sig = 0;   ///< Hash of the flag values relevant to this group's conditions.
-    int select_any_cap = 0;   ///< Maximum number of SelectAny options to enumerate.
-    bool exact_mode = false;  ///< When true, uncapped enumeration is used for this group.
+    int group_idx = 0;       /**< Index into `Precompute::groups`. */
+    uint64_t flags_sig = 0;  /**< Hash of the flag values relevant to this group's conditions. */
+    int select_any_cap = 0;  /**< Maximum number of SelectAny options to enumerate. */
+    bool exact_mode = false; /**< When true, uncapped enumeration is used for this group. */
 
     bool operator==(const OptionCacheKey& rhs) const
     {
@@ -352,9 +358,9 @@ struct OptionCacheKeyHash
  */
 struct MemoKey
 {
-    int next_idx = 0;             ///< Next group index in the search order.
-    uint64_t flag_state_sig = 0;  ///< Hash of current condition-flag values.
-    uint64_t contested_sig = 0;   ///< Hash of current selections for contested plugins.
+    int next_idx = 0;            /**< Next group index in the search order. */
+    uint64_t flag_state_sig = 0; /**< Hash of current condition-flag values. */
+    uint64_t contested_sig = 0;  /**< Hash of current selections for contested plugins. */
 
     bool operator==(const MemoKey& rhs) const
     {
@@ -387,9 +393,9 @@ struct MemoKeyHash
  */
 struct FlagDelta
 {
-    std::string name;        ///< Flag that was modified.
-    bool had_value = false;  ///< True if the flag existed before the change.
-    std::string old_value;   ///< Previous value (meaningful only when `had_value` is true).
+    std::string name;       /**< Flag that was modified. */
+    bool had_value = false; /**< True if the flag existed before the change. */
+    std::string old_value;  /**< Previous value (meaningful only when `had_value` is true). */
 };
 
 /**
@@ -401,13 +407,13 @@ struct FlagDelta
  */
 struct SearchPlan
 {
-    std::vector<int> order;  ///< Group indices in the order they will be explored.
+    std::vector<int> order; /**< Group indices in the order they will be explored. */
     std::vector<int>
-        order_pos;  ///< Inverse map: `order_pos[group_idx]` = position in `order` (-1 if absent).
-    int node_limit = 0;  ///< Maximum nodes to explore in this pass (0 = unlimited).
-    std::unordered_map<MemoKey, ReproMetrics, MemoKeyHash> memo;  ///< Subtree memoization table.
+        order_pos; /**< Inverse map: `order_pos[group_idx]` = position in `order` (-1 if absent). */
+    int node_limit = 0; /**< Maximum nodes to explore in this pass (0 = unlimited). */
+    std::unordered_map<MemoKey, ReproMetrics, MemoKeyHash> memo; /**< Subtree memoization table. */
     bool incremental_flags =
-        false;  ///< When true, flags are updated incrementally rather than rebuilt from scratch.
+        false; /**< When true, flags are updated incrementally rather than rebuilt from scratch. */
 };
 
 /**
@@ -419,9 +425,9 @@ struct SearchPlan
  */
 namespace csp_detail
 {
-static constexpr int kSelectAnyCapNarrow = 64;   ///< Tight cap for initial greedy/local search.
-static constexpr int kSelectAnyCapMedium = 256;  ///< Medium cap for component and repair phases.
-static constexpr int kSelectAnyCapFull = 0;      ///< No cap (0 = enumerate all valid combinations).
+static constexpr int kSelectAnyCapNarrow = 64;  /**< Tight cap for initial greedy/local search. */
+static constexpr int kSelectAnyCapMedium = 256; /**< Medium cap for component and repair phases. */
+static constexpr int kSelectAnyCapFull = 0; /**< No cap (0 = enumerate all valid combinations). */
 }  // namespace csp_detail
 
 // Re-export for internal use.
