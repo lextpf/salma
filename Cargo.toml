@@ -1,33 +1,51 @@
-# The salma engine.
-#
-# This crate lives at the repo root and shares src/ and tests/ with the C++ that
-# remains (the Crow server behind the web dashboard). The two never collide:
-# cargo only looks at *.rs, and CMake takes an explicit file list. The port is
-# file-for-file, so src/FomodService.cpp and src/fomod_service.rs sit adjacent.
-#
-# Builds to target/, never the C++ build/bin/ tree. Produces mo2_salma_rs.dll;
-# tools/package.py renames it to mo2-salma.dll at cutover (see CUTOVER.md).
+#   ============================================================================================  *
+# 
+#        ::::::::      :::     :::        ::::    ::::      :::         ⢠⣤⣤⣀ ⠀⠀⠀⠀⠀⠀ ⣀⣤⣤⡄
+#       :+:    :+:   :+: :+:   :+:        +:+:+: :+:+:+   :+: :+:      ⢸⣿⣿⣿⣿⣦⣄⣀⣠⣴⣿⣿⣿⣿⡇⠀*
+#       +:+         +:+   +:+  +:+        +:+ +:+:+ +:+  +:+   +:+     ⣸⣿⣿⣿⣿⣿⡽⣿⣯⣿⣿⣿⣿⣿⣇
+#       +#++:++#++ +#++:++#++: +#+        +#+  +:+  +#+ +#++:++#++:    ⢻⣿⣿⣿⠿⣻⣵⡟⣮⣟⠿⣿⣿⣿⡟
+#              +#+ +#+     +#+ +#+        +#+       +#+ +#+     +#+    ⠀⠀⠀⠀⣼⣿⡿ ⠀⢿⣿⣷⡀
+#       #+#    #+# #+#     #+# #+#        #+#       #+# #+#     #+#    *⠀⣠⣾⣿⣿⠃ ⠀⠈⢿⣿⣿⣦⡀
+#        ########  ###     ### ########## ###       ### ###     ###    ⠀⠈⠉⠹⡿⠁⠀⠀⠀⠀⠈⢻⡇⠉⠉
+# 
+#                               << F O M O D   E N G I N E >>
+# 
+#   ============================================================================================  *
+# 
+#       The salma engine: a wizardless FOMOD installer and selection-inference
+#       engine. It reads an archive's ModuleConfig.xml, infers which options an
+#       already-installed mod was built from, and replays the install itself.
+#       Archive handling, XML parsing, constraint solving and file placement all
+#       live here, behind the one flat extern "C" ABI in src/capi.rs that the MO2
+#       plugin and mo2-server both drive.
+# 
+#     ----------------------------------------------------------------------
+# 
+#       Repository:   https://github.com/lextpf/salma
+#       License:      MIT
+# 
+
 [package]
 name = "mo2_salma_rs"
+# Crate metadata only. The shipped version is MO2_SALMA_API_VERSION in src/capi.rs:
+# getApiVersion reports it and cpack names the release zip from it.
 version = "0.1.0"
 edition = "2024"
 # Floor is the first stable toolchain that supports edition 2024.
 rust-version = "1.85"
-description = "Rust port of the salma mo2-core FOMOD engine, exposing the flat C ABI as mo2_salma_rs.dll."
+description = "Salma MO2 FOMOD engine, exposing a flat C ABI to mo2-server and the MO2 plugin."
 publish = false
 
 [lib]
 name = "mo2_salma_rs"
-# cdylib -> the mo2_salma_rs.dll the MO2 plugin loads via ctypes.
+# cdylib -> target/release/mo2_salma_rs.dll, which scripts/package.py stages as
+#           mo2-salma.dll, the name the MO2 plugin and mo2-server both load.
 # rlib   -> lets `cargo test` link the boundary helpers as a normal library.
 crate-type = ["cdylib", "rlib"]
 
 [target.'cfg(windows)'.dependencies]
-# Minimal Win32 surface for utils::module_directory / executable_directory
-# (GetModuleHandleExW + GetModuleFileNameW), mirroring src/Utils.cpp, plus
-# GetLocalTime for logger timestamps: the C++ formats with localtime_s, and
-# std has no local-time conversion, so the same OS call keeps the log lines
-# byte-identical including the DST/timezone rules.
+# Minimal Win32 surface: Foundation + LibraryLoader for utils::module_directory /
+# executable_directory, SystemInformation for the logger's GetLocalTime timestamps.
 windows-sys = { version = "0.60", features = [
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
@@ -37,11 +55,12 @@ windows-sys = { version = "0.60", features = [
 [dependencies]
 roxmltree = "0.21"
 serde_json = "1.0"
-# Archive backends (Task 11). Pure-Rust zip + 7z; unrar links the proprietary
-# unRAR C sources (read-only decompress; see PARITY-NOTES "Task 11" for the
-# license note and the build.rs Win32 link requirement).
+# Archive backends. Pure-Rust zip + 7z; unrar links the proprietary unRAR C sources.
 zip = "8.6.0"
 sevenz-rust2 = "0.21.3"
 unrar = "0.5.8"
 
-# [profile.release] intentionally left at cargo defaults.
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+redundant_explicit_links = "deny"
+private_intra_doc_links = "allow"
