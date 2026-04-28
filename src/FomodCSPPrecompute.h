@@ -54,9 +54,9 @@ uint64_t hash_flag_subset(const std::unordered_map<std::string, std::string>& fl
  *
  * For each target destination, evidence is accumulated per-plugin as:
  *
- * $$E_{\text{plugin}} = \sum_{\text{dest}} w(\text{dest})$$
+ * $$E_{\text{plugin}} = \sum_{\text{dest}} w(\text{plugin}, \text{dest})$$
  *
- * where the per-destination weight $w$ is:
+ * where the per-(plugin, destination) weight $w$ is:
  * - $+3$ when the plugin is the **unique** size-compatible producer of that destination,
  * - $+2$ when multiple plugins can produce it but this plugin has a **hash match**,
  * - $+1$ when multiple plugins can produce it and no hash confirmation is available.
