@@ -112,8 +112,17 @@ struct HandleGuard
 /**
  * @brief Resolve the MO2 plugin deploy path from config/env.
  *
- * Checks `SALMA_DEPLOY_PATH` env var first, then derives from
- * @p mo2_mods_path as `{instance_root}/MO2/plugins`.
+ * Resolution order:
+ *
+ * 1. `SALMA_DEPLOY_PATH` env var if non-empty - returned verbatim.
+ * 2. `mo2_mods_path` parameter if non-empty.
+ * 3. `SALMA_MODS_PATH` env var if step 2 was empty.
+ *
+ * When a mods path is determined (step 2 or 3), the deploy path is
+ * derived as `{mods_path.parent_path().parent_path()} / "MO2" / "plugins"`.
+ * The two-level walk goes from `<instance>/mods` up to `<instance>` and
+ * then into the MO2 plugins directory. Logs an error and returns
+ * an empty path if no source is available.
  *
  * @param mo2_mods_path Configured MO2 mods directory (may be empty).
  * @return Resolved deploy path, or empty path if resolution fails.
