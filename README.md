@@ -216,6 +216,8 @@ Output:
 
 ## Architecture
 
+salma ships **three deployment artifacts** that share **one core library**. The library (`mo2-core`) holds all the actual installation, FOMOD parsing, and inference logic. The artifacts are different *shells* around that library - one for MO2 (a DLL), one for HTTP (an EXE), and one for the browser (a React SPA served by the EXE). You can use any subset depending on how you want to drive salma.
+
 ```mermaid
 ---
 config:
@@ -226,59 +228,80 @@ config:
   layout: elk
 ---
 graph TB
-    classDef server fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
+    classDef host fill:#1e1e2e,stroke:#94a3b8,color:#e2e8f0,stroke-dasharray:6 4
+    classDef artifact fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
     classDef core fill:#134e3a,stroke:#10b981,color:#e2e8f0
-    classDef fomod fill:#4a3520,stroke:#f59e0b,color:#e2e8f0
-    classDef ext fill:#2e1f5e,stroke:#8b5cf6,color:#e2e8f0
 
-    Main["🚀 main.cpp (Crow)"]:::server
-
-    subgraph Server["🌐 REST API Layer"]
-        InstCtrl["📥 InstallationController"]:::server
-        Mo2Ctrl["🎛️ Mo2Controller"]:::server
-        Static["📄 StaticFileHandler"]:::server
+    subgraph MO2["🧩 Mod Organizer 2 process"]
+        Plugin["🐍 mo2-salma.py (Python plugin)"]:::host
+        DLL["📦 mo2-salma.dll (C-API exports)"]:::artifact
+        Plugin -- ctypes --> DLL
     end
 
-    subgraph Core["⚙️ Core Services"]
-        InstSvc["🔧 InstallationService"]:::core
-        Archive["📦 ArchiveService"]:::core
-        FileOps["📂 FileOperations"]:::core
-        Detect["🔎 ModStructureDetector"]:::core
+    subgraph SrvHost["🖥️ mo2-server.exe process (port 5000)"]
+        Server["🌐 Crow HTTP server + REST endpoints"]:::artifact
+        Static["📄 Static file handler"]:::artifact
+        Server --- Static
     end
 
-    subgraph FOMOD["🧠 FOMOD Engine"]
-        FomodSvc["🛠️ FomodService"]:::fomod
-        DepEval["🧩 FomodDependencyEvaluator"]:::fomod
-        Infer["🎯 FomodInferenceService"]:::fomod
+    subgraph Browser["🌍 Web browser"]
+        SPA["⚛️ React SPA (web/dist)"]:::artifact
     end
 
-    subgraph External["🔌 External Integration"]
-        CApi["📡 C API (DLL Export)"]:::ext
-        Plugin["🐍 Python Plugin (MO2)"]:::ext
-        WebUI["🖥️ React Frontend"]:::ext
-    end
+    Core["🛠️ mo2-core (shared C++ library)<br/>extraction · FOMOD parser · inference · file ops · logger"]:::core
 
-    Main --> Server
+    DLL --> Core
     Server --> Core
-    Core --> FOMOD
-    CApi --> Core
-    Plugin --> CApi
-    Static --> WebUI
+    SPA -- "HTTP /api" --> Server
+    Static -- "serves" --> SPA
 ```
 
-|                     File | Purpose                                         |
-|--------------------------|-------------------------------------------------|
-|               `main.cpp` | Crow HTTP server entry point                    |
-|  `InstallationService`   | Main orchestrator for mod installation          |
-|       `ArchiveService`   | Archive extraction (libarchive + bit7z)          |
-|         `FomodService`   | FOMOD XML parsing and installation logic         |
-| `FomodInferenceService`  | Infers FOMOD selections from installed files     |
-| `FomodDependencyEvaluator` | Evaluates FOMOD flag and file dependencies     |
-|      `FileOperations`    | Priority-sorted file copy and patching           |
-| `ModStructureDetector`   | Detects mod folder layout                        |
-|              `CApi`      | C-linkage DLL exports for ctypes                 |
-|            `Logger`      | Thread-safe logging with callback support        |
-|      `ConfigService`     | Configuration management                         |
+### The three artifacts
+
+- **📦 `mo2-salma.dll` - the headless library.** Built from the `mo2-core` CMake target. Has no HTTP, no UI, no Crow dependency. Mod Organizer 2 loads it through `mo2-salma.py` (a Python plugin) using `ctypes` and calls C-linkage exports like `install()`, `inferFomodSelections()`, and `installWithConfig()`. **Use this when** you want MO2 to install FOMOD-aware mods without the wizard.
+
+- **🌐 `mo2-server.exe` - the HTTP shell.** Built from the `mo2-server` CMake target. Links the same `mo2-core` library that the DLL exports, **plus** the Crow HTTP framework on top. Exposes the install / infer / scan / status / log endpoints under `/api/*` and serves the React SPA from `web/dist/` at `/`. Listens on `:5000`. **Use this when** you want a graphical interface or programmatic REST access.
+
+- **⚛️ React SPA (`web/dist/`) - the browser front-end.** Built with Vite from `web/src/`. Pure HTML/CSS/JS - knows nothing about C++. Talks to `mo2-server.exe` over `fetch('/api/...')`. **Use this when** you want to drive an installation interactively, browse FOMOD JSON files, or watch logs in real time.
+
+> [!NOTE]
+> The DLL and the EXE are different binaries built from the same source tree. They share `mo2-core` so that improving FOMOD inference once benefits both the MO2 plugin and the web UI - there is no duplicated logic to keep in sync.
+
+### Two ways salma is used
+
+**Path A - inside Mod Organizer 2 (no server, no browser).**
+
+1. `deploy.bat` copies `mo2-salma.dll` and `mo2-salma.py` into `<MO2 instance>/plugins/`.
+2. MO2 starts and Python loads `mo2-salma.py`.
+3. The plugin loads the DLL via `ctypes.CDLL("mo2-salma.dll")`.
+4. When the user installs a mod, the plugin calls `install()` (or `inferFomodSelections()` for batch scans) directly into `mo2-core`.
+5. Results return as JSON or path strings; the plugin renders them in MO2's tools menu.
+
+**Path B - the standalone server with the web UI.**
+
+1. The user runs `mo2-server.exe` (port 5000).
+2. The browser opens `http://localhost:5000` and the server's static handler returns `web/dist/index.html`.
+3. The React SPA loads, then calls endpoints like `POST /api/installation/upload` for file uploads or `GET /api/mo2/fomods/scan/status` for background-job progress.
+4. The Crow controllers in `mo2-server` translate those requests into calls into `mo2-core` (the same calls the DLL exports).
+5. Results come back as JSON; the SPA renders progress, logs, and FOMOD trees.
+
+Both paths converge in `mo2-core`. The DLL exposes it as a flat C ABI; the server exposes it as REST endpoints.
+
+### File-to-purpose drill-down
+
+|                       File | Purpose                                          |
+|----------------------------|--------------------------------------------------|
+|                 `main.cpp` | Crow HTTP server entry point                     |
+|     `InstallationService`  | Main orchestrator for mod installation           |
+|         `ArchiveService`   | Archive extraction (libarchive + bit7z)          |
+|           `FomodService`   | FOMOD XML parsing and installation logic         |
+|   `FomodInferenceService`  | Infers FOMOD selections from installed files     |
+| `FomodDependencyEvaluator` | Evaluates FOMOD flag and file dependencies       |
+|        `FileOperations`    | Priority-sorted file copy and patching           |
+|     `ModStructureDetector` | Detects mod folder layout                        |
+|                  `CApi`    | C-linkage DLL exports for ctypes                 |
+|                `Logger`    | Thread-safe logging with callback support        |
+|         `ConfigService`    | Configuration management                         |
 
 ## Project Structure
 
