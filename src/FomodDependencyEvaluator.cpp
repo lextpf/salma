@@ -208,11 +208,13 @@ namespace mo2core
 // IR-based condition evaluation
 // ---------------------------------------------------------------------------
 
-/// Evaluation mode tag: selects compile-time behaviour in LeafEvaluator.
+// Evaluation mode tag: selects compile-time behaviour in LeafEvaluator.
+//   Normal:   full evaluation against real dependency context.
+//   Inferred: external deps follow override, infra deps -> true.
 enum class EvalMode : uint8_t
 {
-    Normal,   ///< Full evaluation against real dependency context.
-    Inferred  ///< Inference mode: external deps follow override, infra deps -> true.
+    Normal,
+    Inferred
 };
 
 // ---------------------------------------------------------------------------
