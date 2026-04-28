@@ -54,6 +54,7 @@ struct InstallJobResult
  * |                    | **400** | `{ "error": "No file uploaded or file is empty" }`          |
  * |                    | **400** | `{ "error": "No modPath provided and MO2 mods path is..." }`|
  * |                    | **409** | `{ "error": "An installation is already running" }`         |
+ * |                    | **413** | `{ "error": "Upload exceeds 512 MiB limit" }`               |
  * | `POST .../install` | **200** | `{ "started": true }`                                       |
  * |                    | **400** | `{ "error": "ArchivePath and ModPath are required" }`       |
  * |                    | **409** | `{ "error": "An installation is already running" }`         |
@@ -95,8 +96,13 @@ public:
      * Saves the file to a temp path, writes the FOMOD JSON if
      * provided, and runs InstallationService::install_mod().
      *
+     * Enforces a hard upload-size cap of **512 MiB**: requests with a
+     * body larger than this return HTTP 413 before any multipart
+     * parsing or temp-file write.
+     *
      * @param req The Crow HTTP request.
-     * @return JSON response with install result or error.
+     * @return JSON response with install result or error. May return
+     *         413 when the body exceeds the upload-size cap.
      * @note Does not throw. All exceptions are caught internally and
      *       returned as a 500 JSON error response.
      */
