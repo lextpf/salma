@@ -128,6 +128,14 @@ namespace mo2core
  * - **libarchive**: extraction rejects entries whose resolved path would escape
  *   the destination directory, skipping them before any data is written.
  *
+ * ## :material-weight: Resource Limits
+ *
+ * Single archive entries larger than **256 MiB** (`kMaxEntrySize` in
+ * ArchiveService.cpp) are rejected during in-memory reads (read_entry,
+ * read_entries_batch) as a decompression-bomb guard. The threshold
+ * applies to the uncompressed size reported in the archive header, so
+ * malicious "zip bombs" are caught before any data is buffered.
+ *
  * ## :material-alert-circle-outline: Error Semantics
  *
  * - extract(), extract_filtered(), extract_prefix(), create_zip():
@@ -163,9 +171,9 @@ public:
      */
     struct EntryListing
     {
-        std::vector<std::string> paths;  ///< Entry paths in archive order (original casing)
+        std::vector<std::string> paths; /**< Entry paths in archive order (original casing) */
         std::unordered_map<std::string, uint64_t>
-            sizes;  ///< Normalized path to uncompressed size in bytes
+            sizes; /**< Normalized path to uncompressed size in bytes */
 
         EntryListing() = default;
         EntryListing(EntryListing&&) noexcept = default;
