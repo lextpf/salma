@@ -52,7 +52,8 @@ public:
      *         (empty) installer if the document has no `<config>` root element.
      * @pre @p doc must be a successfully parsed pugixml document (not empty/failed).
      * @throw Does not throw. Malformed or unknown XML elements are logged and skipped.
-     *        Excessively deep condition trees are truncated to prevent stack overflow.
+     *        Excessively deep condition trees are truncated to prevent stack overflow;
+     *        the truncation depth matches `FomodDependencyEvaluator::MAX_DEPENDENCY_DEPTH = 32`.
      */
     static MO2_API FomodInstaller parse(const pugi::xml_document& doc,
                                         const std::string& archive_prefix);
