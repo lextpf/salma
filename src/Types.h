@@ -25,8 +25,8 @@ namespace mo2core
  */
 enum class FileOpType
 {
-    File,   ///< Single file copy
-    Folder  ///< Recursive folder copy
+    File,  /**< Single file copy */
+    Folder /**< Recursive folder copy */
 };
 
 /**
@@ -41,11 +41,11 @@ enum class FileOpType
  */
 enum class PluginType
 {
-    Required,      ///< Always installed, cannot be deselected
-    Recommended,   ///< Pre-selected but user can deselect
-    Optional,      ///< Not pre-selected, user can select
-    NotUsable,     ///< Greyed out, cannot be selected
-    CouldBeUsable  ///< Selectable but not recommended
+    Required,     /**< Always installed, cannot be deselected */
+    Recommended,  /**< Pre-selected but user can deselect */
+    Optional,     /**< Not pre-selected, user can select */
+    NotUsable,    /**< Greyed out, cannot be selected */
+    CouldBeUsable /**< Selectable but not recommended */
 };
 
 /**
@@ -61,12 +61,13 @@ enum class PluginType
  */
 struct FileOperation
 {
-    FileOpType type;     ///< File or folder
-    std::string source;  ///< Absolute source path in the extracted archive (OS-native separators)
+    FileOpType type;    /**< File or folder */
+    std::string source; /**< Absolute source path in the extracted archive (OS-native separators) */
     std::string
-        destination;   ///< Absolute destination path in the mod directory (OS-native separators)
-    int priority = 0;  ///< FOMOD priority attribute (MO2 default: 0)
-    int document_order = 0;  ///< XML document order tiebreaker
+        destination;  /**< Absolute destination path in the mod directory (OS-native separators) */
+    int priority = 0; /**< FOMOD priority attribute (MO2 default: 0) */
+    int document_order = 0; /**< Enqueue counter (incremented per FomodService node), used as
+                               priority tiebreaker. Not strictly XML byte-position. */
 };
 
 /**
@@ -80,14 +81,14 @@ struct FileOperation
  */
 struct FomodDependencyContext
 {
-    std::string game_path;                            ///< Root path of the game installation
-    std::unordered_set<std::string> installed_files;  ///< Files present in the mod directory
-    /** < (normalized: lowercase, forward-slash) */
+    std::string game_path;                           /**< Root path of the game installation */
+    std::unordered_set<std::string> installed_files; /**< Files present in the mod directory
+                                                        (normalized: lowercase, forward-slash) */
     std::unordered_set<std::string>
-        installed_plugins;  ///< Active game plugins (.esp/.esm, lowercase)
-    std::unordered_set<std::string> installed_fomods;  ///< Previously installed FOMOD packages
-    std::string game_version;                          ///< Game version string for comparison
-    std::string archive_root;                          ///< Extracted archive root directory
+        installed_plugins; /**< Active game plugins (.esp/.esm, lowercase) */
+    std::unordered_set<std::string> installed_fomods; /**< Previously installed FOMOD packages */
+    std::string game_version;                         /**< Game version string for comparison */
+    std::string archive_root;                         /**< Extracted archive root directory */
 };
 
 /**
@@ -98,9 +99,9 @@ struct FomodDependencyContext
  */
 struct InstallResult
 {
-    bool success = false;  ///< Whether installation completed without error
-    std::string mod_path;  ///< Path to the installed mod directory
-    std::string error;     ///< Error message if success is false
+    bool success = false; /**< Whether installation completed without error */
+    std::string mod_path; /**< Path to the installed mod directory */
+    std::string error;    /**< Error message if success is false */
 };
 
 }  // namespace mo2core
