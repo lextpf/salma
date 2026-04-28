@@ -45,6 +45,29 @@ namespace mo2core
  *    the installed file tree
  * 7. **Assemble JSON** from the solver result
  *
+ * ```mermaid
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
+ * flowchart TD
+ *     T1[1. Tier-1 shortcut: meta.ini fomod-plus]:::cache
+ *     L[2. List archive entries with sizes]:::step
+ *     P[3. Parse ModuleConfig.xml -> IR]:::step
+ *     A[4. Expand atoms + content hashes]:::step
+ *     B[5. Build target tree, hash contested]:::step
+ *     S[6. CSP solve: backtracking search]:::solve
+ *     J[7. Assemble JSON]:::out
+ *
+ *     T1 -->|hit| J
+ *     T1 -->|miss| L --> P --> A --> B --> S --> J
+ *     classDef cache fill:#134e3a,stroke:#10b981,color:#e2e8f0
+ *     classDef step fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
+ *     classDef solve fill:#2e1f5e,stroke:#8b5cf6,color:#e2e8f0
+ *     classDef out fill:transparent,stroke:#94a3b8,color:#e2e8f0,stroke-dasharray:6 4
+ * ```
+ *
  * ## Thread Safety
  *
  * The `infer_selections` method is safe to call concurrently from
@@ -93,8 +116,8 @@ public:
     /** Cached content hash for an archive entry. */
     struct CachedHash
     {
-        uint64_t hash = 0;  ///< FNV-1a content hash of the archive entry's data.
-        uint64_t size = 0;  ///< Uncompressed size of the archive entry in bytes.
+        uint64_t hash = 0; /**< FNV-1a content hash of the archive entry's data. */
+        uint64_t size = 0; /**< Uncompressed size of the archive entry in bytes. */
     };
 
     /**
@@ -127,37 +150,40 @@ private:
     /** Bundled pipeline state for infer_selections. */
     struct InferenceContext
     {
-        // Step 1 outputs
-        ArchiveService::EntryListing listing;
-        std::vector<std::string> sorted_norm_entries;
-        std::unordered_map<std::string, uint64_t> norm_entry_sizes;
+        // Step 1 - List archive entries
+        ArchiveService::EntryListing listing; /**< Archive entry list with sizes */
+        std::vector<std::string>
+            sorted_norm_entries; /**< Lowercase/forward-slash entry paths, sorted */
+        std::unordered_map<std::string, uint64_t>
+            norm_entry_sizes; /**< Norm path -> uncompressed size */
 
-        // Step 2 outputs
-        std::string fomod_prefix;
-        std::string xml_entry_norm;
+        // Step 2 - Locate FOMOD ModuleConfig.xml
+        std::string fomod_prefix;   /**< Archive prefix containing the fomod folder */
+        std::string xml_entry_norm; /**< Normalized path of ModuleConfig.xml inside the archive */
 
-        // Step 4 output
-        FomodInstaller installer;
+        // Step 4 - Parse XML into IR
+        FomodInstaller installer; /**< Parsed FOMOD installer (steps, groups, plugins) */
 
-        // Step 5 outputs
-        ExpandedAtoms atoms;
-        AtomIndex atom_index;
-        std::unordered_set<std::string> excluded;
+        // Step 5 - Expand atoms and build target tree
+        ExpandedAtoms atoms;  /**< Per-plugin and per-conditional file atoms */
+        AtomIndex atom_index; /**< dest -> atoms reverse index */
+        std::unordered_set<std::string>
+            excluded; /**< Dests excluded from scoring (e.g. metadata files) */
 
-        // Step 6 outputs
-        std::unordered_map<std::string, uint64_t> installed;
-        TargetTree target;
+        // Step 6 - Build target tree
+        std::unordered_map<std::string, uint64_t> installed; /**< Installed dests with sizes */
+        TargetTree target;                                   /**< Target file tree to reproduce */
 
-        // Step 7b output
-        InferenceOverrides overrides;
+        // Step 7b - Inference overrides
+        InferenceOverrides overrides; /**< Tri-state overrides for external conditions */
 
-        // Step 7c output
-        PropagationResult propagation;
+        // Step 7c - Constraint propagation result
+        PropagationResult propagation; /**< Pre-pass narrowed plugin domains */
 
-        // Timing
-        int64_t t_list = 0;
-        int64_t t_scan = 0;
-        int64_t t_solve = 0;
+        // Timing diagnostics (microseconds)
+        int64_t t_list = 0;  /**< Elapsed time in archive listing (us) */
+        int64_t t_scan = 0;  /**< Elapsed time in installed-file scan (us) */
+        int64_t t_solve = 0; /**< Elapsed time in CSP solve (us) */
     };
 
     nlohmann::json try_fomod_plus_json(const std::filesystem::path& mod_path);
