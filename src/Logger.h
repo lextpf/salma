@@ -98,6 +98,18 @@ using LogCallback = void (*)(const char*);
  * `.1` becomes `.2`), the oldest (`.3`) is deleted if present,
  * and the active `salma.log` is moved to `.1`.
  *
+ * ```mermaid
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
+ * stateDiagram-v2
+ *     [*] --> active: open salma.log
+ *     active --> rotating: bytes_written_ >= 10 MiB
+ *     rotating --> active: rename salma.log -> salma.log.1, shift .1->.2 .2->.3, delete old .3
+ * ```
+ *
  * @see CApi::setLogCallback
  */
 class MO2_API Logger
@@ -132,7 +144,10 @@ public:
     /**
      * @brief Log an informational message.
      *
-     * Writes to stdout, then to callback or file.
+     * Output order: file (under mutex) if no callback registered,
+     * stdout (outside lock), callback (if registered, outside lock).
+     * Console output is intentionally outside the lock so the file
+     * write is not held back by slow terminal I/O.
      *
      * @param message The log message (typically prefixed with a subsystem tag like `[install]`).
      */
@@ -141,7 +156,10 @@ public:
     /**
      * @brief Log an error message.
      *
-     * Writes to stderr, then to callback or file.
+     * Output order: file (under mutex) if no callback registered,
+     * stderr (outside lock), callback (if registered, outside lock).
+     * Console output is intentionally outside the lock so the file
+     * write is not held back by slow terminal I/O.
      *
      * @param message The error message.
      */
@@ -150,7 +168,10 @@ public:
     /**
      * @brief Log a warning message.
      *
-     * Writes to stdout, then to callback or file.
+     * Output order: file (under mutex) if no callback registered,
+     * stdout (outside lock), callback (if registered, outside lock).
+     * Console output is intentionally outside the lock so the file
+     * write is not held back by slow terminal I/O.
      *
      * @param message The warning message.
      */
@@ -186,14 +207,15 @@ private:
     // Caller must hold mutex_.
     void rotate_if_needed();
 
-    static constexpr size_t kMaxLogSize = 10 * 1024 * 1024;  ///< Rotate at 10 MiB
-    static constexpr int kMaxRotatedFiles = 3;               ///< Keep salma.log.1 through .3
+    static constexpr size_t kMaxLogSize = 10 * 1024 * 1024; /**< Rotate at 10 MiB */
+    static constexpr int kMaxRotatedFiles = 3;              /**< Keep salma.log.1 through .3 */
 
-    std::atomic<LogCallback> callback_ = nullptr;  ///< External callback (null = use file logging)
-    std::string log_directory_;                    ///< Absolute path to the logs directory
-    std::ofstream log_file_;                       ///< Persistent log file handle (append mode)
-    std::mutex mutex_;                             ///< Guards file writes
-    size_t bytes_written_ = 0;  ///< Approximate bytes written since last rotation
+    std::atomic<LogCallback> callback_ =
+        nullptr;                /**< External callback (null = use file logging) */
+    std::string log_directory_; /**< Absolute path to the logs directory */
+    std::ofstream log_file_;    /**< Persistent log file handle (append mode) */
+    std::mutex mutex_;          /**< Guards file writes */
+    size_t bytes_written_ = 0;  /**< Approximate bytes written since last rotation */
 };
 
 }  // namespace mo2core
