@@ -418,7 +418,7 @@ Prefer these commands where useful:
 * `@see`
 * `@ingroup`
 
-We still use `@brief`, `@class`, `@struct`, `@union`, `@enum`, and `@namespace` for readability and forward-compatibility.
+We still use `@brief`, `@class`, `@struct`, `@union`, `@enum`, `@namespace`, and `@author` for readability and forward-compatibility.
 
 Do not use: `@short`, `@file`, `@defgroup`, `@def`, `@fn`, `@var`, `@internal`.
 
