@@ -227,7 +227,7 @@ function CollapsedLedger({
         </span>
       )}
 
-      {/* Right: percent · rule · expand */}
+      {/* Right: percent - rule - expand */}
       <span className="queue-ledger-right">
         {jobs.length > 0 && (
           <span
