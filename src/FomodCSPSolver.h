@@ -26,14 +26,16 @@ namespace mo2core
  */
 struct SolverResult
 {
-    std::vector<std::vector<std::vector<bool>>> selections;  // [step][group][plugin]
-    std::unordered_map<std::string, std::string> inferred_flags;
-    bool exact_match = false;
-    int nodes_explored = 0;
-    int missing = 0;
-    int extra = 0;
-    int size_mismatch = 0;
-    int hash_mismatch = 0;
+    std::vector<std::vector<std::vector<bool>>>
+        selections; /**< [step][group][plugin] selection grid */
+    std::unordered_map<std::string, std::string>
+        inferred_flags;       /**< Flags set by the chosen plugins */
+    bool exact_match = false; /**< True iff the install reproduces the target tree exactly */
+    int nodes_explored = 0;   /**< CSP search-tree node count (diagnostics) */
+    int missing = 0;          /**< Target dests not produced by selections */
+    int extra = 0;            /**< Selections that produce dests not in target */
+    int size_mismatch = 0;    /**< Dests produced with wrong uncompressed size */
+    int hash_mismatch = 0;    /**< Dests produced with wrong content hash */
 };
 
 /**
@@ -93,6 +95,11 @@ struct PropagationResult;
  *         values, match quality metrics (`missing`, `extra`, `size_mismatch`,
  *         `hash_mismatch`), and `exact_match` indicating a perfect reproduction.
  * @pre `installer` must contain at least one step with at least one group.
+ *
+ * @note The internal phase pipeline (greedy -> propagate ->
+ *       component-decompose -> residual repair -> focused search ->
+ *       global fallback) is documented in `FomodCSPSolverInternal.h`'s
+ *       `kConfig` block.
  */
 MO2_API SolverResult solve_fomod_csp(const FomodInstaller& installer,
                                      const ExpandedAtoms& atoms,
