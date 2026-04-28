@@ -193,7 +193,8 @@ public:
      * @throw std::exception (re-thrown) if JSON traversal encounters a type error
      *        (e.g. a non-string entry in a plugins array). On exception, all
      *        operations enqueued by this call are rolled back from @p ops and
-     *        @p next_doc_order is restored to its original value.
+     *        @p next_doc_order is restored to its original value, so a retry
+     *        with the same vector after fixing the JSON is idempotent.
      */
     void process_optional_files(const nlohmann::json& config_json,
                                 const std::string& src_base,
@@ -260,9 +261,9 @@ private:
                                        const std::string& group,
                                        const std::string& plugin);
 
-    FomodInstaller installer_;  ///< Parsed FOMOD IR (set by parse_ir)
+    FomodInstaller installer_; /**< Parsed FOMOD IR (set by parse_ir) */
     std::unordered_map<std::string, std::string>
-        plugin_flags_;  ///< Accumulated condition flags from selected plugins
+        plugin_flags_; /**< Accumulated condition flags from selected plugins */
 };
 
 }  // namespace mo2core
