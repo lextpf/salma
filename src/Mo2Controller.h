@@ -102,8 +102,9 @@ namespace mo2server
  * ### Logs
  *
  * **`GET /api/logs`** and **`GET /api/logs/test`**
- * - Query: `?lines=N` (default 100, max 5000)
- * - Response: `{ "lines": ["..."] }`
+ * - Query: `?lines=N` (default 100, max 5000), `?offset=B` (incremental tail)
+ * - Response: `{ "lines": ["..."], "errors": int, "warnings": int,
+ *   "passes": int, "nextOffset": int }`
  *
  * **`POST /api/logs/clear`** and **`POST /api/logs/clear/test`**
  * - Response: `{ "success": true }`
@@ -136,6 +137,33 @@ namespace mo2server
  * Plugin deploy/purge (`POST /api/plugin/deploy`, `/purge`) follows
  * the same `BackgroundJob` pattern via `plugin_action_job_`
  * (`BackgroundJob<PluginActionResult>`).
+ *
+ * ```mermaid
+ * ---
+ * config:
+ *   theme: dark
+ *   look: handDrawn
+ * ---
+ * sequenceDiagram
+ *     participant C as Client
+ *     participant Ctrl as Mo2Controller
+ *     participant Job as BackgroundJob
+ *     C->>Ctrl: POST /api/mo2/fomods/scan
+ *     Ctrl->>Job: try_start(work)
+ *     alt running
+ *       Job-->>Ctrl: false
+ *       Ctrl-->>C: 409 already running
+ *     else accepted
+ *       Job-->>Ctrl: true
+ *       Ctrl-->>C: 200 started
+ *     end
+ *     loop poll
+ *       C->>Ctrl: GET /scan/status
+ *       Ctrl->>Job: is_running() / read_result()
+ *       Job-->>Ctrl: {running, ScanResult?}
+ *       Ctrl-->>C: 200 status
+ *     end
+ * ```
  *
  * Test execution (`POST /api/test/run`) does **not** use `BackgroundJob`;
  * it launches a Win32 process via `CreateProcessW` and tracks it with a
@@ -218,6 +246,13 @@ public:
 
     /**
      * @brief Runs the `deploy.bat` script in the background to install the Salma MO2 plugin.
+     *
+     * Both the deploy path and the configured MO2 mods path are scanned
+     * for shell metacharacters before launch. The blocked set is:
+     * `& | > < ^ % ! ( ) " ; ' \``. Any of these in either path
+     * yields a 400 response, preventing command injection through
+     * paths that flow into a `cmd.exe` child process.
+     *
      * @return 200 if started, 400 if mods path unconfigured or contains shell metacharacters, 404
      * if script missing, 409 if busy, 501 on non-Windows.
      */
@@ -225,6 +260,9 @@ public:
 
     /**
      * @brief Runs the `purge.bat` script in the background to uninstall the Salma MO2 plugin.
+     *
+     * Same metacharacter rejection rules as deploy_plugin().
+     *
      * @return 200 if started, 400 if mods path unconfigured or contains shell metacharacters, 404
      * if script missing, 409 if busy, 501 on non-Windows.
      */
@@ -280,8 +318,15 @@ public:
     /**
      * @brief Spawns `test.py` as a detached Win32 process. Only one test run may be active at a
      * time.
-     * @param req Optional JSON body with `"args"` (whitelist-sanitized: alphanumeric, space,
-     * underscore, hyphen, dot).
+     *
+     * The optional `"args"` string is matched against the whitelist
+     * regex `^[a-zA-Z0-9 _\-\.]*$` (alphanumeric, space, underscore,
+     * hyphen, dot). Quotes and path separators are deliberately
+     * excluded to prevent argument-boundary escape and path traversal.
+     * The `..` substring is rejected explicitly even within the
+     * whitelist (since `.` is allowed individually).
+     *
+     * @param req Optional JSON body with `"args"` (whitelist-sanitized as above).
      * @return 200 with PID on success, 400 on bad args, 404 if test.py missing, 409 if already
      * running, 500 on CreateProcess failure, 501 on non-Windows.
      */
