@@ -24,6 +24,9 @@ namespace mo2server
  * hex suffix provides 16^12 (~2.8 * 10^14) possibilities, making
  * collisions negligible even under heavy concurrent uploads.
  *
+ * Temp filenames follow the pattern `mo2_upload_{12-hex}{ext}` and
+ * are written under `std::filesystem::temp_directory_path()`.
+ *
  * ## :material-alert-circle-outline: Failure Behavior
  *
  * If the write to disk fails (e.g. disk full, permission denied),
@@ -40,12 +43,19 @@ namespace mo2server
  * should not use it to construct filesystem paths without
  * validation.
  *
+ * The `original_extension` field, however, **is** sanitized: any
+ * character that is not alphanumeric, dot, or hyphen is stripped
+ * before the extension is appended to the temp filename. This
+ * prevents path traversal via crafted filenames like
+ * `evil.../../etc/passwd`.
+ *
  * ## :material-upload-outline: Upload Limits
  *
- * No explicit body-size limit is enforced by this handler. The
- * effective limit depends on Crow's configuration (default is
- * unbounded). For production use, consider setting Crow's max
- * payload size to prevent memory exhaustion from oversized uploads.
+ * No explicit body-size limit is enforced by this handler itself.
+ * The effective cap is **512 MiB**, enforced upstream in
+ * `InstallationController::parse_and_validate_upload` (returns
+ * HTTP 413 when exceeded). Crow's `stream_threshold` setting in
+ * `main.cpp` controls buffering, not the hard cap.
  *
  * ## :material-code-tags: Usage Example
  *
@@ -66,9 +76,9 @@ namespace mo2server
  */
 struct UploadedFile
 {
-    std::string filename;            ///< Original filename from the upload
-    std::string temp_path;           ///< Absolute path to the saved temp file
-    std::string original_extension;  ///< File extension including the dot (e.g. `.7z`)
+    std::string filename;           /**< Original filename from the upload */
+    std::string temp_path;          /**< Absolute path to the saved temp file */
+    std::string original_extension; /**< File extension including the dot (e.g. `.7z`) */
 };
 
 class MultipartHandler
