@@ -23,9 +23,9 @@ namespace mo2core
 template <typename Enum, std::size_t N>
 struct EnumStringMap
 {
-    std::array<std::pair<Enum, std::string_view>, N> entries;  ///< Enum/string pairs.
-    Enum default_value;                           ///< Returned by from_string() on lookup miss.
-    std::string_view default_string = "Unknown";  ///< Returned by to_string() on lookup miss.
+    std::array<std::pair<Enum, std::string_view>, N> entries; /**< Enum/string pairs. */
+    Enum default_value;                          /**< Returned by from_string() on lookup miss. */
+    std::string_view default_string = "Unknown"; /**< Returned by to_string() on lookup miss. */
 
     /**
      * @brief Look up an enum value by its string representation.
@@ -125,8 +125,9 @@ MO2_API std::string to_lower(const std::string& s);
  *   and remove "." and ".." path components.
  * @param p  Raw path string (e.g. from an archive entry or FOMOD node).
  * @return Cleaned path string.
- * @post Output is lowercase, uses forward slashes only, and has no
- *   leading/trailing slashes.
+ * @post Output is lowercase, uses forward slashes only, has no
+ *   leading/trailing slashes, no repeated `/`, and no `.` or `..`
+ *   path segments.
  */
 MO2_API std::string normalize_path(const std::string& p);
 
@@ -141,6 +142,11 @@ MO2_API std::string random_hex_string(size_t length = 12);
  * @brief Respect the FOMOD `order` attribute on installSteps, optionalFileGroups, and plugins.
  *
  * Values: "Ascending" (default, alphabetical by name), "Descending", "Explicit" (document order).
+ *
+ * When two nodes share the same `name` attribute under Ascending/Descending,
+ * their relative order is unspecified (`std::ranges::sort` on equal keys is
+ * not stable).
+ *
  * @param parent      XML node whose `order` attribute is read.
  * @param child_name  Tag name of the child nodes to collect and sort.
  * @return Sorted vector of child nodes.
@@ -174,6 +180,15 @@ MO2_API std::string_view plugin_type_to_string(PluginType type);
 
 /**
  * @brief FNV-1a 64-bit hash.
+ *
+ * Recurrence:
+ *
+ * \f[ h_0 = \mathtt{0xCBF29CE484222325} \f]
+ * \f[ h_{i+1} = (h_i \oplus b_i) \times \mathtt{0x100000001B3} \f]
+ *
+ * Each byte is fed in as `unsigned char`, so the hash is negative-char-safe.
+ * Order is byte-stream, not bit-stream.
+ *
  * @param data  Pointer to the byte sequence to hash.
  * @param size  Number of bytes to hash.
  * @return 64-bit FNV-1a hash value.
@@ -235,10 +250,10 @@ struct HashDispatch
     /** @brief A single hash-to-value entry. */
     struct Entry
     {
-        uint64_t hash;  ///< Precomputed FNV-1a hash of the key.
-        T value;        ///< Value associated with the key.
+        uint64_t hash; /**< Precomputed FNV-1a hash of the key. */
+        T value;       /**< Value associated with the key. */
     };
-    std::array<Entry, N> entries;  ///< The dispatch table entries.
+    std::array<Entry, N> entries; /**< The dispatch table entries. */
 
     /**
      * @brief Look up a value by its string key.
@@ -291,6 +306,9 @@ MO2_API bool is_safe_destination(const std::string& dest);
  * @param parent  The directory that should contain the child.
  * @param child   The path to test.
  * @return @c true if @p child resolves to a location inside @p parent.
+ * @note `weakly_canonical` errors are silently treated as `false`. This is
+ *       defensive but worth knowing when debugging spurious 403/400 responses
+ *       caused by transient I/O failures during canonicalization.
  */
 MO2_API bool is_inside(const std::filesystem::path& parent, const std::filesystem::path& child);
 
