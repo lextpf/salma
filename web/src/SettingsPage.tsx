@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { getConfig, isFetchUnavailableError, putConfig } from '../api'
-import Section from '../components/Section'
-import type { AppConfig } from '../types'
+import { getConfig, isFetchUnavailableError, putConfig } from './api'
+import Section from './components/Section'
+import type { AppConfig } from './types'
 
 const RETRY_DELAY_MS = 2000
 
