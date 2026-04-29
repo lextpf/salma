@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
-import { getLogs, getTestLogs, clearLogs } from '../api'
-import { isProgressLine, parseProgressBars, highlightRawBar, renderTqdmBar, TqdmBar } from '../utils/progressBarParsing'
-import { LogLine } from '../components/LogLine'
-import Section from '../components/Section'
-import { useVirtualScroll, LINE_HEIGHT } from '../hooks/useVirtualScroll'
+import { getLogs, getTestLogs, clearLogs } from './api'
+import { isProgressLine, parseProgressBars, highlightRawBar, renderTqdmBar, TqdmBar } from './progressBarParsing'
+import { LogLine } from './components/LogLine'
+import Section from './components/Section'
+import { useVirtualScroll, LINE_HEIGHT } from './useVirtualScroll'
 
 const LINE_OPTIONS = [50, 100, 200, 500, 1000, 0] as const
 const RETRY_DELAY_MS = 2000
