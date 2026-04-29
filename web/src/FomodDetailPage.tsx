@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { getFomod, listFomods } from '../api'
-import FomodStepCard from '../components/FomodStepCard'
-import Section from '../components/Section'
-import type { FomodDetail } from '../types'
+import { getFomod, listFomods } from './api'
+import FomodStepCard from './components/FomodStepCard'
+import Section from './components/Section'
+import type { FomodDetail } from './types'
 
 const RETRY_DELAY_MS = 2000
 const MAX_RETRIES = 3
