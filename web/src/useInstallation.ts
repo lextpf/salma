@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { getInstallStatus } from '../api'
-import type { InstallationJob } from '../types'
+import { getInstallStatus } from './api'
+import type { InstallationJob } from './types'
 
 export function useInstallation(pluginInstalled: boolean): {
   jobs: InstallationJob[]
