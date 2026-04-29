@@ -1,11 +1,11 @@
 import { Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
 import ErrorBoundary from './components/ErrorBoundary'
-import InstallPage from './pages/InstallPage'
-import FomodBrowserPage from './pages/FomodBrowserPage'
-import FomodDetailPage from './pages/FomodDetailPage'
-import LogsPage from './pages/LogsPage'
-import SettingsPage from './pages/SettingsPage'
+import InstallPage from './InstallPage'
+import FomodBrowserPage from './FomodBrowserPage'
+import FomodDetailPage from './FomodDetailPage'
+import LogsPage from './LogsPage'
+import SettingsPage from './SettingsPage'
 
 function App() {
   return (
