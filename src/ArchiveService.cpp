@@ -141,38 +141,76 @@ static std::vector<char> read_file_bytes(const fs::path& file_path)
 }
 
 // Searches common 7-Zip install locations for 7z.dll.
-// Checks SEVENZIP_PATH env var first, then Program Files directories.
+// Order: SEVENZIP_PATH (file or dir) -> module dir (bundled codec) ->
+// exe dir -> Program Files -> system DLL search.
+//
+// Bundled wins over a system 7-Zip install: we test against a known codec
+// version in CI, and a stale or odd system 7-Zip would silently produce
+// codec drift. Users who insist on system 7-Zip can set SEVENZIP_PATH.
 static std::string find_7z_library()
 {
 #ifdef _WIN32
-    const char* env = std::getenv("SEVENZIP_PATH");
-    if (env)
+    auto& logger = Logger::instance();
+    std::error_code ec;
+
+    auto accept = [&logger](const fs::path& dll, const char* source) -> std::string
     {
-        auto p = fs::path(env);
-        // Accept either the DLL path directly or its parent directory
-        if (fs::exists(p) && p.extension() == ".dll")
+        logger.log(std::format("[archive] 7z library: {} ({})", dll.string(), source));
+        return dll.string();
+    };
+
+    // 1. SEVENZIP_PATH env var (file or directory)
+    if (const char* env = std::getenv("SEVENZIP_PATH"); env && *env)
+    {
+        fs::path p(env);
+        if (fs::is_regular_file(p, ec) && p.extension() == ".dll")
         {
-            return p.string();
+            return accept(p, "SEVENZIP_PATH file");
         }
-        auto dll = p.parent_path() / "7z.dll";
-        if (fs::exists(dll))
+        if (fs::is_directory(p, ec))
         {
-            return dll.string();
+            auto dll = p / "7z.dll";
+            if (fs::exists(dll, ec))
+            {
+                return accept(dll, "SEVENZIP_PATH directory");
+            }
         }
     }
 
-    auto pf = std::string(std::getenv("ProgramFiles") ? std::getenv("ProgramFiles")
-                                                      : "C:\\Program Files");
-    auto pf86 = std::string(std::getenv("ProgramFiles(x86)") ? std::getenv("ProgramFiles(x86)")
-                                                             : "C:\\Program Files (x86)");
-    for (const auto& dir : {pf + "\\7-Zip", pf86 + "\\7-Zip"})
+    // 2. Module directory: next to mo2-salma.dll. The release bundle ships
+    // 7z.dll here so deployed installs do not depend on a system 7-Zip.
+    auto module_dll = module_directory(reinterpret_cast<const void*>(&find_7z_library)) / "7z.dll";
+    if (fs::exists(module_dll, ec))
     {
-        auto dll = fs::path(dir) / "7z.dll";
-        if (fs::exists(dll))
+        return accept(module_dll, "module dir");
+    }
+
+    // 3. Executable directory (covers headless server runs where the exe and
+    // DLL are colocated, but also serves as a backstop if module lookup fails).
+    auto exe_dll = executable_directory() / "7z.dll";
+    if (fs::exists(exe_dll, ec))
+    {
+        return accept(exe_dll, "exe dir");
+    }
+
+    // 4. Program Files (system 7-Zip install)
+    for (const char* var : {"ProgramFiles", "ProgramFiles(x86)"})
+    {
+        const char* root = std::getenv(var);
+        if (!root || !*root)
         {
-            return dll.string();
+            continue;
+        }
+        auto pf_dll = fs::path(root) / "7-Zip" / "7z.dll";
+        if (fs::exists(pf_dll, ec))
+        {
+            return accept(pf_dll, "Program Files");
         }
     }
+
+    logger.log_warning(
+        "[archive] 7z.dll not found in SEVENZIP_PATH, module dir, exe dir, or Program Files; "
+        "falling back to system DLL search. Set SEVENZIP_PATH if loading fails.");
 #endif
     // Fall back to default DLL search order (PATH, system dirs)
     return "7z.dll";
