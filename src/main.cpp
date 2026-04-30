@@ -31,11 +31,46 @@
 #include "StaticFileHandler.h"
 
 #include <crow/logging.h>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <string>
 #include <string_view>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace fs = std::filesystem;
+
+namespace
+{
+
+// Resolve the directory containing the running executable.
+// Falls back to cwd if the platform lookup fails.
+fs::path executable_directory()
+{
+#ifdef _WIN32
+    std::wstring buf(MAX_PATH, L'\0');
+    DWORD len = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+    constexpr int kMaxRetries = 5;
+    int retries = 0;
+    while (len >= buf.size() && retries < kMaxRetries)
+    {
+        buf.resize(buf.size() * 2);
+        len = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        ++retries;
+    }
+    if (len > 0 && retries < kMaxRetries)
+    {
+        buf.resize(len);
+        return fs::path(buf).parent_path();
+    }
+#endif
+    return fs::current_path();
+}
+
+}  // namespace
 
 /**
  * @brief Bridges Crow's ILogHandler into salma's Logger so all HTTP-server
@@ -148,8 +183,11 @@ int main()
     mo2server::InstallationController controller;
     mo2server::Mo2Controller mo2_controller;
 
-    // Static file directory: try cwd/web/dist, fall back to parent/web/dist
-    auto exe_dir = fs::current_path();
+    // Static file directory: anchor against the exe location, not cwd, so the
+    // dashboard works regardless of where the user launches mo2-server.exe from.
+    // Try <exe>/web/dist first (release layout), fall back to <exe>/../web/dist
+    // (in-tree dev layout where the exe lives in build/bin/Release).
+    auto exe_dir = executable_directory();
     auto static_dir = (exe_dir / "web" / "dist").string();
     if (!fs::exists(static_dir))
     {
@@ -269,8 +307,27 @@ int main()
     // kMaxUploadBytes in InstallationController.cpp - same 512 MiB value, by design).
     static constexpr size_t kStreamThreshold = 512ULL * 1024 * 1024;
 
-    logger.log("[server] Server starting on port 5000");
-    app.port(5000).multithreaded().stream_threshold(kStreamThreshold).run();
+    // Bind to loopback by default. The server exposes endpoints that perform
+    // file writes, archive extraction, batch script execution, and child-process
+    // spawning; opening that surface to the LAN is unsafe. Users who deliberately
+    // need a non-loopback bind (e.g. dev container, remote dashboard) can set
+    // SALMA_BIND_ADDR -- and the warning makes that choice visible in the log.
+    std::string bind_addr = "127.0.0.1";
+    if (const char* bind_env = std::getenv("SALMA_BIND_ADDR"); bind_env && *bind_env)
+    {
+        bind_addr = bind_env;
+    }
+    if (bind_addr != "127.0.0.1" && bind_addr != "localhost" && bind_addr != "::1")
+    {
+        logger.log_warning(
+            std::format("[server] SALMA_BIND_ADDR set to non-loopback address {}; "
+                        "endpoints that write files and spawn processes are now reachable "
+                        "from the network. Ensure the host firewall is configured.",
+                        bind_addr));
+    }
+
+    logger.log(std::format("[server] Server starting on {}:5000", bind_addr));
+    app.bindaddr(bind_addr).port(5000).multithreaded().stream_threshold(kStreamThreshold).run();
 
     return 0;
 }
