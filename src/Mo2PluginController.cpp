@@ -88,7 +88,7 @@ static int run_batch_script(const fs::path& script_path,
     env_block.push_back('\0');
 
     // Use CreateProcessA instead of std::system to avoid shell injection.
-    // The batch script path is from a known location (cwd), but deploy_path
+    // The batch script path is anchored to the exe directory, but deploy_path
     // and mods_path come from config/env and must not be passed through a shell.
     std::string cmd = std::format(R"(cmd.exe /c "call "{}"")", script_path.string());
 
@@ -164,13 +164,12 @@ crow::response Mo2Controller::run_plugin_action(const std::string& action)
 
 #ifdef _WIN32
     auto script_name = action + ".bat";
-    auto script_path = fs::current_path() / script_name;
+    auto script_dir = mo2core::executable_directory();
+    auto script_path = script_dir / script_name;
     if (!fs::exists(script_path))
     {
         return json_response(
-            404,
-            {{"error",
-              std::format("{} not found in {}", script_name, fs::current_path().string())}});
+            404, {{"error", std::format("{} not found in {}", script_name, script_dir.string())}});
     }
 
     auto& cfg = ConfigService::instance();
