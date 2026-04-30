@@ -22,44 +22,25 @@ namespace fs = std::filesystem;
 namespace mo2core
 {
 
-// RAII wrappers for libarchive handles to prevent leaks on early returns.
-struct ArchiveReadGuard
+// Out-of-line destructors for the RAII guards declared in ArchiveService.h.
+// Bodies live here so the header does not have to include <archive.h>.
+ArchiveReadGuard::~ArchiveReadGuard()
 {
-    struct archive* a = nullptr;
-    explicit ArchiveReadGuard(struct archive* handle)
-        : a(handle)
+    if (handle_)
     {
+        archive_read_close(handle_);
+        archive_read_free(handle_);
     }
-    ~ArchiveReadGuard()
-    {
-        if (a)
-        {
-            archive_read_close(a);
-            archive_read_free(a);
-        }
-    }
-    ArchiveReadGuard(const ArchiveReadGuard&) = delete;
-    ArchiveReadGuard& operator=(const ArchiveReadGuard&) = delete;
-};
+}
 
-struct ArchiveWriteGuard
+ArchiveWriteGuard::~ArchiveWriteGuard()
 {
-    struct archive* a = nullptr;
-    explicit ArchiveWriteGuard(struct archive* handle)
-        : a(handle)
+    if (handle_)
     {
+        archive_write_close(handle_);
+        archive_write_free(handle_);
     }
-    ~ArchiveWriteGuard()
-    {
-        if (a)
-        {
-            archive_write_close(a);
-            archive_write_free(a);
-        }
-    }
-    ArchiveWriteGuard(const ArchiveWriteGuard&) = delete;
-    ArchiveWriteGuard& operator=(const ArchiveWriteGuard&) = delete;
-};
+}
 
 // Streams raw data blocks from the reader to the disk writer.
 // Returns ARCHIVE_OK on success or the first error code encountered.

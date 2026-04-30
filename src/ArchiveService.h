@@ -7,8 +7,119 @@
 #include <unordered_set>
 #include <vector>
 
+// Forward-declare libarchive's opaque handle so consumers of this header
+// (including the MO2 plugin path through mo2-core) do not transitively
+// pull in <archive.h>. The destructor bodies that actually call into
+// libarchive live in ArchiveService.cpp where the full header is included.
+struct archive;
+
 namespace mo2core
 {
+
+/**
+ * @struct ArchiveReadGuard
+ * @brief RAII guard that closes and frees a libarchive read handle.
+ * @author Alex (https://github.com/lextpf)
+ * @ingroup ArchiveService
+ *
+ * Wraps the result of `archive_read_new()` so early returns and exceptions
+ * cannot leak the handle. The guard owns the handle exclusively; copy and
+ * assignment are deleted to prevent double-free.
+ *
+ * The destructor calls `archive_read_close()` before `archive_read_free()`
+ * so any pending read state is flushed; both calls ignore a null handle.
+ *
+ * Used by every libarchive code path in ArchiveService (extraction, header
+ * scans, single-entry reads, batch reads). Construct directly from the
+ * result of `archive_read_new()`:
+ *
+ * ```cpp
+ * auto a = archive_read_new();
+ * ArchiveReadGuard guard(a);
+ * archive_read_support_filter_all(a);
+ * // ... use `a` freely; the guard frees it on scope exit
+ * ```
+ *
+ * @note Move construction is not provided; the guard is intended for
+ *       single-scope ownership only.
+ */
+struct ArchiveReadGuard
+{
+    struct archive* handle_ = nullptr; /**< Owned libarchive read handle (nullable). */
+
+    /**
+     * @brief Take ownership of an `archive_read_new()` handle.
+     * @param archive_handle Handle to wrap. May be nullptr (no-op on destruction).
+     */
+    explicit ArchiveReadGuard(struct archive* archive_handle) noexcept
+        : handle_(archive_handle)
+    {
+    }
+
+    /**
+     * @brief Closes and frees the wrapped handle if non-null.
+     *
+     * Defined out-of-line in ArchiveService.cpp because the body requires
+     * the full libarchive header.
+     */
+    ~ArchiveReadGuard();
+
+    ArchiveReadGuard(const ArchiveReadGuard&) = delete;
+    ArchiveReadGuard& operator=(const ArchiveReadGuard&) = delete;
+};
+
+/**
+ * @struct ArchiveWriteGuard
+ * @brief RAII guard that closes and frees a libarchive write handle.
+ * @author Alex (https://github.com/lextpf)
+ * @ingroup ArchiveService
+ *
+ * Counterpart to ArchiveReadGuard for `archive_write_new()` and
+ * `archive_write_disk_new()` handles. Wraps the result so early returns
+ * and exceptions cannot leak the handle.
+ *
+ * The destructor calls `archive_write_close()` before
+ * `archive_write_free()`; both calls ignore a null handle.
+ *
+ * Used in ArchiveService for the extract-to-disk path (where each entry
+ * is written through `archive_write_disk_new()`) and for `create_zip()`
+ * (where `archive_write_new()` produces the zip output). Construct
+ * directly from either factory:
+ *
+ * ```cpp
+ * auto ext = archive_write_disk_new();
+ * ArchiveWriteGuard guard(ext);
+ * archive_write_disk_set_options(ext, flags);
+ * // ... use `ext` freely; the guard frees it on scope exit
+ * ```
+ *
+ * @note Move construction is not provided; the guard is intended for
+ *       single-scope ownership only.
+ */
+struct ArchiveWriteGuard
+{
+    struct archive* handle_ = nullptr; /**< Owned libarchive write handle (nullable). */
+
+    /**
+     * @brief Take ownership of an `archive_write_*_new()` handle.
+     * @param archive_handle Handle to wrap. May be nullptr (no-op on destruction).
+     */
+    explicit ArchiveWriteGuard(struct archive* archive_handle) noexcept
+        : handle_(archive_handle)
+    {
+    }
+
+    /**
+     * @brief Closes and frees the wrapped handle if non-null.
+     *
+     * Defined out-of-line in ArchiveService.cpp because the body requires
+     * the full libarchive header.
+     */
+    ~ArchiveWriteGuard();
+
+    ArchiveWriteGuard(const ArchiveWriteGuard&) = delete;
+    ArchiveWriteGuard& operator=(const ArchiveWriteGuard&) = delete;
+};
 
 /**
  * @class ArchiveService
