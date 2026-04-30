@@ -2,6 +2,7 @@
 #include "Mo2Helpers.h"
 
 #include "ConfigService.h"
+#include "FomodArchiveResolver.h"
 #include "FomodInferenceService.h"
 #include "Logger.h"
 #include "Utils.h"
@@ -104,51 +105,10 @@ static std::string read_installation_file(const fs::path& meta_ini_path)
     return "";
 }
 
-static fs::path resolve_archive_path(const std::string& archive_value,
-                                     const fs::path& mod_folder,
-                                     const fs::path& mods_dir)
-{
-    if (archive_value.empty())
-    {
-        return {};
-    }
-
-    fs::path archive_path = fs::path(archive_value);
-    if (archive_path.is_absolute())
-    {
-        return fs::exists(archive_path) ? archive_path : fs::path{};
-    }
-
-    std::vector<fs::path> candidates;
-
-    if (const char* downloads = std::getenv("SALMA_DOWNLOADS_PATH"); downloads && *downloads)
-    {
-        candidates.push_back(fs::path(downloads) / archive_path);
-    }
-
-    // Extra fallbacks for common local setups.
-    candidates.push_back(mod_folder / archive_path);
-    if (!mods_dir.empty())
-    {
-        auto parent = mods_dir.parent_path();
-        candidates.push_back(parent / archive_path);
-        candidates.push_back(parent / "downloads" / archive_path);
-        if (parent.has_parent_path())
-        {
-            candidates.push_back(parent.parent_path() / "downloads" / archive_path);
-        }
-    }
-
-    for (const auto& candidate : candidates)
-    {
-        if (fs::exists(candidate))
-        {
-            return candidate;
-        }
-    }
-
-    return {};
-}
+// Archive resolution moved to mo2core::resolve_mod_archive in
+// FomodArchiveResolver.h so the MO2 plugin can call the same logic via the
+// `resolveModArchive` C-API entry point. Calls inside this file delegate to
+// the shared helper.
 
 /// SAX callback that counts the number of objects in the top-level "steps"
 /// array of a FOMOD JSON file without fully parsing the document.
@@ -216,6 +176,80 @@ struct StepCounter : nlohmann::json_sax<json>
     }
 };
 
+// Parses a Nexus-style archive filename "Name-ModID-Version-FileID" and
+// returns {modid, fileid}. Returns empty strings if the name does not match
+// the Nexus convention. Used to populate the choice JSON's metadata block
+// so the MO2 plugin can look up choices by stable identifier instead of a
+// fuzzy filename stem-prefix match.
+static std::pair<std::string, std::string> parse_nexus_archive_name(const std::string& filename)
+{
+    static const std::regex kPattern(R"(^(.+?)-(\d+)-(.*)-(\d+)$)");
+    std::smatch match;
+    if (std::regex_match(filename, match, kPattern))
+    {
+        return {match[2].str(), match[4].str()};
+    }
+    return {};
+}
+
+// Format a system-clock time point as "YYYY-MM-DDTHH:MM:SSZ" UTC.
+static std::string format_iso8601_utc(std::chrono::system_clock::time_point tp)
+{
+    auto t = std::chrono::system_clock::to_time_t(tp);
+    std::tm tm_utc{};
+#ifdef _WIN32
+    gmtime_s(&tm_utc, &t);
+#else
+    gmtime_r(&t, &tm_utc);
+#endif
+    return std::format("{:04d}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}Z",
+                       tm_utc.tm_year + 1900,
+                       tm_utc.tm_mon + 1,
+                       tm_utc.tm_mday,
+                       tm_utc.tm_hour,
+                       tm_utc.tm_min,
+                       tm_utc.tm_sec);
+}
+
+// Inject a `metadata` block into a parsed FOMOD-choices JSON before it gets
+// persisted. The block lets _find_fomod_json look up by (modid, fileid) or
+// (size, mtime) instead of fuzzy-matching the filename stem, which the audit
+// flagged as fragile (similar mod names pick the wrong choices file).
+static void inject_choice_metadata(json& parsed,
+                                   const fs::path& archive_path,
+                                   const std::string& mod_name)
+{
+    json metadata;
+    metadata["module_name"] = mod_name;
+    metadata["archive_path"] = archive_path.string();
+
+    std::error_code ec;
+    auto size = fs::file_size(archive_path, ec);
+    metadata["archive_size"] = ec ? 0 : static_cast<uint64_t>(size);
+
+    auto file_time = fs::last_write_time(archive_path, ec);
+    if (!ec)
+    {
+        // file_clock and system_clock have different epochs on Windows.
+        // clock_cast (C++20) bridges them so the Python lookup, which uses
+        // POSIX seconds, can compare against this value directly.
+        auto sctp = std::chrono::clock_cast<std::chrono::system_clock>(file_time);
+        metadata["archive_mtime"] =
+            std::chrono::duration_cast<std::chrono::seconds>(sctp.time_since_epoch()).count();
+    }
+    else
+    {
+        metadata["archive_mtime"] = 0;
+    }
+
+    auto [modid, fileid] = parse_nexus_archive_name(archive_path.stem().string());
+    metadata["modid"] = modid;
+    metadata["fileid"] = fileid;
+    metadata["scanned_at"] = format_iso8601_utc(std::chrono::system_clock::now());
+
+    parsed["metadata"] = metadata;
+}
+
 // Per-mod inference result for the scan job.
 enum class ModResult
 {
@@ -253,7 +287,7 @@ static ModResult process_single_mod(const fs::path& mod_folder,
         return ModResult::ArchiveSkip;
     }
 
-    fs::path archive_path = resolve_archive_path(archive_value, mod_folder, mods_dir);
+    fs::path archive_path = mo2core::resolve_mod_archive(archive_value, mod_folder, mods_dir);
     if (archive_path.empty() || !fs::exists(archive_path))
     {
         logger.log(infer_status(index, mod_name, "SKIP", "(archive missing)"));
@@ -300,6 +334,11 @@ static ModResult process_single_mod(const fs::path& mod_folder,
                 index, mod_name, "NO STEPS", std::format("({:.1f}s): no FOMOD steps", elapsed_s)));
             return ModResult::NoFomod;
         }
+
+        // Embed identifying metadata (modid, fileid, archive size + mtime,
+        // module name) so _find_fomod_json on the MO2 plugin side can look
+        // up choices by stable identifier rather than fuzzy filename match.
+        inject_choice_metadata(parsed, archive_path, mod_name);
 
         // Write to a temporary file first, then atomically rename to prevent
         // corrupted JSON if the process crashes or is interrupted mid-write.
