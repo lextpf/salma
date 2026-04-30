@@ -15,9 +15,9 @@ Known false-positive failures (not real inference bugs):
   - Runtime-modified files (e.g. SKSE plugin .log placeholders) are filtered
     via IGNORED_FILES in scripts/common.py.
 
-Environment variables (same as deploy.bat / purge.bat):
-  SALMA_MODS_PATH      - mods directory (default: D:\\Nolvus\\Instance\\MODS\\mods)
-  SALMA_DEPLOY_PATH    - MO2 plugins dir (default: D:\\Nolvus\\Instance\\MO2\\plugins)
+Environment variables (run scripts\\setup-env.bat once to configure):
+  SALMA_MODS_PATH      - mods directory (required)
+  SALMA_DEPLOY_PATH    - MO2 plugins dir (required)
   SALMA_DOWNLOADS_PATH - downloads dir for resolving relative archive paths
 
 Usage:
