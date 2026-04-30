@@ -60,12 +60,24 @@ crow::response Mo2Controller::put_config(const crow::request& req)
             if (!fs::is_directory(mods_path))
                 return json_response(
                     400, {{"error", "mo2ModsPath does not exist or is not a directory"}});
-            cfg.set_mo2_mods_path(mods_path);
-        }
 
-        if (!cfg.save())
+            // Transactional: stage in memory, persist to disk, revert on failure.
+            // Without this the in-memory state can diverge from disk when the
+            // save fails (disk full, permissions), and the next restart silently
+            // reverts changes the user already saw applied.
+            if (!cfg.apply_mo2_mods_path(mods_path))
+            {
+                return json_response(500, {{"error", "Failed to persist configuration to disk"}});
+            }
+        }
+        else
         {
-            return json_response(500, {{"error", "Failed to persist configuration to disk"}});
+            // No mods path in body -- caller is using PUT as a "re-save" of
+            // the current state (or sending an unrelated field). Best-effort save.
+            if (!cfg.save())
+            {
+                return json_response(500, {{"error", "Failed to persist configuration to disk"}});
+            }
         }
         return get_config();
     }
