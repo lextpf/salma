@@ -18,13 +18,24 @@ import time
 import threading
 import os
 import re
+import shutil
 import sys
 import ctypes
 import json
 import configparser
+import datetime
 
 from pathlib import Path
 from mobase import GuessedString
+
+
+class InstallError(RuntimeError):
+    """Raised by :meth:`InstallMods.install` when the C++ side reports failure.
+
+    Carries the error message returned by the DLL so callers can log or display
+    it. Distinguishes a hard install failure (where ``installSucceeded()``
+    returned False) from generic exceptions raised by the surrounding code.
+    """
 
 from PyQt6.QtCore import QCoreApplication, Qt, qDebug
 from PyQt6.QtGui import QIcon
@@ -42,8 +53,9 @@ if logger.hasHandlers():
     logger.handlers.clear()
 
 # Configure a default file handler.
-# The log file is created in a 'logs' subdirectory in the current working directory.
-default_log_file = Path.cwd() / r"logs\mo_salma.log"
+# The log file lives next to this plugin file (under <MO2 plugins>/logs/),
+# regardless of the working directory MO2 was launched from.
+default_log_file = Path(__file__).parent / "logs" / "mo_salma.log"
 default_log_file.parent.mkdir(parents=True, exist_ok=True)
 default_handler = logging.FileHandler(str(default_log_file))
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -127,6 +139,14 @@ def _configure_dll(lib):
     lib.inferFomodSelections.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
     lib.inferFomodSelections.restype = ctypes.c_void_p
 
+    # resolveModArchive was added in salma DLL 1.1.0. Older deployed DLLs
+    # do not export it; we leave the attribute unset and fall back to the
+    # legacy Python resolution path in resolve_mod_archive() below.
+    if hasattr(lib, "resolveModArchive"):
+        lib.resolveModArchive.argtypes = [
+            ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+        lib.resolveModArchive.restype = ctypes.c_void_p
+
 
 def _check_api_version(lib):
     """Verify the DLL's ABI matches what this plugin was written for.
@@ -198,6 +218,42 @@ def infer_fomod_selections(archive_path: str, mod_path: str) -> str:
         mod_path.encode("utf-8"))
 
 
+def resolve_mod_archive(installation_file: str, mod_folder: str, mods_dir: str) -> str:
+    """Resolve a mod's archive path using the same fallback chain as the dashboard.
+
+    Delegates to the DLL's ``resolveModArchive`` (added in salma 1.1.0) when
+    available. Older deployed DLLs lack the export, in which case we fall
+    back to a downloads-dir-only Python resolution that matches the prior
+    plugin behaviour - just enough to keep older deploys working until they
+    update.
+    """
+    if not installation_file:
+        return ""
+
+    archive = Path(installation_file)
+    if archive.is_absolute() and archive.exists():
+        return str(archive)
+
+    lib = load_dll()
+    if hasattr(lib, "resolveModArchive"):
+        return _call_owned_string(
+            lib,
+            lib.resolveModArchive,
+            installation_file.encode("utf-8"),
+            mod_folder.encode("utf-8"),
+            mods_dir.encode("utf-8"))
+
+    # Legacy fallback for pre-1.1.0 DLLs: only the downloads directory is
+    # searched. This is intentionally conservative and lossy compared with
+    # the C-API path which also tries mods-dir siblings.
+    downloads_dir = os.environ.get("SALMA_DOWNLOADS_PATH", "")
+    if downloads_dir:
+        candidate = Path(downloads_dir) / archive
+        if candidate.exists():
+            return str(candidate)
+    return ""
+
+
 def get_archive_for_mod(mod_path: str) -> str:
     """Read meta.ini to find the installationFile for this mod."""
     meta_ini = Path(mod_path) / "meta.ini"
@@ -232,25 +288,107 @@ def _get_fomod_output_dir(organizer) -> Path:
     return output_dir
 
 
-def _find_fomod_json(organizer, mod_name: str) -> str:
-    """Find a FOMOD choices JSON for the given mod name.
+def _read_json_metadata(path: Path) -> dict:
+    """Return the 'metadata' block from a choices JSON, or an empty dict.
 
-    Tries exact match first, then checks if any existing JSON stem is a
-    prefix of mod_name (e.g. 'A Cat's Life' matches
-    'A Cat's Life-37250-2-0-1655543026').  Returns the path as a string,
-    or empty string if nothing matches.
+    Handles legacy JSONs (no metadata block), missing/corrupt files, and
+    ill-typed values without raising.
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    meta = data.get("metadata", {})
+    return meta if isinstance(meta, dict) else {}
+
+
+def _inject_choice_metadata(parsed: dict, archive_path: str, module_name: str) -> None:
+    """Mirror of Mo2FomodController.cpp's inject_choice_metadata.
+
+    Adds a `metadata` block to the parsed FOMOD-choices JSON so future
+    lookups can match by (modid, fileid) or (size, mtime) instead of fuzzy
+    filename comparison. Schema must stay aligned with the C++ writer.
+    """
+    archive = Path(archive_path)
+    nexus = _parse_nexus_filename(archive.stem)
+    metadata = {
+        "module_name": module_name,
+        "archive_path": str(archive),
+        "modid": nexus.get("modid", ""),
+        "fileid": nexus.get("fileid", ""),
+        "scanned_at": datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"),
+    }
+    try:
+        stat = archive.stat()
+        metadata["archive_size"] = stat.st_size
+        metadata["archive_mtime"] = int(stat.st_mtime)
+    except OSError:
+        metadata["archive_size"] = 0
+        metadata["archive_mtime"] = 0
+    parsed["metadata"] = metadata
+
+
+def _find_fomod_json(organizer, mod_name: str, archive_path: str = "") -> str:
+    """Find a FOMOD choices JSON for the given mod name / archive.
+
+    Lookup priority (first hit wins):
+      1. (modid, fileid) parsed from the archive filename, matched against
+         the metadata block in each JSON. Definitive for Nexus archives.
+      2. (archive_size, archive_mtime) of the archive on disk, matched
+         against the metadata block. Cheap fingerprint for non-Nexus mods.
+      3. Exact filename match: `<mod_name>.json`. Backward compatible with
+         JSONs scanned before the metadata block existed.
+      4. Deprecated stem-prefix fuzzy match. Logs a warning so users know
+         to re-scan to populate metadata.
+    Returns the path as a string, or empty string if nothing matches.
     """
     output_dir = _get_fomod_output_dir(organizer)
+    candidates = sorted(output_dir.glob("*.json"),
+                        key=lambda p: len(p.stem), reverse=True)
+
+    # 1. Match by (modid, fileid) parsed from the current archive filename.
+    if archive_path:
+        nexus = _parse_nexus_filename(Path(archive_path).stem)
+        target_modid = nexus.get("modid", "")
+        target_fileid = nexus.get("fileid", "")
+        if target_modid and target_fileid:
+            for candidate in candidates:
+                meta = _read_json_metadata(candidate)
+                if (meta.get("modid") == target_modid
+                        and meta.get("fileid") == target_fileid):
+                    return str(candidate)
+
+    # 2. Match by (size, mtime) of the archive on disk.
+    if archive_path:
+        try:
+            stat = Path(archive_path).stat()
+        except OSError:
+            stat = None
+        if stat is not None:
+            target_size = stat.st_size
+            target_mtime = int(stat.st_mtime)
+            for candidate in candidates:
+                meta = _read_json_metadata(candidate)
+                if (meta.get("archive_size") == target_size
+                        and abs(int(meta.get("archive_mtime", 0)) - target_mtime) <= 1):
+                    return str(candidate)
+
+    # 3. Exact filename match (legacy / cosmetic naming convention).
     exact = output_dir / f"{mod_name}.json"
     if exact.exists():
         return str(exact)
 
-    # Fuzzy: longest-stem-first so the most specific match wins
-    candidates = sorted(output_dir.glob("*.json"),
-                        key=lambda p: len(p.stem), reverse=True)
+    # 4. Deprecated: longest-stem-first prefix match.
     lower_name = mod_name.lower()
     for candidate in candidates:
         if lower_name.startswith(candidate.stem.lower()):
+            logger.warning(
+                f"[install] _find_fomod_json fell through to fuzzy stem match: "
+                f"'{mod_name}' -> '{candidate.name}'. "
+                f"Re-scan to populate metadata so future lookups are deterministic.")
             return str(candidate)
     return ""
 
@@ -271,6 +409,7 @@ def _write_mod_meta_ini(mod_dir: Path, archive_path: str, mod_name: str):
     """Write meta.ini for an installed mod with Nexus metadata."""
     meta = _parse_nexus_filename(mod_name)
     modid = meta.get('modid', '0')
+    fileid = meta.get('fileid', '0')
     version = meta.get('version', '')
     install_file = archive_path.replace('\\', '/')
 
@@ -288,7 +427,7 @@ def _write_mod_meta_ini(mod_dir: Path, archive_path: str, mod_name: str):
     )
     if modid != '0':
         content += f"1\\modid={modid}\n"
-        content += f"1\\fileid={modid}\n"
+        content += f"1\\fileid={fileid}\n"
 
     (mod_dir / "meta.ini").write_text(content, encoding="utf-8")
 
@@ -381,14 +520,12 @@ class InstallMods(mobase.IPluginTool):
             dll_name (str): Name of the DLL file to use.
 
         Returns:
-            str: The output from the DLL function, decoded to a Python string.
-                 On success this is the install path; on failure it is the
-                 error message reported by the C++ side. Use
-                 ``lib.installSucceeded()`` (already checked here and logged)
-                 as the authoritative success signal.
+            str: The install path returned by the C++ side on success.
 
         Raises:
             FileNotFoundError: If either the archive or installation path does not exist.
+            InstallError: If ``installSucceeded()`` returns False. The exception
+                message carries the error string returned by the DLL.
         """
         lib = load_dll(dll_name)
 
@@ -413,15 +550,13 @@ class InstallMods(mobase.IPluginTool):
 
         # The C-API uses the same const char* channel for both success
         # (returns the install path) and failure (returns an error message);
-        # installSucceeded() is the authoritative side channel. Surfacing
-        # failures to the MO2 log makes diagnosing a broken install possible
-        # instead of letting it slip past silently.
-        try:
-            if not lib.installSucceeded():
-                logger.error(f"[install] installWithConfig reported failure: {text}")
-                qDebug(f"[install] installWithConfig reported failure: {text}")
-        except Exception as ex:
-            logger.warning(f"[install] installSucceeded() check failed: {ex}")
+        # installSucceeded() is the authoritative side channel. Raise on
+        # failure so the caller can roll back instead of writing meta.ini
+        # and refreshing as if everything was fine.
+        if not lib.installSucceeded():
+            logger.error(f"[install] installWithConfig reported failure: {text}")
+            qDebug(f"[install] installWithConfig reported failure: {text}")
+            raise InstallError(text)
 
         return text
 
@@ -446,7 +581,7 @@ class InstallMods(mobase.IPluginTool):
 
     def version(self) -> mobase.VersionInfo:
         """Return the plugin version information."""
-        return mobase.VersionInfo(1, 0, 0, mobase.ReleaseType.ALPHA)
+        return mobase.VersionInfo(1, 1, 0, mobase.ReleaseType.ALPHA)
 
     def settings(self):
         """
@@ -551,6 +686,8 @@ class InstallMods(mobase.IPluginTool):
         After a successful installation, try to infer and save FOMOD choices.
 
         Only runs if the archive had a FOMOD and no choices file exists yet.
+        Embeds an identifying metadata block so future ``_find_fomod_json``
+        lookups can match by stable identifier instead of filename heuristics.
         """
         mod_name = Path(mod_dir).name
         output_dir = _get_fomod_output_dir(self._organizer)
@@ -564,7 +701,9 @@ class InstallMods(mobase.IPluginTool):
                 # Validate it's real JSON with steps
                 parsed = json.loads(result)
                 if "steps" in parsed and len(parsed["steps"]) > 0:
-                    choices_file.write_text(result, encoding="utf-8")
+                    _inject_choice_metadata(parsed, archive_path, mod_name)
+                    choices_file.write_text(json.dumps(parsed, indent=2),
+                                            encoding="utf-8")
                     logger.info(f"Saved FOMOD choices to {choices_file}")
         except Exception as e:
             logger.warning(f"Failed to infer FOMOD choices: {e}")
@@ -573,12 +712,21 @@ class InstallMods(mobase.IPluginTool):
         """
         Process the installation queue.
 
-        If there are mod archive files in the queue and no installation is running,
-        this method pops the next archive, prepares its mod name, creates a mod entry,
-        reconfigures the logger for that mod, and calls the installation method.
-        After installation, it refreshes the organizer and proceeds with the next item.
+        Pops archives one at a time. For FOMOD archives with pre-scanned choices
+        the salma DLL drives installation; on failure the partial mod folder is
+        rolled back via ``shutil.rmtree`` so MO2 does not show a corrupt entry.
+        Archives without choices fall through to MO2's built-in installer.
+        ``_close_logger()`` always runs in a ``finally`` block so file handlers
+        do not leak across iterations. Emits a ``Queue done: N ok, M failed``
+        summary when the queue drains.
         """
-        if self.finished and len(self._queue) != 0:
+        if not self.finished or not self._queue:
+            return
+
+        success_count = 0
+        fail_count = 0
+
+        while self._queue:
             self.finished = False
             archive_path = self._queue.pop(0)
             base_name = os.path.basename(archive_path)
@@ -588,7 +736,7 @@ class InstallMods(mobase.IPluginTool):
             # Remove any leading digits or underscores/hyphens.
             base_name = re.sub(r'^\d+[-_]', '', base_name)
 
-            json_path = _find_fomod_json(self._organizer, base_name)
+            json_path = _find_fomod_json(self._organizer, base_name, archive_path)
 
             if json_path:
                 # FOMOD with pre-scanned choices -- use salma DLL
@@ -603,27 +751,42 @@ class InstallMods(mobase.IPluginTool):
                 msg = f"[install] Installing: {base_name}"
                 logger.info(msg)
                 qDebug(msg)
-                self.install(archive_path, mod.absolutePath(), json_path)
-                _write_mod_meta_ini(mod_dir, archive_path, base_name)
-                self._organizer.refresh()
-                msg = f"[install] Finished: {base_name}"
-                logger.info(msg)
-                qDebug(msg)
 
-                # Auto-save FOMOD choices after successful install
-                self._try_save_fomod_choices(archive_path, str(mod_dir))
-
-                self._close_logger()
+                try:
+                    self.install(archive_path, mod.absolutePath(), json_path)
+                    _write_mod_meta_ini(mod_dir, archive_path, base_name)
+                    self._organizer.refresh()
+                    self._try_save_fomod_choices(archive_path, str(mod_dir))
+                    success_count += 1
+                    msg = f"[install] Finished: {base_name}"
+                    logger.info(msg)
+                    qDebug(msg)
+                except InstallError as e:
+                    fail_count += 1
+                    msg = f"[install] Failed: {base_name}: {e}"
+                    logger.error(msg)
+                    qDebug(msg)
+                    # Roll back the partial mod folder so MO2 does not show
+                    # the failed install as a real mod. rmtree + refresh is
+                    # synchronous and predictable; IModList.removeMod can be
+                    # async and prompt the user on some MO2 versions.
+                    shutil.rmtree(mod_dir, ignore_errors=True)
+                    self._organizer.refresh()
+                finally:
+                    self._close_logger()
             else:
                 # No FOMOD data -- delegate to MO2's built-in installer
                 qDebug(f"[install] No FOMOD choices found, using MO2 installer: {base_name}")
                 self._manager.installArchive(GuessedString(base_name), archive_path)
-            time.sleep(0.2)
-            self.finished = True
-            self._installQueue()
 
-        elif len(self._queue) == 0:
-            self.finished = True
+            time.sleep(0.2)
+
+        self.finished = True
+
+        if success_count or fail_count:
+            msg = f"[install] Queue done: {success_count} ok, {fail_count} failed"
+            logger.info(msg)
+            qDebug(msg)
 
         return
 
@@ -662,7 +825,7 @@ class ScanFomodChoices(mobase.IPluginTool):
         return self.tr("Scans all installed mods to infer and save FOMOD installation choices.")
 
     def version(self) -> mobase.VersionInfo:
-        return mobase.VersionInfo(1, 0, 0, mobase.ReleaseType.ALPHA)
+        return mobase.VersionInfo(1, 1, 0, mobase.ReleaseType.ALPHA)
 
     def settings(self):
         return []
@@ -761,15 +924,16 @@ class ScanFomodChoices(mobase.IPluginTool):
                 _log(_status_line(i, mod_name, "SKIP", "(no archive)"))
                 continue
 
-            # Resolve relative paths against downloads directory
-            archive = Path(archive_path)
-            if not archive.is_absolute():
-                archive = Path(downloads_dir) / archive
-
-            if not archive.exists():
+            # Resolve via the shared C-API helper so the plugin and the
+            # dashboard agree on which archive a mod folder maps to. The
+            # helper falls back to a downloads-dir lookup for older DLLs
+            # that lack the export.
+            resolved = resolve_mod_archive(archive_path, str(mod_folder), str(mods_dir))
+            if not resolved:
                 no_archive += 1
                 _log(_status_line(i, mod_name, "SKIP", "(archive missing)"))
                 continue
+            archive = Path(resolved)
 
             scanned += 1
             _log(f"[infer] [{i+1}/{total}]   Archive: {archive}")
