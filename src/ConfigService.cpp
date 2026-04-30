@@ -1,13 +1,10 @@
 #include "ConfigService.h"
 #include "Logger.h"
+#include "Utils.h"
 
 #include <format>
 #include <fstream>
 #include <nlohmann/json.hpp>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -17,27 +14,9 @@ namespace mo2server
 
 ConfigService::ConfigService()
 {
-    // salma.json lives next to the executable.
-    // Retry with larger buffer if MAX_PATH is insufficient (long path support).
-    std::wstring exe_buf(MAX_PATH, L'\0');
-    DWORD len = GetModuleFileNameW(nullptr, exe_buf.data(), static_cast<DWORD>(exe_buf.size()));
-    constexpr int kMaxRetries = 5;
-    int retries = 0;
-    while (len >= exe_buf.size() && retries < kMaxRetries)
-    {
-        exe_buf.resize(exe_buf.size() * 2);
-        len = GetModuleFileNameW(nullptr, exe_buf.data(), static_cast<DWORD>(exe_buf.size()));
-        ++retries;
-    }
-    if (len == 0 || retries >= kMaxRetries)
-    {
-        config_path_ = fs::current_path() / "salma.json";
-    }
-    else
-    {
-        exe_buf.resize(len);
-        config_path_ = fs::path(exe_buf).parent_path() / "salma.json";
-    }
+    // salma.json lives next to the executable. executable_directory() falls
+    // back to cwd if the Win32 lookup fails, preserving the previous backstop.
+    config_path_ = mo2core::executable_directory() / "salma.json";
 }
 
 ConfigService& ConfigService::instance()
