@@ -1,4 +1,5 @@
 #include "CApi.h"
+#include "FomodArchiveResolver.h"
 #include "FomodInferenceService.h"
 #include "InstallationService.h"
 #include "Logger.h"
@@ -6,6 +7,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <string>
 
@@ -136,6 +138,35 @@ extern "C"
     MO2_API void freeResult(const char* result)
     {
         free(const_cast<char*>(result));
+    }
+
+    MO2_API const char* resolveModArchive(const char* installationFile,
+                                          const char* modFolder,
+                                          const char* modsDir)
+    {
+        if (!installationFile || !modFolder)
+        {
+            return _strdup("");
+        }
+        try
+        {
+            namespace fs = std::filesystem;
+            auto resolved = mo2core::resolve_mod_archive(
+                installationFile, fs::path(modFolder), modsDir ? fs::path(modsDir) : fs::path{});
+            return _strdup(resolved.empty() ? "" : resolved.string().c_str());
+        }
+        catch (const std::exception& e)
+        {
+            mo2core::Logger::instance().log_error(std::string("[resolveModArchive] Fatal error: ") +
+                                                  e.what());
+            return _strdup("");
+        }
+        catch (...)
+        {
+            mo2core::Logger::instance().log_error(
+                "[resolveModArchive] Fatal error: unknown exception");
+            return _strdup("");
+        }
     }
 
 }  // extern "C"
