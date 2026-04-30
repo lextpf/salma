@@ -21,8 +21,11 @@ namespace mo2server
  * ## :material-content-save-outline: Persistence Model
  *
  * - load() reads `salma.json` on startup; missing file is not an error.
- * - save() must be called explicitly -- configuration changes made via
- *   set_mo2_mods_path() are **not** auto-persisted.
+ * - save() persists the in-memory state via a write-then-rename so the
+ *   on-disk file is never observed half-written.
+ * - apply_mo2_mods_path() is the transactional setter: it stages the new
+ *   value, calls save(), and reverts the in-memory state on failure so
+ *   the running process can never disagree with what is on disk.
  * - The JSON schema is a flat object: `{ "mo2ModsPath": "..." }`.
  *
  * ## :material-help: Thread Safety
@@ -45,16 +48,18 @@ public:
     /**
      * Load configuration from salma.json. Missing file is not an error
      * (defaults are used). Parse errors are logged and silently ignored --
-     * the method never throws.
+     * the method never throws. Loaded paths are NOT validated here; use
+     * is_mo2_mods_path_valid() to surface configuration errors.
      */
     void load();
 
     /**
-     * Persist current configuration to salma.json. Write errors are
-     * logged -- the method never throws.
+     * Persist current configuration to salma.json via a write-then-rename
+     * so a partial write cannot leave a corrupted file on disk. Write
+     * errors are logged -- the method never throws.
      *
-     * @return `true` if the config was written successfully, `false`
-     *         on any I/O failure (disk full, permissions, etc.).
+     * @return `true` if the config was written and renamed atomically,
+     *         `false` on any I/O failure (disk full, permissions, etc.).
      */
     bool save();
 
@@ -68,10 +73,35 @@ public:
      * @brief Set the MO2 mods directory path (not auto-persisted).
      *
      * Call save() afterwards to persist the change to salma.json.
+     * Prefer apply_mo2_mods_path() over this + save() because the
+     * transactional helper rolls back on save failure.
      *
      * @param path Absolute path to the MO2 mods directory.
      */
     void set_mo2_mods_path(const std::string& path);
+
+    /**
+     * @brief Atomically set + persist the MO2 mods directory path.
+     *
+     * Stages @p path in memory, attempts save(), and reverts to the
+     * previous value if save() fails. Guarantees that the in-memory
+     * state and the on-disk salma.json never diverge.
+     *
+     * @param path Absolute path to the MO2 mods directory.
+     * @return `true` if both the memory and disk update succeeded;
+     *         `false` if save() failed (memory state is unchanged).
+     */
+    bool apply_mo2_mods_path(const std::string& path);
+
+    /**
+     * @brief Whether the configured MO2 mods path points at an existing
+     *        directory.
+     *
+     * Used to surface stale configuration: a config file may reference a
+     * path that has since been moved or deleted. Returns false when no
+     * path is configured.
+     */
+    bool is_mo2_mods_path_valid() const;
 
     /**
      * @brief Get the derived FOMOD output directory.
