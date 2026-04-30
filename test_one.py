@@ -1,4 +1,29 @@
-"""Single-mod round-trip test: scan -> install -> compare."""
+"""Single-mod round-trip test: scan -> install -> compare.
+
+Infers FOMOD selections for one archive, replays the install into a temporary
+directory, and diffs that tree against the mod folder the user already has. The
+archive is passed to the comparison, so the external-file heuristics in
+`scripts/common.py::compare_trees` are active and files the archive cannot have
+produced stay out of the diff.
+
+Exits 0 when the trees match, and 1 when inference returns an empty string or
+the diff reports any difference. The temporary install directory is always
+removed.
+
+Usage:
+  python test_one.py <archive> <mod_folder>
+  python test_one.py <archive> <mod_folder> --full        # byte-for-byte compare too
+  python test_one.py <archive> <mod_folder> --dll <path>  # load a specific DLL
+
+Without `--full` only file names and sizes are compared. Without `--dll` the DLL
+comes from `scripts/common.py::find_dll`, whose first candidate is the deployed
+build rather than the one you just compiled; read that function's stale-DLL
+warning before trusting a run.
+
+Precondition: SALMA_MODS_PATH and SALMA_DEPLOY_PATH must be set, `--dll` or not.
+Importing scripts.common reads both and exits 2 with setup guidance if either is
+missing, before argparse sees any argument. Run setup.bat once to configure them.
+"""
 
 import argparse
 import shutil

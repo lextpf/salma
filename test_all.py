@@ -1,21 +1,30 @@
-"""
-FOMOD Round-Trip Test Script
+"""FOMOD round-trip test over every installed mod.
 
-For each mod with an archive in meta.ini, infers FOMOD selections, reinstalls
-into a temp folder using installWithConfig, then compares the resulting file
-tree against the original installed mod.  A mismatch means the scan or install
-has a bug.
+For each mod with an archive in meta.ini: infer FOMOD selections, reinstall into
+a temp folder through installWithConfig, then compare the produced file tree
+against the mod as installed. A mismatch means inference or install replay has a
+bug.
 
-Known false-positive failures (not real inference bugs):
-  - "Heel Sound Volume FOMOD 2025-...": archive ships only 3 ESP variants and
-    FOMOD metadata; the user's installed mod folder also contains 35 walk-patch
-    sound files plus README_walk_patch.txt that don't exist anywhere in the
-    archive (likely merged in from a separate mod). Inference cannot fabricate
-    files outside the archive, so the test reports them as missing.
-  - Runtime-modified files (e.g. SKSE plugin .log placeholders) are filtered
-    via IGNORED_FILES in scripts/common.py.
+Two classes of reported failure are not inference bugs. Rule both out before
+investigating a diff:
 
-Environment variables (run scripts\\setup-env.bat once to configure):
+  - Installed files that exist nowhere in the archive. A mod folder can hold
+    content its own archive never shipped: files merged in from another mod,
+    hand-edited additions, or anything written into the folder after install.
+  - Files rewritten at runtime, such as the empty .log placeholders a script
+    extender plugin truncates on load. IGNORED_FILES in scripts/common.py drops
+    four basenames from both trees: meta.ini, mo_salma.log, salma-install.log
+    and mujointfix.log. The set is fixed, with no pattern or extension rule, so
+    any other runtime-rewritten file a mod ships is still reported and has to be
+    added there by hand. meta.ini is in the set for its own reason: MO2 writes
+    it after the install, so no archive can produce it.
+
+The first class is suppressed automatically where the evidence allows it.
+compare_trees receives the archive and drops differences the archive cannot
+explain; read its docstring for the three rules and the 7-Zip precondition they
+depend on.
+
+Environment variables:
   SALMA_MODS_PATH      - mods directory (required)
   SALMA_DEPLOY_PATH    - MO2 plugins dir (required)
   SALMA_DOWNLOADS_PATH - downloads dir for resolving relative archive paths
@@ -23,9 +32,21 @@ Environment variables (run scripts\\setup-env.bat once to configure):
 Usage:
   python test_all.py [--no-full] [--limit N] [--separator NAME]
 
-  --no-full         Skip byte-for-byte content compare (faster, less strict)
-  --limit N         Max mods to actually test, skips don't count (0 = all, default: all)
+  --no-full         Skip the byte-for-byte content compare (faster, weaker).
+                    The compare is on by default; --full turns it back on.
+  --limit N         Stop after N mods reach the inference stage. Mods skipped
+                    for a missing archive do not count; mods skipped because
+                    inference returned empty do (0 = all, default: all)
   --separator NAME  Only test mods under the given separator in modlist.txt
+
+Exits 1 if any mod failed or the run died, 0 otherwise, and 2 when importing
+scripts.common finds SALMA_MODS_PATH or SALMA_DEPLOY_PATH unset, before argparse
+runs. Every run truncates and rewrites test.log next to this script: the console
+gets INFO lines, that file gets DEBUG lines. Each mod is reinstalled into a fresh
+temporary directory that is removed afterwards, so nothing under SALMA_MODS_PATH
+is modified. The selections file is written beside that directory as
+<tmpdir>_config.json and is deleted once the install returns; an install that
+raises leaves its copy behind in %TEMP%.
 """
 
 import argparse
@@ -48,7 +69,7 @@ from scripts.install import install_mod
 
 
 # ---------------------------------------------------------------------------
-# Logging -- writes to both console and test.log
+# Logging - console gets INFO, test.log gets DEBUG with the ANSI colors stripped
 # ---------------------------------------------------------------------------
 
 LOG_FILE = Path(__file__).with_name("test.log")
@@ -90,7 +111,17 @@ def log_debug(msg: str):
 
 
 def log_salma(msg: str):
-    """Append a line to logs/salma.log using the same format as the C++ Logger."""
+    """Append one INFO line to logs/salma.log in the engine logger's format.
+
+    The line is `YYYY-MM-DD HH:MM:SS.mmm LEVEL message`, the same shape
+    src/logger.rs writes, so a marker dropped here reads as an ordinary engine
+    line. No caller in this script uses it.
+
+    Writes to logs/salma.log next to this script, which is the engine's log file
+    only when the loaded DLL also sits in this directory. With a deployed or a
+    staged DLL the engine logs beside that DLL instead, and these markers land in
+    a separate file. Appends, and fails if the directory does not exist.
+    """
     from datetime import datetime
     now = datetime.now()
     ts = now.strftime("%Y-%m-%d %H:%M:%S") + f".{now.microsecond // 1000:03d}"
@@ -133,7 +164,9 @@ def main():
         help="Compare file contents byte-for-byte (default: enabled)",
     )
     parser.add_argument("--limit", type=int, default=0,
-                        help="Max mods to actually test, skips don't count "
+                        help="Stop after N mods reach the inference stage; "
+                             "mods skipped for a missing archive don't count, "
+                             "mods skipped for empty inference do "
                              "(0 = all, default: all)")
     parser.add_argument("--separator", type=str, default=None, metavar="NAME",
                         help="Only test mods under the given separator in "
