@@ -102,6 +102,20 @@ namespace CApi
 {
 
 /**
+ * @brief Stable ABI version string returned by getApiVersion().
+ *
+ * Bumped on any breaking change to the exported function set or
+ * argument/return semantics. Callers (notably the MO2 Python plugin)
+ * compare this string against their expected major version to detect
+ * deploy mismatches between a stale plugin and a newer DLL or vice
+ * versa, before invoking any other entry point.
+ *
+ * Format is `MAJOR.MINOR.PATCH`. A different MAJOR is incompatible.
+ */
+#define MO2_SALMA_API_VERSION "1.0.0"
+#define MO2_SALMA_API_MAJOR "1"
+
+/**
  * @brief Signature for the log callback function.
  * @ingroup CApi
  *
@@ -113,6 +127,17 @@ typedef void (*Mo2LogCallback)(const char*);
 
 extern "C"
 {
+    /**
+     * @brief Return the DLL's stable ABI version string.
+     * @ingroup CApi
+     *
+     * The returned pointer references a static constant inside the DLL.
+     * It must NOT be passed to freeResult().
+     *
+     * @return Null-terminated UTF-8 version string in `MAJOR.MINOR.PATCH` form.
+     */
+    MO2_API const char* getApiVersion();
+
     /**
      * @brief Register a callback to receive log messages from the DLL.
      * @ingroup CApi

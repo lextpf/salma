@@ -22,6 +22,11 @@ namespace CApi
 
 extern "C"
 {
+    MO2_API const char* getApiVersion()
+    {
+        return MO2_SALMA_API_VERSION;
+    }
+
     MO2_API void setLogCallback(Mo2LogCallback callback)
     {
         // Callback registration uses an atomic store inside Logger; no mutex.
