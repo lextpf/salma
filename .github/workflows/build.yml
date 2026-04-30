@@ -38,16 +38,48 @@ jobs:
         with:
           vcpkgGitCommitId: "05442024c3fda64320bd25d2251cc9807b84fb6f"
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build web dashboard
+        run: |
+          cd web
+          npm ci
+          npm run build
+        shell: pwsh
+
+      - name: Acquire 7z.dll for bundling
+        run: |
+          $url = "https://www.7-zip.org/a/7z2408-x64.exe"
+          Invoke-WebRequest -Uri $url -OutFile 7z-installer.exe
+          # Silent install into a local directory so we can pick up 7z.dll
+          # without polluting the runner's Program Files.
+          New-Item -ItemType Directory -Force -Path 7z | Out-Null
+          Start-Process -FilePath .\7z-installer.exe -ArgumentList "/S","/D=$pwd\7z" -Wait
+          $dll = Resolve-Path "$pwd\7z\7z.dll"
+          "SALMA_7Z_DLL=$dll" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        shell: pwsh
+
       - name: Configure
-        run: cmake --preset default
+        run: cmake --preset default -DSALMA_7Z_DLL="$env:SALMA_7Z_DLL"
+        shell: pwsh
 
       - name: Build
         run: cmake --build build --config Release
 
+      - name: Package
+        run: |
+          cmake --install build --config Release --prefix dist/staging
+          cd build
+          cpack -G ZIP -C Release
+        shell: pwsh
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: salma-release
-          path: |
-            build/bin/Release/mo2-salma.dll
-            build/bin/Release/mo2-server.exe
+          name: salma-mo2
+          path: build/salma-mo2-*.zip
