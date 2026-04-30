@@ -59,6 +59,11 @@ logger.debug("Logger configured successfully.")
 # Define the callback function type that matches the expected C++ signature.
 CALLBACK_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p)
 
+# Major version of the DLL ABI this plugin is written against. Bumped only
+# on incompatible C-API changes (added/removed exports, signature changes).
+# A mismatch refuses to use the DLL rather than risk silent ABI drift.
+EXPECTED_API_MAJOR = "1"
+
 # ------------------------------------------------------------------------------
 # Shared DLL Utilities
 # ------------------------------------------------------------------------------
@@ -91,28 +96,106 @@ def find_dll(dll_name="mo2-salma.dll"):
 
 _dll_cache = {}
 
+
+def _configure_dll(lib):
+    """Set ctypes signatures for every DLL export this plugin calls.
+
+    Owned-string returns (install / installWithConfig / inferFomodSelections)
+    are declared as ``c_void_p`` so we get the raw heap pointer back from
+    ctypes and can hand it to freeResult after copying the bytes. Declaring
+    them as ``c_char_p`` (the previous behaviour) lets ctypes auto-decode but
+    silently leaks the underlying ``_strdup`` allocation per call.
+    """
+    lib.getApiVersion.argtypes = []
+    lib.getApiVersion.restype = ctypes.c_char_p  # static const char*, never freed
+
+    lib.freeResult.argtypes = [ctypes.c_void_p]
+    lib.freeResult.restype = None
+
+    lib.installSucceeded.argtypes = []
+    lib.installSucceeded.restype = ctypes.c_bool
+
+    lib.setLogCallback.argtypes = [CALLBACK_TYPE]
+    lib.setLogCallback.restype = None
+
+    lib.install.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    lib.install.restype = ctypes.c_void_p
+
+    lib.installWithConfig.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+    lib.installWithConfig.restype = ctypes.c_void_p
+
+    lib.inferFomodSelections.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    lib.inferFomodSelections.restype = ctypes.c_void_p
+
+
+def _check_api_version(lib):
+    """Verify the DLL's ABI matches what this plugin was written for.
+
+    Pre-versioning DLLs (before getApiVersion was exported) raise
+    AttributeError on the lookup; treat that as an incompatible deploy
+    rather than continuing into UB.
+    """
+    try:
+        version_bytes = lib.getApiVersion()
+    except AttributeError as exc:
+        msg = ("salma DLL is missing getApiVersion(); refusing to use to avoid ABI drift. "
+               "Update to a newer DLL build that ships alongside this plugin.")
+        logger.error(msg)
+        raise RuntimeError(msg) from exc
+    if not version_bytes:
+        msg = "salma DLL returned empty getApiVersion(); refusing to use."
+        logger.error(msg)
+        raise RuntimeError(msg)
+    version_str = version_bytes.decode("utf-8")
+    major = version_str.split(".", 1)[0]
+    if major != EXPECTED_API_MAJOR:
+        msg = (f"salma DLL ABI mismatch: plugin expects major {EXPECTED_API_MAJOR}, "
+               f"DLL reports {version_str}. Update the plugin or DLL.")
+        logger.error(msg)
+        raise RuntimeError(msg)
+    logger.info(f"salma DLL ABI version: {version_str}")
+
+
 def load_dll(dll_name="mo2-salma.dll"):
-    """Load and cache the DLL. Returns the ctypes library handle."""
+    """Load, configure, and cache the DLL. Returns the ctypes library handle.
+
+    First call configures argtypes/restypes for every export and verifies the
+    ABI version; subsequent calls hand back the cached handle.
+    """
     if dll_name not in _dll_cache:
         dll_path = find_dll(dll_name)
         logger.info(f"Loading DLL: {dll_path}")
-        _dll_cache[dll_name] = ctypes.CDLL(str(dll_path))
+        lib = ctypes.CDLL(str(dll_path))
+        _configure_dll(lib)
+        _check_api_version(lib)
+        _dll_cache[dll_name] = lib
     return _dll_cache[dll_name]
+
+
+def _call_owned_string(lib, fn, *args) -> str:
+    """Invoke a DLL function returning an owned C string (`_strdup` result).
+
+    Decodes UTF-8 and always calls ``freeResult`` on the underlying pointer
+    -- including if decoding throws -- so the heap allocation is not leaked.
+    Returns "" if the function returned a null pointer.
+    """
+    addr = fn(*args)
+    if not addr:
+        return ""
+    try:
+        return ctypes.string_at(addr).decode("utf-8")
+    finally:
+        lib.freeResult(addr)
 
 
 def infer_fomod_selections(archive_path: str, mod_path: str) -> str:
     """Call the DLL's inferFomodSelections function and return the JSON string."""
     lib = load_dll()
-    lib.inferFomodSelections.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-    lib.inferFomodSelections.restype = ctypes.c_char_p
-
-    result = lib.inferFomodSelections(
+    return _call_owned_string(
+        lib,
+        lib.inferFomodSelections,
         archive_path.encode("utf-8"),
         mod_path.encode("utf-8"))
-
-    if result:
-        return result.decode("utf-8")
-    return ""
 
 
 def get_archive_for_mod(mod_path: str) -> str:
@@ -271,20 +354,14 @@ class InstallMods(mobase.IPluginTool):
         """
         Register the Python log callback with the C++ DLL.
 
-        This method loads the DLL, sets up the function signature for the log callback,
-        and registers the callback function with the DLL. It also saves the callback
-        reference to prevent it from being garbage-collected.
+        This method loads the DLL (which configures argtypes/restypes once on
+        first load) and registers the callback function. The callback instance
+        is retained on ``self`` to keep ctypes from garbage-collecting it.
         """
         try:
-            # Create a callback instance with the defined function signature.
             c_callback = CALLBACK_TYPE(InstallMods.log_callback)
             lib = load_dll()
-            # Define the expected argument and return types for the setLogCallback function.
-            lib.setLogCallback.argtypes = [CALLBACK_TYPE]
-            lib.setLogCallback.restype = None
-            # Register the callback with the DLL.
             lib.setLogCallback(c_callback)
-            # Retain a reference to the callback to avoid garbage collection.
             self._log_callback = c_callback
             logger.debug("Log callback registered successfully.")
         except Exception as e:
@@ -305,14 +382,15 @@ class InstallMods(mobase.IPluginTool):
 
         Returns:
             str: The output from the DLL function, decoded to a Python string.
+                 On success this is the install path; on failure it is the
+                 error message reported by the C++ side. Use
+                 ``lib.installSucceeded()`` (already checked here and logged)
+                 as the authoritative success signal.
 
         Raises:
             FileNotFoundError: If either the archive or installation path does not exist.
         """
         lib = load_dll(dll_name)
-
-        lib.installWithConfig.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
-        lib.installWithConfig.restype = ctypes.c_char_p
 
         archive_path = Path(archive_path)
         if not archive_path.exists():
@@ -324,13 +402,28 @@ class InstallMods(mobase.IPluginTool):
 
         archive_encoded = str(archive_path).encode("utf-8")
         install_encoded = str(install_path).encode("utf-8")
-        json_encoded = json_path.encode("utf-8")
-        result = lib.installWithConfig(
+        json_encoded = json_path.encode("utf-8") if json_path else b""
+
+        text = _call_owned_string(
+            lib,
+            lib.installWithConfig,
             ctypes.c_char_p(archive_encoded),
             ctypes.c_char_p(install_encoded),
             ctypes.c_char_p(json_encoded))
 
-        return result.decode("utf-8")
+        # The C-API uses the same const char* channel for both success
+        # (returns the install path) and failure (returns an error message);
+        # installSucceeded() is the authoritative side channel. Surfacing
+        # failures to the MO2 log makes diagnosing a broken install possible
+        # instead of letting it slip past silently.
+        try:
+            if not lib.installSucceeded():
+                logger.error(f"[install] installWithConfig reported failure: {text}")
+                qDebug(f"[install] installWithConfig reported failure: {text}")
+        except Exception as ex:
+            logger.warning(f"[install] installSucceeded() check failed: {ex}")
+
+        return text
 
     # ------------------------------------------------------------------------------
     # Plugin Metadata and UI Methods
