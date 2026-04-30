@@ -26,6 +26,11 @@ IGNORED_FILES = {"meta.ini", "mo_salma.log", "salma-install.log", "mujointfix.lo
 
 DLL_NAME = "mo2-salma.dll"
 
+# Major version of the DLL ABI these scripts are written against. Bumped only
+# on incompatible C-API changes. A mismatch refuses to use the DLL rather
+# than risk silent ABI drift between a stale test harness and a newer build.
+EXPECTED_API_MAJOR = "1"
+
 
 # ---------------------------------------------------------------------------
 # CompareResult
@@ -68,23 +73,78 @@ def find_dll() -> Path:
 
 
 def load_dll(dll_path: Path):
-    """Load mo2-salma.dll and declare argtypes for all C API functions."""
+    """Load mo2-salma.dll and declare argtypes for all C API functions.
+
+    Owned-string returns (install / installWithConfig / inferFomodSelections)
+    are declared as ``c_void_p`` so we get the raw heap pointer back from
+    ctypes; callers must pass each return value through ``call_owned_string``
+    (or remember to call ``lib.freeResult(addr)``) so the ``_strdup`` buffer
+    is not leaked. Across the integration suite (test.py runs hundreds of
+    mods) the previous c_char_p declaration leaked tens of MB per run.
+    """
     lib = ctypes.CDLL(str(dll_path))
+
+    lib.getApiVersion.argtypes = []
+    lib.getApiVersion.restype = ctypes.c_char_p  # static const char*, never freed
+
+    lib.freeResult.argtypes = [ctypes.c_void_p]
+    lib.freeResult.restype = None
+
+    lib.installSucceeded.argtypes = []
+    lib.installSucceeded.restype = ctypes.c_bool
 
     lib.setLogCallback.argtypes = [ctypes.CFUNCTYPE(None, ctypes.c_char_p)]
     lib.setLogCallback.restype = None
 
     lib.install.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-    lib.install.restype = ctypes.c_char_p
+    lib.install.restype = ctypes.c_void_p
 
     lib.installWithConfig.argtypes = [
         ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
-    lib.installWithConfig.restype = ctypes.c_char_p
+    lib.installWithConfig.restype = ctypes.c_void_p
 
     lib.inferFomodSelections.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-    lib.inferFomodSelections.restype = ctypes.c_char_p
+    lib.inferFomodSelections.restype = ctypes.c_void_p
+
+    _check_api_version(lib)
 
     return lib
+
+
+def _check_api_version(lib) -> None:
+    """Refuse to use a DLL whose ABI major does not match the scripts'."""
+    try:
+        version_bytes = lib.getApiVersion()
+    except AttributeError as exc:
+        raise RuntimeError(
+            "salma DLL is missing getApiVersion(); refusing to use to avoid ABI "
+            "drift. Update to a newer DLL build that ships alongside these scripts."
+        ) from exc
+    if not version_bytes:
+        raise RuntimeError("salma DLL returned empty getApiVersion(); refusing to use.")
+    version_str = version_bytes.decode("utf-8")
+    major = version_str.split(".", 1)[0]
+    if major != EXPECTED_API_MAJOR:
+        raise RuntimeError(
+            f"salma DLL ABI mismatch: scripts expect major {EXPECTED_API_MAJOR}, "
+            f"DLL reports {version_str}. Update the scripts or DLL to match."
+        )
+
+
+def call_owned_string(lib, fn, *args) -> str:
+    """Invoke a DLL function returning an owned C string (`_strdup` result).
+
+    Decodes UTF-8 and always calls ``freeResult`` on the underlying pointer
+    -- including if decoding throws -- so the heap allocation is not leaked.
+    Returns "" if the function returned a null pointer.
+    """
+    addr = fn(*args)
+    if not addr:
+        return ""
+    try:
+        return ctypes.string_at(addr).decode("utf-8")
+    finally:
+        lib.freeResult(addr)
 
 
 # ---------------------------------------------------------------------------
