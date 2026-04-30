@@ -12,20 +12,26 @@ import sys; sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import argparse
 
-from scripts.common import find_dll, load_dll
+from scripts.common import call_owned_string, find_dll, load_dll
 
 
 def install_mod(archive: Path, output_dir: Path, json_path: Path,
                 dll=None) -> str:
-    """Call installWithConfig. Returns DLL result string."""
+    """Call installWithConfig. Returns DLL result string.
+
+    Goes through ``call_owned_string`` so the C-side ``_strdup`` buffer is
+    freed; the previous direct call with ``restype = c_char_p`` leaked
+    every result pointer.
+    """
     if dll is None:
         dll = load_dll(find_dll())
-    result = dll.installWithConfig(
+    return call_owned_string(
+        dll,
+        dll.installWithConfig,
         str(archive).encode("utf-8"),
         str(output_dir).encode("utf-8"),
         str(json_path).encode("utf-8"),
     )
-    return result.decode("utf-8") if result else ""
 
 
 def main():
