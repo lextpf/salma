@@ -4,8 +4,42 @@
 #include <random>
 #include <ranges>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace mo2core
 {
+
+#ifdef _WIN32
+namespace
+{
+
+// Resolve the parent directory of the file backing @p hMod. Pass nullptr
+// to query the host executable. Returns an empty path on lookup failure;
+// callers fall back to cwd.
+std::filesystem::path module_path_for(HMODULE hMod)
+{
+    std::wstring buf(MAX_PATH, L'\0');
+    DWORD len = GetModuleFileNameW(hMod, buf.data(), static_cast<DWORD>(buf.size()));
+    constexpr int kMaxRetries = 5;
+    int retries = 0;
+    while (len >= buf.size() && retries < kMaxRetries)
+    {
+        buf.resize(buf.size() * 2);
+        len = GetModuleFileNameW(hMod, buf.data(), static_cast<DWORD>(buf.size()));
+        ++retries;
+    }
+    if (len > 0 && retries < kMaxRetries)
+    {
+        buf.resize(len);
+        return std::filesystem::path(buf).parent_path();
+    }
+    return {};
+}
+
+}  // namespace
+#endif
 
 std::string to_lower(const std::string& s)
 {
@@ -183,6 +217,35 @@ bool is_inside(const std::filesystem::path& parent, const std::filesystem::path&
         return false;
     auto rel = canonical_child.lexically_relative(canonical_parent);
     return !rel.empty() && !rel.string().starts_with("..");
+}
+
+std::filesystem::path executable_directory()
+{
+#ifdef _WIN32
+    auto dir = module_path_for(nullptr);
+    if (!dir.empty())
+        return dir;
+#endif
+    return std::filesystem::current_path();
+}
+
+std::filesystem::path module_directory(const void* anchor)
+{
+#ifdef _WIN32
+    HMODULE hMod = nullptr;
+    if (GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(anchor),
+            &hMod))
+    {
+        auto dir = module_path_for(hMod);
+        if (!dir.empty())
+            return dir;
+    }
+#else
+    (void)anchor;
+#endif
+    return std::filesystem::current_path();
 }
 
 }  // namespace mo2core
