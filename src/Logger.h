@@ -194,6 +194,15 @@ public:
      */
     std::string log_path() const;
 
+    /**
+     * @brief Return the path to the active log directory.
+     *
+     * Always anchored next to the module that owns Logger (the mo2-salma
+     * library). Use this so consumers do not re-derive the path through
+     * `current_path()` and end up disagreeing with what Logger writes.
+     */
+    std::string log_directory() const;
+
 private:
     Logger();
     ~Logger();
