@@ -73,26 +73,11 @@ graph LR
     classDef api fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
     classDef web fill:#2e1f5e,stroke:#8b5cf6,color:#e2e8f0
 
-    subgraph DLL["📦 C DLL (mo2-salma.dll)"]
-        Install["⚙️ install()"]:::dll
-        Infer["🧠 inferFomodSelections()"]:::dll
-        Config["🔧 installWithConfig()"]:::dll
-    end
+    Web["⚛️ React Frontend<br/>Interactive UI"]:::web
+    API["🌐 REST API<br/>Programmatic access"]:::api
+    DLL["📦 C DLL<br/>Direct integration"]:::dll
 
-    subgraph API["🌐 Crow REST API"]
-        Upload["📤 Upload & Install"]:::api
-        Scan["🔍 FOMOD Scan"]:::api
-        Status["📊 Job Status"]:::api
-    end
-
-    subgraph Web["🖥️ React Frontend"]
-        UI["🎮 Interactive Installer"]:::web
-        FomodView["📂 FOMOD Browser"]:::web
-        Logs["📋 Log Viewer"]:::web
-    end
-
-    Web --> API
-    API --> DLL
+    Web --> API --> DLL
 ```
 
 ### FOMOD Processing
@@ -227,33 +212,45 @@ config:
     fontSize: 18px
   layout: elk
 ---
-graph TB
+graph LR
     classDef host fill:#1e1e2e,stroke:#94a3b8,color:#e2e8f0,stroke-dasharray:6 4
     classDef artifact fill:#1e3a5f,stroke:#3b82f6,color:#e2e8f0
     classDef core fill:#134e3a,stroke:#10b981,color:#e2e8f0
+    classDef user fill:#2e1f5e,stroke:#8b5cf6,color:#e2e8f0
+
+    User["👤 User"]:::user
 
     subgraph MO2["🧩 Mod Organizer 2 process"]
-        Plugin["🐍 mo2-salma.py (Python plugin)"]:::host
-        DLL["📦 mo2-salma.dll (C-API exports)"]:::artifact
-        Plugin -- ctypes --> DLL
-    end
-
-    subgraph SrvHost["🖥️ mo2-server.exe process (port 5000)"]
-        Server["🌐 Crow HTTP server + REST endpoints"]:::artifact
-        Static["📄 Static file handler"]:::artifact
-        Server --- Static
+        Plugin["🐍 mo2-salma.py<br/>Python plugin"]:::host
+        DLL["📦 mo2-salma.dll<br/>C-API exports"]:::artifact
     end
 
     subgraph Browser["🌍 Web browser"]
-        SPA["⚛️ React SPA (web/dist)"]:::artifact
+        SPA["⚛️ React SPA<br/>web/dist"]:::artifact
     end
 
-    Core["🛠️ mo2-core (shared C++ library)<br/>extraction · FOMOD parser · inference · file ops · logger"]:::core
+    subgraph SrvHost["🖥️ mo2-server.exe"]
+        Server["🌐 Crow HTTP server<br/>REST endpoints"]:::artifact
+        Static["📄 Static file handler"]:::artifact
+    end
+
+    subgraph Core["🛠️ mo2-core"]
+        Archive["📦 Archive extraction"]:::core
+        Parser["🧩 FOMOD parser"]:::core
+        Infer["🧠 Inference engine"]:::core
+        FileOps["📂 File operations"]:::core
+        Log["📋 Logger"]:::core
+    end
+
+    User --> Plugin
+    User --> SPA
+    Plugin -- ctypes --> DLL
+    SPA -- "HTTP /api" --> Server
+    Static -- "serves" --> SPA
+    Server --- Static
 
     DLL --> Core
     Server --> Core
-    SPA -- "HTTP /api" --> Server
-    Static -- "serves" --> SPA
 ```
 
 ### The three artifacts
