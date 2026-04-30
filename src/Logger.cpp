@@ -5,10 +5,54 @@
 #include <fstream>
 #include <iostream>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace mo2core
 {
+
+namespace
+{
+
+// Resolve the directory of the module that contains the given address.
+// On Windows this resolves to the DLL the function lives in, regardless of
+// the host process's current working directory or the host EXE's location.
+// Returns an empty path if the lookup fails; caller falls back to cwd.
+fs::path module_directory_of(void* addr)
+{
+#ifdef _WIN32
+    HMODULE hMod = nullptr;
+    if (GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(addr),
+            &hMod))
+    {
+        std::wstring buf(MAX_PATH, L'\0');
+        DWORD len = GetModuleFileNameW(hMod, buf.data(), static_cast<DWORD>(buf.size()));
+        constexpr int kMaxRetries = 5;
+        int retries = 0;
+        while (len >= buf.size() && retries < kMaxRetries)
+        {
+            buf.resize(buf.size() * 2);
+            len = GetModuleFileNameW(hMod, buf.data(), static_cast<DWORD>(buf.size()));
+            ++retries;
+        }
+        if (len > 0 && retries < kMaxRetries)
+        {
+            buf.resize(len);
+            return fs::path(buf).parent_path();
+        }
+    }
+#else
+    (void)addr;
+#endif
+    return {};
+}
+
+}  // namespace
 
 Logger& Logger::instance()
 {
@@ -18,8 +62,26 @@ Logger& Logger::instance()
 
 Logger::Logger()
 {
-    log_directory_ = (fs::current_path() / "logs").string();
-    fs::create_directories(log_directory_);
+    // Anchor logs/ next to the module that owns this code (the mo2-salma DLL).
+    // This makes the log path deterministic regardless of the host process's
+    // working directory: mo2-server.exe and the MO2 Python plugin both end up
+    // writing into <module_dir>/logs/salma.log. Falls back to cwd if the
+    // platform lookup fails so the previous behavior is preserved as a backstop.
+    auto module_dir = module_directory_of(reinterpret_cast<void*>(&Logger::instance));
+    if (module_dir.empty())
+    {
+        module_dir = fs::current_path();
+    }
+    log_directory_ = (module_dir / "logs").string();
+
+    std::error_code ec;
+    fs::create_directories(log_directory_, ec);
+    if (ec)
+    {
+        std::cerr << "[Logger] Failed to create log directory " << log_directory_ << ": "
+                  << ec.message() << std::endl;
+    }
+
     log_file_.open(fs::path(log_directory_) / "salma.log", std::ios::app);
     if (log_file_.is_open())
     {
