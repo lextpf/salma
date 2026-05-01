@@ -796,7 +796,7 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
         logger.log("[infer] 6/9 Scanning installed files");
         t_step = clock::now();
         ctx.installed = scan_installed_files(fs::path(mod_path));
-        ctx.target = build_target_tree(ctx.installed, ctx.atom_index, ctx.excluded);
+        ctx.target = build_target_tree(ctx.installed);
         ctx.t_scan = ms_since(t_step);
         logger.log(std::format(
             "[infer] Step 6 target tree: {} files ({}ms)", ctx.target.size(), ctx.t_scan));
