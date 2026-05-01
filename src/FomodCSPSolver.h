@@ -98,8 +98,11 @@ struct PropagationResult;
  *
  * @note The internal phase pipeline (greedy -> propagate ->
  *       component-decompose -> residual repair -> focused search ->
- *       global fallback) is documented in `FomodCSPSolverInternal.h`'s
- *       `kConfig` block.
+ *       global fallback) and its tuning constants are declared in
+ *       `FomodCSPSolverInternal.h`. The Mermaid flowchart in that
+ *       header (above the per-phase `run_*` declarations) shows the
+ *       short-circuit transitions on exact match.
+ * @see FomodCSPSolverInternal.h, mo2core::kConfig
  */
 MO2_API SolverResult solve_fomod_csp(const FomodInstaller& installer,
                                      const ExpandedAtoms& atoms,
