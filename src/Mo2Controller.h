@@ -176,7 +176,34 @@ namespace mo2server
  * in main.cpp and their handler implementations, update this doc block
  * to keep them in sync.
  *
- * @see ConfigService
+ * ## :material-source-branch: Implementation File Split
+ *
+ * Handler bodies are split across multiple translation units to keep
+ * each file under ~300 LOC and grouped by concern:
+ *
+ * | Translation unit            | Endpoints                                |
+ * |-----------------------------|------------------------------------------|
+ * | `Mo2Controller.cpp`         | constructors/destructors, shared state   |
+ * | `Mo2ConfigController.cpp`   | `/api/config` (GET, PUT)                 |
+ * | `Mo2FomodController.cpp`    | `/api/mo2/...` (status, fomods, scan)    |
+ * | `Mo2LogController.cpp`      | `/api/logs/...`                          |
+ * | `Mo2PluginController.cpp`   | `/api/plugin/...`                        |
+ * | `Mo2TestController.cpp`     | `/api/test/...` plus Win32 process glue  |
+ * | `Mo2Helpers.h/.cpp`         | shared helpers (json_response, paths)    |
+ *
+ * Add new handlers to the file that owns their endpoint group rather
+ * than to `Mo2Controller.cpp`.
+ *
+ * ## :material-warehouse: Member-Order Invariant
+ *
+ * `cache_mutex_`, `fomods_cache_`, and `status_cache_` are declared
+ * **before** `scan_job_` and `plugin_action_job_`. C++ destroys
+ * members in reverse declaration order, so the BackgroundJob
+ * destructors run -- and join their worker threads -- *before* the
+ * cache mutex they may still touch is destroyed. Reordering these
+ * fields would introduce a use-after-free at process shutdown.
+ *
+ * @see ConfigService, BackgroundJob
  */
 class Mo2Controller
 {
@@ -318,6 +345,13 @@ public:
     /**
      * @brief Spawns `test.py` as a detached Win32 process. Only one test run may be active at a
      * time.
+     *
+     * Unlike `scan_fomods` / `deploy_plugin` / `purge_plugin`, this
+     * endpoint does **not** use `BackgroundJob`: it starts a Win32
+     * child via `CreateProcessW` and tracks it with a raw `HANDLE`
+     * (`test_process_`), polled by `get_test_status` using
+     * `WaitForSingleObject`. The `test_running_` flag and
+     * `test_mutex_` are managed manually.
      *
      * The optional `"args"` string is matched against the whitelist
      * regex `^[a-zA-Z0-9 _\-\.]*$` (alphanumeric, space, underscore,
