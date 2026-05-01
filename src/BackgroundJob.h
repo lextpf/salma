@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Logger.h"
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -59,6 +61,19 @@ namespace mo2server
  *     running --> cancelling: request_cancel()
  *     cancelling --> idle: work() observes token & exits
  * ```
+ *
+ * ## Shutdown timing
+ *
+ * The destructor (and explicit `shutdown()`) bound the wait at the
+ * grace period:
+ *
+ * \f[
+ *   t_{\mathit{shutdown}} \le \texttt{kShutdownGrace} = 10\,\text{s}
+ * \f]
+ *
+ * If the worker exits within the grace, the thread is joined; if
+ * not, the thread is detached and the worker continues running
+ * with the heap-allocated `State` it captured by `shared_ptr`.
  */
 template <typename TResult>
 class BackgroundJob
@@ -103,8 +118,16 @@ public:
      * detaches (if still running). Detaching is safe because the worker
      * captures `state_` by value, so the State outlives `*this`.
      *
-     * Idempotent and safe to call multiple times. Called automatically
-     * from the destructor.
+     * Idempotent across **sequential** calls -- subsequent invocations
+     * see `thread_.joinable() == false` and return immediately. The
+     * destructor calls this automatically.
+     *
+     * @warning Not safe to call concurrently from multiple threads on
+     *          the same BackgroundJob. The `state_->mutex` protects the
+     *          State, but `thread_` itself is not guarded; concurrent
+     *          shutdowns can race on `thread_.join()` /
+     *          `thread_.detach()`. Owners that need parallel shutdown
+     *          must serialize externally.
      */
     void shutdown(std::chrono::milliseconds grace =
                       std::chrono::duration_cast<std::chrono::milliseconds>(kShutdownGrace))
@@ -128,8 +151,22 @@ public:
                     // and warn loudly. The State stays alive for as long as the
                     // worker holds its shared_ptr; we just leak the std::thread
                     // handle and any resources the work captures.
-                    std::cerr << "[BackgroundJob] Worker did not stop within grace period; "
-                                 "detaching to avoid shutdown hang\n";
+                    //
+                    // Route through Logger so a host that registered a callback
+                    // (e.g. the MO2 Python plugin) actually sees the warning.
+                    // Fall back to stderr if Logger throws -- shutdown() must
+                    // not propagate exceptions from the destructor.
+                    try
+                    {
+                        mo2core::Logger::instance().log_warning(
+                            "[BackgroundJob] Worker did not stop within grace period; "
+                            "detaching to avoid shutdown hang");
+                    }
+                    catch (...)
+                    {
+                        std::cerr << "[BackgroundJob] Worker did not stop within grace period; "
+                                     "detaching to avoid shutdown hang\n";
+                    }
                     thread_.detach();
                     return;
                 }
@@ -262,9 +299,12 @@ public:
      *
      * @param fn Callable with signature `auto(bool has_result, const TResult* result, const
      * std::string& error)`. The pointer is null when `has_result` is false.
-     * @note The callback runs while the internal mutex is held; it must
-     *       not call back into this BackgroundJob (e.g. `try_start`,
-     *       `request_cancel`) - that would deadlock.
+     * @note The callback runs while the internal mutex is held. Do not call
+     *       any operation on this BackgroundJob that also takes the mutex
+     *       (`try_start`, `shutdown`, another `read_result`) -- that would
+     *       deadlock. Lock-free operations (`request_cancel`,
+     *       `is_cancel_requested`, `is_running`, `cancel_token`) are safe to
+     *       call from inside the callback because they only touch atomics.
      */
     template <typename Fn>
     auto read_result(Fn&& fn) const
