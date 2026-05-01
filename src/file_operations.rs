@@ -1,47 +1,74 @@
-//! Queued file copy operations - Rust port of `src/FileOperations.hpp` /
-//! `src/FileOperations.cpp`.
+//! File copy operations: the copy and disk-full helpers an install calls, plus
+//! a priority queue that only the tests drive.
 //!
-//! Collects file and folder copy operations into a queue and executes them all
-//! at once sorted by priority, which is how a FOMOD installer applies
-//! file-level overrides: the higher-priority operation is copied LAST and wins
-//! at a shared destination.
+//! A FOMOD installer applies file-level overrides through ordering: the
+//! higher-priority operation is copied last and wins at a shared destination.
 //!
-//! ## `execute()` sorts by priority ONLY
+//! ## What an install actually calls
+//!
+//! Only the associated functions. [`FileOperations::copy_file`] and
+//! [`FileOperations::copy_folder`] from
+//! [`crate::fomod_service::execute_file_operations`];
+//! [`FileOperations::copy_directory_contents`] and
+//! [`FileOperations::move_directory_contents`] from
+//! [`crate::installation_service`]; [`FileOperations::reset_disk_full`] and
+//! [`FileOperations::disk_full_encountered`] from the same place.
+//!
+//! The queue is not on that list. Nothing outside this module's own tests calls
+//! [`FileOperations::new`], [`FileOperations::add`], [`FileOperations::execute`]
+//! or [`FileOperations::count`], so the `ops` vector never holds an operation
+//! during an install. Read the sort below as two orderings this crate pins, not
+//! as two paths a mod install can take.
+//!
+//! ## Two executors, two sort keys
 //!
 //! [`FileOperations::execute`] stable-sorts ascending by
-//! [`FileOperation::priority`] and does NOT look at
-//! [`FileOperation::document_order`]; it relies on the stable sort preserving
-//! insertion order among equal priorities (`FileOperations.cpp:59-62`). This is
-//! deliberately different from `FomodService::execute_file_operations`, which
-//! is a SEPARATE executor that sorts by `(priority, document_order)`. Both
-//! behaviors are real and both are reproduced; see PARITY-NOTES "Task 14".
+//! [`FileOperation::priority`] and never reads
+//! [`FileOperation::document_order`]; the stable sort keeps insertion order
+//! among equal priorities. [`crate::fomod_service::execute_file_operations`]
+//! sorts by `(priority, document_order)`. Do not unify them: the two keys pick
+//! a different survivor whenever equal-priority operations were queued out of
+//! document order, and the tests named below pin both.
+//!
+//! ```text
+//!   queued, in insertion order:
+//!     A { priority 0, document_order 99 }
+//!     B { priority 0, document_order 50 }
+//!     C { priority 0, document_order  0 }
+//!
+//!   FileOperations::execute                 -> A, B, C   last write: C
+//!     (stable, priority only, so insertion order breaks the tie)
+//!
+//!   fomod_service::execute_file_operations  -> C, B, A   last write: A
+//!     (priority, then document_order)
+//!
+//!   Both run in ascending key order, so for one shared destination the last
+//!   operation executed is the one that survives.
+//! ```
+//!
+//! The tests `equal_priority_keeps_insertion_order_and_ignores_document_order`
+//! (this module) and `execute_sorts_by_priority_then_document_order`
+//! (`fomod_service`) pin the two orders. See PARITY-NOTES.md.
 //!
 //! ## Errors never abort
 //!
-//! Every C++ entry point is documented "does not throw": each I/O step is
-//! wrapped in a `try`/`catch (const fs::filesystem_error&)` that logs and
-//! either returns early or continues. The port returns `()` from every function
-//! and swallows [`std::io::Error`] at exactly the same points, so no `Result`
-//! and no panic escapes toward FFI.
+//! Every entry point returns `()` and absorbs [`std::io::Error`] where it
+//! occurs, so no `Result` travels toward FFI. A failure is logged and then
+//! either skipped or, for an unreadable directory, it abandons the copy; each
+//! item doc says which. [`FileOperations::copy_file`] and
+//! [`FileOperations::copy_folder`] report nothing back to their caller, so
+//! [`FileOperations::execute`] has no failure to count.
 //!
-//! ## Dropped logging
+//! ## Disk-full detection
 //!
-//! Log call sites mirror the C++ tags and wording. The error TEXT interpolated
-//! into them differs: the C++ formats `filesystem_error::what()`, this formats
-//! `std::io::Error`.
-//!
-//! ## Disk-full detection mapping
-//!
-//! The C++ compares the caught `filesystem_error`'s `error_code` against the
-//! portable `std::errc::no_space_on_device` (`FileOperations.cpp:24-27`); the
-//! MSVC Win32 error mapping folds both `ERROR_DISK_FULL` (112) and
-//! `ERROR_HANDLE_DISK_FULL` (39) into that condition. Rust has no
-//! `error_condition` equivalent, so [`is_disk_full`] tests
-//! `io::ErrorKind::StorageFull` (std maps the same two Win32 codes to it) OR
-//! the raw OS code directly, with the accepted code list `cfg`-gated per
-//! platform (`{112, 39}` on Windows, `ENOSPC` = 28 elsewhere) so a Windows
-//! `ERROR_OUT_OF_PAPER` (also 28) cannot be mistaken for a full disk. See
-//! PARITY-NOTES "Task 14".
+//! A copy or move that fails for lack of space sets a sticky, process-wide flag
+//! that [`FileOperations::disk_full_encountered`] reports; the installer turns
+//! that into a hard failure so a half-copied mod is never reported as
+//! installed. [`is_disk_full`] accepts either
+//! [`io::ErrorKind::StorageFull`] or a raw OS code from
+//! [`DISK_FULL_OS_CODES`]. That list must stay `cfg`-gated per platform:
+//! `ENOSPC` is 28 on Unix, while 28 on Windows is `ERROR_OUT_OF_PAPER`, which
+//! must not set the flag.
 
 use std::fs;
 use std::io;
@@ -51,33 +78,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::logger::Logger;
 use crate::types::{FileOpType, FileOperation};
 
-/// Sticky process-wide disk-full flag. Mirror of the C++ anonymous-namespace
-/// `g_disk_full`: once set, callers can decide the whole install is
-/// unrecoverable without inspecting individual error logs. Cleared only by
-/// [`FileOperations::reset_disk_full`].
+/// Sticky process-wide disk-full flag. Once set, a caller can decide the whole
+/// install is unrecoverable without inspecting individual error logs. Cleared
+/// only by [`FileOperations::reset_disk_full`].
 static DISK_FULL: AtomicBool = AtomicBool::new(false);
 
 /// Raw OS error codes that mean "the volume ran out of space".
 ///
-/// Windows: `ERROR_HANDLE_DISK_FULL` (39) and `ERROR_DISK_FULL` (112), the two
-/// Win32 codes MSVC maps to `std::errc::no_space_on_device`.
+/// Windows: `ERROR_HANDLE_DISK_FULL` (39) and `ERROR_DISK_FULL` (112).
 #[cfg(windows)]
 const DISK_FULL_OS_CODES: &[i32] = &[39, 112];
 
 /// Raw OS error codes that mean "the volume ran out of space".
 ///
 /// Non-Windows: `ENOSPC` (28). Kept `cfg`-gated because 28 is
-/// `ERROR_OUT_OF_PAPER` on Windows, which must NOT set the sticky flag.
+/// `ERROR_OUT_OF_PAPER` on Windows, which must not set the sticky flag.
 #[cfg(not(windows))]
 const DISK_FULL_OS_CODES: &[i32] = &[28];
 
-/// True when `err` means "the volume ran out of space". Mirror of the C++
-/// file-scoped `is_disk_full(const std::error_code&)`.
+/// True when `err` means "the volume ran out of space".
 ///
 /// Accepts either the std-normalized [`io::ErrorKind::StorageFull`] or a raw OS
-/// code from [`DISK_FULL_OS_CODES`]; the raw check is the belt-and-braces half,
-/// since a code std does not classify would otherwise arrive as
-/// [`io::ErrorKind::Uncategorized`].
+/// code from [`DISK_FULL_OS_CODES`]. The raw check is the backstop: a code std
+/// does not classify arrives as [`io::ErrorKind::Uncategorized`] instead.
 fn is_disk_full(err: &io::Error) -> bool {
     if err.kind() == io::ErrorKind::StorageFull {
         return true;
@@ -88,24 +111,20 @@ fn is_disk_full(err: &io::Error) -> bool {
     }
 }
 
-/// Set the sticky flag when `err` is a disk-full error. Mirror of the C++
-/// file-scoped `note_disk_full_if_applicable(const fs::filesystem_error&)`.
+/// Set the sticky flag when `err` is a disk-full error.
 fn note_disk_full_if_applicable(err: &io::Error) {
     if is_disk_full(err) {
         DISK_FULL.store(true, Ordering::Relaxed);
     }
 }
 
-/// Queued file copy operations with priority sorting. Mirror of
-/// `mo2core::FileOperations`.
+/// Queued file copy operations with priority sorting.
 ///
-/// Instances are NOT thread-safe (the C++ says the same); the associated copy
-/// functions are, since they only touch local state plus the atomic disk-full
-/// flag.
+/// An instance is not thread-safe. The associated copy functions are: they
+/// touch only their arguments plus the atomic disk-full flag.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileOperations {
-    /// Queued operations awaiting [`FileOperations::execute`]. Mirror of the
-    /// C++ `ops_`.
+    /// Queued operations awaiting [`FileOperations::execute`].
     ops: Vec<FileOperation>,
 }
 
@@ -115,29 +134,26 @@ impl FileOperations {
         FileOperations::default()
     }
 
-    /// Enqueue a file operation for deferred execution. Mirror of
-    /// `FileOperations::add`.
-    ///
-    /// The operation is appended to the queue; no I/O happens until
-    /// [`FileOperations::execute`] is called.
+    /// Append an operation to the queue. No I/O happens until
+    /// [`FileOperations::execute`] runs.
     pub fn add(&mut self, op: FileOperation) {
         self.ops.push(op);
     }
 
-    /// Execute all queued operations in priority order. Mirror of
-    /// `FileOperations::execute`.
+    /// Execute all queued operations in priority order.
     ///
-    /// Stable-sorts ascending by [`FileOperation::priority`] ALONE, so
+    /// Stable-sorts ascending by [`FileOperation::priority`] alone, so
     /// higher-priority operations are copied last and win at a shared
-    /// destination, and equal-priority operations keep their insertion order.
-    /// [`FileOperation::document_order`] is deliberately unused here.
+    /// destination, and equal priorities keep their insertion order.
+    /// [`FileOperation::document_order`] is deliberately unread here; the
+    /// module docs compare this key with the one
+    /// [`crate::fomod_service::execute_file_operations`] uses.
     ///
-    /// Individual failures are skipped and never abort the batch, and the queue
-    /// is ALWAYS cleared afterwards, even when operations failed.
+    /// A failing operation is skipped and never aborts the batch. The queue is
+    /// always cleared afterwards, including when operations failed.
     pub fn execute(&mut self) {
-        // `Vec::sort_by_key` is a stable sort, matching `std::stable_sort`:
-        // equal-priority operations stay in insertion order, which is the
-        // document-order tiebreaker callers rely on.
+        // `Vec::sort_by_key` is stable: equal-priority operations stay in
+        // insertion order, which is the tiebreaker callers rely on.
         self.ops.sort_by_key(|op| op.priority);
 
         Logger::instance().log(&format!(
@@ -146,12 +162,9 @@ impl FileOperations {
         ));
 
         for op in &self.ops {
-            // The C++ wraps each operation in try/catch so one failure cannot
-            // abort the batch; copy_file / copy_folder already swallow their
-            // own I/O errors here, so the loop body is inherently non-aborting.
-            // Its log_error("[install] Failed to execute file operation: {} ->
-            // {}: {}") is therefore unreachable on both sides, with no Rust
-            // counterpart to restore.
+            // copy_file and copy_folder absorb their own I/O errors, so the
+            // loop body cannot fail and there is no per-operation failure to
+            // report here.
             match op.op_type {
                 FileOpType::File => {
                     Self::copy_file(Path::new(&op.source), Path::new(&op.destination));
@@ -165,35 +178,30 @@ impl FileOperations {
         self.ops.clear();
     }
 
-    /// Discard all queued operations without executing. Mirror of
-    /// `FileOperations::clear`.
+    /// Discard all queued operations without executing them.
     pub fn clear(&mut self) {
         self.ops.clear();
     }
 
-    /// Number of queued operations. Mirror of `FileOperations::count`, which
-    /// returns `int`.
+    /// Number of queued operations.
     pub fn count(&self) -> i32 {
         self.ops.len() as i32
     }
 
-    /// Copy a single file, creating parent directories as needed. Mirror of
-    /// `FileOperations::copy_file`.
+    /// Copy a single file, creating parent directories as needed.
     ///
-    /// - A missing source is a warning + silent skip, NOT an error.
-    /// - A `create_directories` failure returns early WITHOUT copying (and
-    ///   without touching the disk-full flag, matching the C++, which only
-    ///   inspects the copy error).
-    /// - The copy ALWAYS overwrites an existing destination.
+    /// - A missing source warns and skips; it is not an error.
+    /// - A failed parent `create_dir_all` returns without copying, and without
+    ///   touching the disk-full flag: only the copy error is inspected for it.
+    /// - The copy always overwrites an existing destination.
     pub fn copy_file(src: &Path, dst: &Path) {
-        // Missing source is logged and silently skipped (not an error).
         if !src.exists() {
             Logger::instance().log_warning(&format!("[install] Missing file: {}", src.display()));
             return;
         }
-        // `dst.parent()` is `Some("")` for a bare filename; `create_dir_all("")`
-        // is a no-op Ok, matching C++ `create_directories("")` returning false
-        // without an error. `None` (dst is a root) skips the call entirely.
+        // `dst.parent()` is `Some("")` for a bare filename, and
+        // `create_dir_all("")` is a no-op `Ok`. `None` means `dst` is a root,
+        // which skips the call entirely.
         if let Some(parent) = dst.parent() {
             if let Err(err) = fs::create_dir_all(parent) {
                 Logger::instance().log_error(&format!(
@@ -203,19 +211,30 @@ impl FileOperations {
                 return;
             }
         }
-        // `fs::copy` overwrites, matching `copy_options::overwrite_existing`.
+        // `fs::copy` overwrites an existing destination.
         if let Err(err) = fs::copy(src, dst) {
             note_disk_full_if_applicable(&err);
             Logger::instance().log_error(&format!("[install] Copy error: {err}"));
         }
     }
 
-    /// Recursively copy a folder tree. Mirror of `FileOperations::copy_folder`.
+    /// Recursively copy a folder tree.
     ///
     /// Recreates the full directory structure of `src` under `dst`, overwriting
-    /// existing files. A missing source warns and skips; symlinked entries are
-    /// SKIPPED (the C++ `is_symlink(entry.symlink_status())` test); traversal
-    /// uses the equivalent of `directory_options::skip_permission_denied`.
+    /// files that already exist there and leaving unrelated ones alone. A
+    /// missing source warns and skips. Symlinked entries are skipped, never
+    /// dereferenced.
+    ///
+    /// Failures are handled two ways, and the difference is deliberate:
+    /// - A directory that cannot be read abandons the whole copy. The function
+    ///   logs and returns, leaving whatever it already copied in place. A
+    ///   `PermissionDenied` read is the exception: that one directory is
+    ///   skipped and the traversal continues.
+    /// - A per-entry `create_dir_all` or `fs::copy` failure is logged and the
+    ///   traversal continues with the next entry.
+    ///
+    /// A disk-full error on either path sets the sticky flag that
+    /// [`FileOperations::disk_full_encountered`] reports.
     pub fn copy_folder(src: &Path, dst: &Path) {
         if !src.exists() {
             Logger::instance().log_warning(&format!("[install] Missing folder: {}", src.display()));
@@ -229,23 +248,20 @@ impl FileOperations {
             return;
         }
 
-        // Explicit stack in place of `fs::recursive_directory_iterator`. A
-        // directory entry is created at its destination BEFORE its children are
-        // visited (as with the C++ pre-order traversal), so empty
-        // subdirectories are reproduced. Sibling order within a directory is
-        // unspecified in both implementations.
+        // Pre-order walk over an explicit stack: a directory is created at its
+        // destination before its children are visited, so empty subdirectories
+        // are reproduced. Sibling order within a directory is unspecified.
         let mut stack: Vec<PathBuf> = vec![src.to_path_buf()];
         while let Some(dir) = stack.pop() {
             let read_dir = match fs::read_dir(&dir) {
                 Ok(rd) => rd,
                 Err(err) => {
-                    // `skip_permission_denied`: an inaccessible directory is
-                    // skipped rather than ending the traversal.
+                    // An inaccessible directory is skipped rather than ending
+                    // the traversal.
                     if err.kind() == io::ErrorKind::PermissionDenied {
                         continue;
                     }
-                    // Any other iteration error escapes the C++ iterator and is
-                    // caught by the outer handler, which ABORTS the whole copy.
+                    // Any other read error abandons the whole copy.
                     note_disk_full_if_applicable(&err);
                     Logger::instance().log_error(&format!(
                         "[install] Failed to iterate directory {}: {err}",
@@ -269,8 +285,8 @@ impl FileOperations {
                         return;
                     }
                 };
-                // `DirEntry::file_type` does not follow symlinks, matching
-                // `entry.symlink_status()`.
+                // `DirEntry::file_type` does not follow symlinks, so a linked
+                // entry is skipped instead of being copied through.
                 let Ok(file_type) = entry.file_type() else {
                     continue;
                 };
@@ -306,17 +322,26 @@ impl FileOperations {
         }
     }
 
-    /// Copy the immediate contents of a directory into `dst`. Mirror of
-    /// `FileOperations::copy_directory_contents`.
+    /// Copy the immediate contents of a directory into `dst`.
     ///
-    /// Unlike [`FileOperations::copy_folder`] this copies INTO `dst` rather
-    /// than recreating the source root: files are copied directly,
-    /// subdirectories recursively via `copy_folder`.
+    /// Unlike [`FileOperations::copy_folder`] this copies into `dst` rather
+    /// than recreating the source root: files land directly in `dst`,
+    /// subdirectories go through `copy_folder`.
     ///
-    /// Quirks reproduced from the C++: there is NO source-existence check (a
-    /// missing `src` still creates `dst`, then fails at iteration), and the
-    /// `create_directories(dst)` failure path does NOT consult the disk-full
-    /// flag even though the sibling `move_directory_contents` does.
+    /// Link handling differs by depth, on purpose. The test on each immediate
+    /// child is `Path::is_dir`, which follows links, so a top-level symlink or
+    /// junction is copied as the directory it points at. Inside `copy_folder`
+    /// the test is `DirEntry::file_type`, which does not follow links, so a
+    /// symlink deeper in the same tree is skipped instead.
+    ///
+    /// Two behaviors look like oversights and are deliberate. There is no
+    /// source-existence check, so a missing `src` still creates `dst` and then
+    /// fails at iteration (pinned by
+    /// `copy_directory_contents_creates_dst_even_when_src_is_missing`). The
+    /// `create_dir_all(dst)` failure path does not set the disk-full flag,
+    /// even though the sibling [`FileOperations::move_directory_contents`]
+    /// does. Changing either changes what an install leaves on disk and how it
+    /// reports a full volume; see PARITY-NOTES.md first.
     pub fn copy_directory_contents(src: &Path, dst: &Path) {
         if let Err(err) = fs::create_dir_all(dst) {
             Logger::instance().log_error(&format!(
@@ -353,9 +378,8 @@ impl FileOperations {
                 continue;
             };
             let target = dst.join(name);
-            // `fs::is_directory(entry)` FOLLOWS symlinks (it converts the entry
-            // to its path), so a symlink to a directory takes the folder
-            // branch; `Path::is_dir` follows too.
+            // `Path::is_dir` follows links, so a symlink to a directory takes
+            // the folder branch.
             if path.is_dir() {
                 Self::copy_folder(&path, &target);
             } else {
@@ -364,16 +388,19 @@ impl FileOperations {
         }
     }
 
-    /// Move the immediate contents of a directory. Mirror of
-    /// `FileOperations::move_directory_contents`.
+    /// Move the immediate contents of a directory into `dst`.
     ///
     /// Same shape as [`FileOperations::copy_directory_contents`], but tries
     /// [`fs::rename`] per child first. A same-volume rename is a metadata
-    /// operation, so the final `unfomod -> mod_path` step costs effectively no
-    /// disk. The fallback is copy + remove on ANY rename error (cross-device is
-    /// the motivating case, but a locked or non-empty target benefits too),
-    /// EXCEPT a disk-full rename error, which sets the sticky flag and skips the
-    /// child instead of attempting a copy that cannot succeed.
+    /// operation, so the install's final `unfomod -> mod_path` step costs
+    /// effectively no disk. Any rename error falls back to copy plus remove
+    /// (cross-device is the motivating case; a locked or non-empty target
+    /// benefits too), except a disk-full rename error, which sets the sticky
+    /// flag and skips the child rather than attempting a copy that cannot
+    /// succeed.
+    ///
+    /// A missing source warns and skips before `dst` is created, unlike
+    /// [`FileOperations::copy_directory_contents`].
     pub fn move_directory_contents(src: &Path, dst: &Path) {
         if !src.exists() {
             Logger::instance().log_warning(&format!(
@@ -383,8 +410,8 @@ impl FileOperations {
             return;
         }
         if let Err(err) = fs::create_dir_all(dst) {
-            // Unlike copy_directory_contents, the C++ DOES check the disk-full
-            // condition on this create failure.
+            // Unlike copy_directory_contents, this create failure does set the
+            // disk-full flag.
             note_disk_full_if_applicable(&err);
             Logger::instance().log_error(&format!(
                 "[install] Failed to create directory {}: {err}",
@@ -433,8 +460,8 @@ impl FileOperations {
                 ));
                 continue;
             }
-            // Distinguishes a same-volume rename failure from the ordinary
-            // cross-volume move, which also lands here.
+            // An ordinary cross-volume move lands here too, so this line is
+            // what tells the two apart in a log.
             Logger::instance().log_warning(&format!(
                 "[install] rename {} -> {} failed ({rename_err}); falling back to copy",
                 path.display(),
@@ -445,22 +472,19 @@ impl FileOperations {
             } else {
                 Self::copy_file(&path, &target);
             }
-            // Best-effort source cleanup, mirroring `fs::remove_all` with an
-            // ignored error_code: if it fails the temp dir is cleaned up when
-            // the install scope ends. `remove_all` uses symlink_status, so a
-            // symlink is unlinked as a link, never recursed into.
+            // Best-effort source cleanup: a failure leaves the entry for the
+            // install's temp-directory removal. A link is unlinked as a link,
+            // never recursed into.
             //
-            // A real directory recurses (`remove_dir_all`). Everything else - a
-            // real file, a file symlink, or a directory symlink/junction (all of
-            // which report `is_dir() == false` under `symlink_metadata`) - is
-            // removed as a single entry. `remove_file` handles files and, on
-            // every platform, file symlinks plus Unix directory symlinks; a
-            // Windows directory reparse point is directory-attributed and
-            // `remove_file` (DeleteFileW) cannot delete it, so fall back to
-            // `remove_dir` (RemoveDirectoryW), which unlinks the reparse point
-            // without following it - matching `fs::remove_all`'s symlink_status
-            // behavior. On Unix the `remove_file` unlink already succeeds, so the
-            // fallback never runs there.
+            // A real directory recurses. Everything else - a real file, a file
+            // symlink, or a directory symlink or junction, all of which report
+            // `is_dir() == false` under `symlink_metadata` - is removed as a
+            // single entry. `remove_file` handles files and, on every platform,
+            // file symlinks plus Unix directory symlinks. A Windows directory
+            // reparse point is directory-attributed, so `DeleteFileW` cannot
+            // delete it; the `remove_dir` (RemoveDirectoryW) fallback unlinks
+            // the reparse point without following it. On Unix the `remove_file`
+            // unlink already succeeds and the fallback never runs.
             let remove_result = match fs::symlink_metadata(&path) {
                 Ok(meta) if meta.file_type().is_dir() => fs::remove_dir_all(&path),
                 Ok(_) => fs::remove_file(&path).or_else(|_| fs::remove_dir(&path)),
@@ -475,8 +499,7 @@ impl FileOperations {
         }
     }
 
-    /// True iff any copy or move call has hit "no space on device". Mirror of
-    /// `FileOperations::disk_full_encountered`.
+    /// True when any copy or move has hit "no space on device".
     ///
     /// Sticky and process-global. Callers check it after a batch of operations
     /// so disk-full surfaces as a hard install failure instead of letting the
@@ -485,8 +508,7 @@ impl FileOperations {
         DISK_FULL.load(Ordering::Relaxed)
     }
 
-    /// Reset the sticky disk-full flag. Mirror of
-    /// `FileOperations::reset_disk_full`.
+    /// Reset the sticky disk-full flag.
     ///
     /// Called at the start of an install so a prior install's disk-full does not
     /// poison the next one.
@@ -548,7 +570,7 @@ mod tests {
         let dest = root.join("out/shared.txt");
 
         let mut ops = FileOperations::new();
-        // High priority added FIRST; the ascending sort must still copy it last.
+        // High priority added first; the ascending sort must still copy it last.
         ops.add(file_op(&high, &dest, 5, 0));
         ops.add(file_op(&low, &dest, 1, 1));
         ops.execute();
@@ -569,8 +591,8 @@ mod tests {
         let dest = root.join("out/shared.txt");
 
         let mut ops = FileOperations::new();
-        // Descending document_order on purpose: `execute` must NOT consult it,
-        // so the LAST-INSERTED op wins even though its document_order is lowest.
+        // Descending document_order on purpose: `execute` must not consult it,
+        // so the last-inserted op wins even though its document_order is lowest.
         ops.add(file_op(&first, &dest, 0, 99));
         ops.add(file_op(&second, &dest, 0, 50));
         ops.add(file_op(&third, &dest, 0, 0));
@@ -852,7 +874,7 @@ mod tests {
 
         FileOperations::copy_directory_contents(&src, &dest);
 
-        // The source ROOT name is not recreated under dst.
+        // The source root name is not recreated under dst.
         assert!(!dest.join("src").exists());
         assert_eq!(read_file(&dest.join("top.txt")), "T");
         assert_eq!(read_file(&dest.join("sub/leaf.txt")), "L");
@@ -865,8 +887,8 @@ mod tests {
 
     #[test]
     fn copy_directory_contents_creates_dst_even_when_src_is_missing() {
-        // C++ quirk: there is no source-existence check, and create_directories
-        // runs before the iteration that fails.
+        // There is no source-existence check, and the destination is created
+        // before the iteration that fails.
         let root = temp_root("cdcmissing");
         let src = root.join("absent");
         let dest = root.join("dst");
@@ -903,9 +925,9 @@ mod tests {
 
     #[test]
     fn move_directory_contents_falls_back_to_copy_when_rename_fails() {
-        // Renaming onto an existing NON-EMPTY directory fails on every
-        // platform, which drives the copy + remove fallback without needing a
-        // second volume.
+        // Renaming onto an existing non-empty directory fails on every
+        // platform, which drives the copy plus remove fallback without needing
+        // a second volume.
         let root = temp_root("mdcfallback");
         let src = root.join("src");
         write_file(&src.join("sub/new.txt"), "N");
@@ -930,10 +952,10 @@ mod tests {
     #[test]
     fn move_directory_contents_removes_a_directory_symlink_child_on_fallback() {
         // A directory symlink reports is_dir() == false under symlink_metadata,
-        // so the cleanup must NOT route it to remove_file alone: on Windows a
+        // so the cleanup must not route it to remove_file alone: on Windows a
         // directory reparse point is directory-attributed and remove_file
-        // (DeleteFileW) cannot delete it. The remove_file -> remove_dir fallback
-        // mirrors fs::remove_all, which unlinks the link either way.
+        // (DeleteFileW) cannot delete it. The remove_file -> remove_dir
+        // fallback unlinks the link either way.
         let root = temp_root("mdcdirlink");
         let real_target = root.join("target");
         write_file(&real_target.join("inner.txt"), "T");
