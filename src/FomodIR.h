@@ -80,6 +80,7 @@ enum class FomodConditionType
 /**
  * @struct FomodCondition
  * @brief Recursive condition tree node - either a leaf predicate or a composite.
+ * @author Alex (https://github.com/lextpf)
  *
  * Leaf nodes use one set of fields depending on `type` (e.g. `flag_name` +
  * `flag_value` for `Flag`). Composite nodes ignore leaf fields and evaluate
@@ -113,6 +114,7 @@ struct FomodCondition
 /**
  * @struct FomodFileEntry
  * @brief A single source-to-destination file or folder mapping.
+ * @author Alex (https://github.com/lextpf)
  *
  * Represents a `<file>` or `<folder>` element. Folder entries are expanded
  * into individual file atoms during installation planning.
@@ -127,7 +129,11 @@ struct FomodFileEntry
     bool install_if_usable = false; /**< XML `installIfUsable` attribute */
 };
 
-/** @brief A condition that, when met, overrides a plugin's declared type. */
+/**
+ * @struct FomodTypePattern
+ * @brief A condition that, when met, overrides a plugin's declared type.
+ * @author Alex (https://github.com/lextpf)
+ */
 struct FomodTypePattern
 {
     FomodCondition condition; /**< Condition that triggers this override */
@@ -138,6 +144,7 @@ struct FomodTypePattern
 /**
  * @struct FomodPlugin
  * @brief A selectable option within a group, carrying files and condition flags.
+ * @author Alex (https://github.com/lextpf)
  *
  * `type` (possibly overridden by `type_patterns`) controls selection
  * constraints. When selected, the plugin's `files` are added to the install
@@ -193,7 +200,11 @@ inline constexpr auto enum_map<FomodGroupType> = EnumStringMap<FomodGroupType, 5
     FomodGroupType::SelectAny,
 };
 
-/** @brief A named group of plugins sharing a selection cardinality constraint. */
+/**
+ * @struct FomodGroup
+ * @brief A named group of plugins sharing a selection cardinality constraint.
+ * @author Alex (https://github.com/lextpf)
+ */
 struct FomodGroup
 {
     std::string name; /**< Display name from the `name` attribute */
@@ -202,7 +213,11 @@ struct FomodGroup
     std::vector<FomodPlugin> plugins; /**< Selectable options within this group */
 };
 
-/** @brief One wizard page presented to the user, optionally gated by a visibility condition. */
+/**
+ * @struct FomodStep
+ * @brief One wizard page presented to the user, optionally gated by a visibility condition.
+ * @author Alex (https://github.com/lextpf)
+ */
 struct FomodStep
 {
     std::string name;                      /**< Display name from the `name` attribute */
@@ -211,7 +226,11 @@ struct FomodStep
     std::vector<FomodGroup> groups;        /**< Option groups presented on this wizard page */
 };
 
-/** @brief Files installed when a condition is met, from `<conditionalFileInstalls>`. */
+/**
+ * @struct FomodConditionalPattern
+ * @brief Files installed when a condition is met, from `<conditionalFileInstalls>`.
+ * @author Alex (https://github.com/lextpf)
+ */
 struct FomodConditionalPattern
 {
     FomodCondition condition;          /**< Condition evaluated after all wizard steps complete */
@@ -221,6 +240,7 @@ struct FomodConditionalPattern
 /**
  * @struct FomodInstaller
  * @brief Top-level IR for a complete FOMOD installer definition.
+ * @author Alex (https://github.com/lextpf)
  *
  * Holds the full parsed content of a ModuleConfig.xml: module-level
  * dependencies, unconditionally required files, the ordered wizard steps,
