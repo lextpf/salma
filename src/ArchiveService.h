@@ -148,11 +148,24 @@ struct ArchiveWriteGuard
  *
  * ## :material-format-letter-case-lower: Path Normalization
  *
- * All lookup-oriented methods normalize entry paths before comparison:
- * lowercase, backslashes converted to forward slashes. The sizes map
- * and bit7z code paths additionally strip leading `./` and `/` prefixes
- * via `normalize_entry_path()`; the libarchive paths for `read_entry`
- * and `read_entries_batch` only apply lowercase + slash conversion.
+ * Two normalization profiles are used depending on the code path:
+ *
+ * | Profile | Operations applied                                                  |
+ * |---------|---------------------------------------------------------------------|
+ * | Full    | lowercase + backslash-to-slash + strip leading `./` and `/`         |
+ * | Light   | lowercase + backslash-to-slash only                                 |
+ *
+ * | Method                                | bit7z   | libarchive |
+ * |---------------------------------------|---------|------------|
+ * | `list_entries_with_sizes()` size keys | Full    | Full       |
+ * | `extract_prefix()` prefix match       | Full    | Full       |
+ * | `read_entry()`                        | Full    | Light      |
+ * | `read_entries_batch()`                | Full    | Light      |
+ *
+ * Callers that pass entry names from `list_entries_with_sizes()` to
+ * `read_entries_batch()` are safe: both ends use the same Full keys
+ * on the bit7z path, and the libarchive path's Light comparison still
+ * matches because the input keys had `./`/`/` already stripped.
  *
  * ## :material-swap-horizontal: Backend Routing
  *
@@ -272,6 +285,7 @@ public:
     /**
      * @struct EntryListing
      * @brief Result of a header-only archive scan.
+     * @author Alex (https://github.com/lextpf)
      *
      * Bundles the ordered entry paths with a size lookup table so callers
      * can inspect archive contents without extracting anything.
