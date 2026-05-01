@@ -389,6 +389,8 @@ Both paths converge in `mo2-core`. The DLL exposes it as a flat C ABI; the serve
 
 ```
 salma/
+|-- .github/                           # CI workflows
+|   +-- workflows/                     # build.yml, sonar.yml, test.yml
 |-- src/                               # C++ source code
 |   |-- main.cpp                       # Crow HTTP server entry point
 |   |-- CApi.h/cpp                     # C-linkage DLL API (ctypes)
@@ -400,10 +402,12 @@ salma/
 |   |-- ArchiveService.h/cpp           # Archive extraction
 |   |-- FileOperations.h/cpp           # Queued file operations
 |   |-- ModStructureDetector.h/cpp     # Mod folder structure detection
+|   |-- FomodArchiveResolver.h/cpp     # Resolves mod source archive paths
 |   |-- FomodService.h/cpp             # FOMOD installation logic
 |   |-- FomodDependencyEvaluator.h/cpp # FOMOD dependency evaluation
 |   |-- FomodInferenceService.h/cpp    # Selection inference engine (orchestrator)
-|   |-- FomodIR{,Parser}.h/cpp         # FOMOD intermediate representation + XML parser
+|   |-- FomodIR.h                      # FOMOD IR types (header-only)
+|   |-- FomodIRParser.h/cpp            # XML to IR parser
 |   |-- FomodCSP*.h/cpp                # CSP solver, options, precompute, types
 |   |-- FomodPropagator.h/cpp          # Constraint propagator
 |   |-- FomodForwardSimulator.h/cpp    # Forward-simulates installs against the IR
@@ -425,14 +429,23 @@ salma/
 |-- tests/                             # GoogleTest C++ unit tests
 |-- scripts/                           # MO2 plugin & utilities
 |   |-- mo2-salma.py                   # MO2 Python plugin
+|   |-- setup-env.bat                  # Persist SALMA_* env vars (one-time setup)
 |   |-- common.py                      # Shared utilities
-|   +-- _clean_docs.py                 # Doc post-processing
+|   |-- install.py                     # Installation helper
+|   |-- compare.py                     # Round-trip diff utility
+|   |-- scan.py                        # Mod scanning utility
+|   |-- _clean_docs.py                 # Doc post-processing
+|   +-- _promote_subgroups.py          # FOMOD subgroup promotion tool
+|-- triplets/                          # Custom vcpkg triplet (x64-windows-static-md)
+|-- overrides/                         # MkDocs theme overrides
 |-- logs/                              # Runtime logs
 |   +-- salma.log                      # Application log
 |-- .clang-format                      # Code formatting rules
+|-- .gitignore                         # Git ignore rules
 |-- CMakeLists.txt                     # Build configuration (mo2-core + mo2-server targets)
 |-- CMakePresets.json                  # Build presets (vcpkg)
 |-- vcpkg.json                         # Dependency manifest
+|-- sonar-project.properties           # SonarCloud configuration
 |-- build.bat                          # Build pipeline
 |-- deploy.bat                         # Deploy to MO2
 |-- purge.bat                          # Remove plugin & clean output
@@ -440,8 +453,12 @@ salma/
 |-- test.py                            # Round-trip test runner (Python)
 |-- test_one.py                        # Round-trip test for a single mod
 |-- test.log                           # Round-trip test output
+|-- fomod_archives.txt                 # Test archive manifest
 |-- doxide.yml                         # API doc config
-+-- mkdocs.yml                         # Documentation site config
+|-- mkdocs.yml                         # Documentation site config
+|-- LICENSE                            # License
+|-- CONTRIBUTING.md                    # Contributor guide
++-- PREVIEW.png                        # README banner image
 ```
 
 ## Documentation
