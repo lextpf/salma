@@ -57,10 +57,10 @@ crow::response StaticFileHandler::serve(const std::string& path)
     }
 
     auto ext = mo2core::to_lower(file_path.extension().string());
-    auto contentType = GetContentType(ext);
+    auto content_type = get_content_type(ext);
 
     crow::response res;
-    res.set_static_file_info_unsafe(file_path.string(), contentType);
+    res.set_static_file_info_unsafe(file_path.string(), content_type);
     if (res.code == 404)
     {
         return crow::response(404);
@@ -68,7 +68,7 @@ crow::response StaticFileHandler::serve(const std::string& path)
     return res;
 }
 
-std::string StaticFileHandler::GetContentType(const std::string& extension)
+std::string StaticFileHandler::get_content_type(const std::string& extension)
 {
     static const std::unordered_map<std::string, std::string> types = {
         {".html", "text/html"},
