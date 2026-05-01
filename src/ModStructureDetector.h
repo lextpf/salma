@@ -25,10 +25,6 @@ namespace mo2core
  * `SKSE` - `meshes` - `textures` - `interface` - `sound` - `scripts` - `seq` - `F4SE` - `SFSE` -
  * `OBSE` - `materials`
  *
- * This list is Bethesda-centric, covering Skyrim, Fallout 4,
- * Starfield, and Oblivion. Other games may need additional
- * folder names (e.g. `MWSE`, `distantlod`).
- *
  * ## :material-alert-circle-outline: Limitations
  *
  * - **Non-recursive**: find_main_mod_folders() only checks immediate
@@ -38,9 +34,6 @@ namespace mo2core
  *   contains non-mod content will be reported as a mod root. This is
  *   rare in practice since the input is always an extracted mod
  *   archive.
- * - **Incomplete game coverage**: The recognized folder list covers
- *   several Bethesda games but not all. Possible additions include
- *   `MWSE` (Morrowind), `MCM`, `distantlod`, or `Docs`.
  *
  * ## :material-microsoft-windows: Platform Assumptions
  *
