@@ -22,6 +22,7 @@ namespace mo2core
 /**
  * @class FomodInferenceService
  * @brief Infers FOMOD selections from previously installed files.
+ * @author Alex (https://github.com/lextpf)
  *
  * Given a mod archive containing a FOMOD `ModuleConfig.xml` and a
  * directory of already-installed files, this service reverse-engineers
@@ -32,10 +33,13 @@ namespace mo2core
  *
  * 1. **Tier-1 shortcut**: Check meta.ini for cached fomod-plus JSON.
  *    "fomod-plus" refers to a MO2 plugin that caches the user's FOMOD
- *    selections as JSON in the mod's `meta.ini` file (under the
- *    `[Settings]` key `fomod plus/fomod`). When this cached result is
- *    present and contains a non-empty `steps` array, inference is
- *    skipped entirely and the cached selections are returned as-is.
+ *    selections as JSON in the mod's `meta.ini`. The implementation
+ *    scans `meta.ini` line-by-line and looks up the key
+ *    `fomod plus/fomod` (case-insensitive) **inside the `[Settings]`
+ *    section** -- keys outside that section are ignored even if they
+ *    match the name. When the parsed JSON value contains a non-empty
+ *    `steps` array, inference is skipped entirely and the cached
+ *    selections are returned as-is.
  * 2. **List archive entries** with sizes (header-only scan)
  * 3. **Parse ModuleConfig.xml** into a typed IR
  * 4. **Expand atoms**: resolve folder entries into individual file
@@ -85,11 +89,14 @@ namespace mo2core
  * the same archive entry across multiple inference calls against the
  * same archive.
  *
- * - **Cache key**: an archive signature (canonical path, file size,
- *   and last-write time) combined with the entry path, formatted as
- *   `"<canonical_path>|<size>|<mtime>\n<entry_path>"`. The signature
- *   component ensures the cache self-invalidates when the archive
- *   file changes on disk.
+ * - **Cache key**: an archive signature (canonical path, uncompressed
+ *   file size, and last-write time as the raw integer count from
+ *   `time_since_epoch().count()`) combined with the entry path,
+ *   formatted as `"<canonical_path>|<size>|<mtime_ticks>\n<entry_path>"`.
+ *   The signature self-invalidates when **either** size or mtime
+ *   changes; a same-mtime same-size mutation would not be detected
+ *   (vanishingly unlikely in practice but worth noting for strict
+ *   integrity work).
  * - **Bound**: limited to `kMaxCacheEntries` (100,000) entries. When
  *   exceeded, the entire cache is cleared under the lock to prevent
  *   unbounded memory growth in long-running server processes.
@@ -147,37 +154,39 @@ public:
                                                 const std::unordered_set<std::string>& excluded);
 
 private:
-    /** Bundled pipeline state for infer_selections. */
+    /**
+     * Bundled pipeline state for infer_selections. The grouping
+     * comments name the pipeline phase from the class-level diagram
+     * each group corresponds to; some phases produce multiple fields.
+     */
     struct InferenceContext
     {
-        // Step 1 - List archive entries
+        // List archive entries (pipeline step 2)
         ArchiveService::EntryListing listing; /**< Archive entry list with sizes */
         std::vector<std::string>
             sorted_norm_entries; /**< Lowercase/forward-slash entry paths, sorted */
         std::unordered_map<std::string, uint64_t>
             norm_entry_sizes; /**< Norm path -> uncompressed size */
 
-        // Step 2 - Locate FOMOD ModuleConfig.xml
+        // Locate FOMOD ModuleConfig.xml (precondition for pipeline step 3)
         std::string fomod_prefix;   /**< Archive prefix containing the fomod folder */
         std::string xml_entry_norm; /**< Normalized path of ModuleConfig.xml inside the archive */
 
-        // Step 4 - Parse XML into IR
+        // Parse XML into IR (pipeline step 3)
         FomodInstaller installer; /**< Parsed FOMOD installer (steps, groups, plugins) */
 
-        // Step 5 - Expand atoms and build target tree
+        // Expand atoms (pipeline step 4)
         ExpandedAtoms atoms;  /**< Per-plugin and per-conditional file atoms */
         AtomIndex atom_index; /**< dest -> atoms reverse index */
         std::unordered_set<std::string>
             excluded; /**< Dests excluded from scoring (e.g. metadata files) */
 
-        // Step 6 - Build target tree
+        // Build target tree (pipeline step 5)
         std::unordered_map<std::string, uint64_t> installed; /**< Installed dests with sizes */
         TargetTree target;                                   /**< Target file tree to reproduce */
 
-        // Step 7b - Inference overrides
-        InferenceOverrides overrides; /**< Tri-state overrides for external conditions */
-
-        // Step 7c - Constraint propagation result
+        // Pre-solve inputs (feed into pipeline step 6)
+        InferenceOverrides overrides;  /**< Tri-state overrides for external conditions */
         PropagationResult propagation; /**< Pre-pass narrowed plugin domains */
 
         // Timing diagnostics (microseconds)
