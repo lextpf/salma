@@ -15,12 +15,29 @@ namespace mo2core
 /** Maximum depth for recursive condition evaluation (guards against malformed XML). */
 static constexpr int MAX_DEPENDENCY_DEPTH = 32;
 
-/** External dependency override mode used during inference. */
+/**
+ * @brief External dependency override mode used during inference.
+ *
+ * The two `Force*` modes pin the answer regardless of any actual
+ * filesystem or game state. `Unknown` is the default for inference
+ * runs that do not have access to a `FomodDependencyContext`; the
+ * solver still has to decide each branch, so the enum picks a
+ * conservative answer per category:
+ *
+ * - **File / Plugin / Fomod** -> `false`. These reference user-
+ *   installed content that may or may not be present; defaulting to
+ *   `false` keeps the solver from speculatively activating optional
+ *   files that depend on packages the user might not have.
+ * - **Game / FOMM / FOSE** -> `true`. These reference engine /
+ *   script-extender / loader version checks. An installed mod almost
+ *   always satisfies them on the machine it was installed on, so
+ *   defaulting to `true` matches the common real-world case during
+ *   inference and avoids spurious gating.
+ */
 enum class ExternalConditionOverride : uint8_t
 {
-    Unknown =
-        0, /**< External state cannot be determined; File/Plugin/Fomod conditions conservatively
-              return false, infrastructure conditions (Game/Fomm/Fose) return true. */
+    Unknown = 0,    /**< External state cannot be determined; see enum-level doc for the
+                         per-category defaults applied. */
     ForceFalse = 1, /**< Override forces external dependency to evaluate as unmet (false). */
     ForceTrue = 2,  /**< Override forces external dependency to evaluate as met (true). */
 };
