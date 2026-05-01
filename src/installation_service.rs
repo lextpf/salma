@@ -1,24 +1,67 @@
 //! Top-level install orchestrator: extract, detect, dispatch, clean up.
 //!
-//! Rust port of `src/InstallationService.hpp`/`.cpp`. This is what the
-//! `install` / `installWithConfig` C ABI exports call. It extracts the archive
-//! to a temp directory, decides whether the tree carries a FOMOD installer, and
-//! delegates to either [`crate::fomod_service`] (the replay) or the non-FOMOD
-//! content-root copy via [`crate::mod_structure_detector`].
+//! Behind the `install` and `installWithConfig` C ABI exports. It extracts the
+//! archive to a temp directory, decides whether the tree carries a FOMOD
+//! installer, and delegates either to [`crate::fomod_service`] for the replay
+//! or to the content-root copy driven by [`crate::mod_structure_detector`].
+//!
+//! ## Pipeline and what each exit leaves on disk
+//!
+//! ```text
+//!   install_mod
+//!     |
+//!     FileOperations::reset_disk_full()
+//!     |
+//!     archive exists?  -- no --> Err "Archive file not found: {path}"
+//!     |                          nothing was created
+//!     |
+//!     create_dir_all(mod_path)  -- Err --> Err "Cannot create mod directory: {e}"
+//!     |                                    no temp directory exists yet
+//!     |
+//!     create_dir_all(%TEMP%/fomod-<8 hex>/archive)
+//!     |   |
+//!     |   +-- Err --> Err "Cannot create temp directory: {e}"
+//!     |               leaks %TEMP%/fomod-<8 hex> if that parent was created first
+//!     |
+//!     run_install
+//!     |   ArchiveService::extract -> <temp>/archive
+//!     |   find_fomod_folder
+//!     |     +-- Some -> handle_fomod_install: parse ModuleConfig.xml, build the
+//!     |     |           dependency context, run the required / optional /
+//!     |     |           conditional passes into <temp>/unfomod, then
+//!     |     |           move_directory_contents(<temp>/unfomod -> mod_path)
+//!     |     +-- None -> handle_non_fomod_install: find_main_mod_folders, then
+//!     |                 copy_directory_contents of the chosen content root
+//!     |
+//!     remove_dir_all(<temp>)   runs on both the Ok and the Err of run_install;
+//!     |                        a removal failure only warns
+//!     |
+//!     run_install failed?  -- yes --> that Err is returned; mod_path holds
+//!     |                               nothing this install wrote, because every
+//!     |                               fatal exit precedes the copy and move
+//!     |                               passes, and those report failure by
+//!     |                               logging, not by Err. Anything a previous
+//!     |                               install left there survives
+//!     |
+//!     disk_full_encountered()?  -- yes --> Err "Install aborted: disk full ..."
+//!     |                                    <temp> is already gone; mod_path
+//!     |                                    keeps whatever the passes copied,
+//!     |                                    and nothing is rolled back
+//!     |
+//!     Ok(mod_path)
+//! ```
 //!
 //! ## Error model
 //!
-//! The C++ signals every fatal condition by throwing `std::runtime_error`, and
-//! `CApi::install` returns `e.what()` to the caller. Rust has no exceptions, so
-//! [`install_mod`](InstallationService::install_mod) returns
-//! `Result<String, InstallError>` and [`InstallError`] carries exactly the
-//! string the C++ `what()` would have produced. `capi` returns that string
-//! verbatim, so the ABI-visible behavior is unchanged.
+//! Every fatal condition surfaces as an `Err`.
+//! [`install_mod`](InstallationService::install_mod) yields
+//! `Result<String, InstallError>` and `capi` hands the carried string to the
+//! caller unchanged, so those bytes are observable across the ABI.
 //!
-//! Log call sites mirror the C++ tags, wording, and ordering so MO2's log
-//! window reads the same. Error TEXT interpolated into a message differs where
-//! the C++ formats `filesystem_error::what()` or a library exception and this
-//! formats the Rust error.
+//! Seven salma-authored failure messages are byte-exact contracts, tabulated in
+//! `PARITY-NOTES.md` under "Exceptions-return-Result contract". A failure
+//! raised inside a library - archive extraction, XML parsing - carries that
+//! back end's own wording instead, so do not assert on those strings.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -36,11 +79,17 @@ use crate::mod_structure_detector::find_main_mod_folders;
 use crate::types::{FileOperation, FomodDependencyContext};
 use crate::utils::{is_inside, random_hex_string, to_lower};
 
-/// A fatal install failure, carrying the exact message the C++
-/// `std::runtime_error::what()` would return.
+/// A fatal install failure, carrying the message returned across the C ABI.
 ///
-/// `capi::install` / `capi::installWithConfig` hand this string straight back
-/// across the ABI, so its bytes are part of the contract.
+/// `capi::install` and `capi::installWithConfig` hand this string straight back
+/// to the caller, so its bytes are observable.
+///
+/// For the seven salma-authored failures the bytes are the contract, character
+/// for character. Failures that originate in a library are not: archive
+/// extraction and XML parsing interpolate that back end's own error text, which
+/// changes with the dependency. Do not assert on those strings. See the module
+/// doc's "Error model" section and `PARITY-NOTES.md`,
+/// "Exceptions-return-Result contract".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallError(pub String);
 
@@ -58,8 +107,8 @@ impl InstallError {
     }
 }
 
-/// The five base-game plugins the C++ seeds into every dependency context
-/// (`InstallationService.cpp:346-350`), in insertion order.
+/// The five base-game plugins seeded into every dependency context, in
+/// insertion order.
 const SEED_PLUGINS: [&str; 5] = [
     "skyrim.esm",
     "update.esm",
@@ -68,9 +117,8 @@ const SEED_PLUGINS: [&str; 5] = [
     "dragonborn.esm",
 ];
 
-/// Windows reserved device names rejected as a `moduleName`
-/// (`InstallationService.cpp:222-225`). Compared against the lowercased stem,
-/// so `con.txt` is rejected exactly like `con`.
+/// Windows reserved device names rejected as a `moduleName`. Compared against
+/// the lowercased stem, so `con.txt` is rejected exactly like `con`.
 const RESERVED_NAMES: [&str; 22] = [
     "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
     "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
@@ -78,13 +126,17 @@ const RESERVED_NAMES: [&str; 22] = [
 
 /// FOMOD install orchestrator.
 ///
-/// Mirror of `mo2core::InstallationService`. The C++ class holds no members and
-/// the C ABI constructs a fresh instance per call; this is the same shape, kept
-/// as a struct rather than free functions so the call sites read identically.
+/// Holds no state. `capi::install` and `capi::installWithConfig` each build an
+/// instance inside the call and drop it before returning, so nothing carries
+/// from one ABI call to the next.
 ///
-/// Not thread-safe, matching `InstallationService.hpp:130-134`: the disk-full
-/// marker it resets and reads is a process-global in [`FileOperations`], so two
-/// concurrent installs would observe each other's disk pressure.
+/// Not thread-safe. The struct is empty, so the hazard is not its fields: the
+/// disk-full marker [`InstallationService::install_mod`] resets on entry and
+/// reads on exit is a process-global atomic in [`FileOperations`]. Two installs
+/// running at once would each clear and observe the other's disk pressure, so a
+/// disk-full failure could be reported against the wrong install or lost
+/// entirely. The server serializes its engine calls with a mutex for this same
+/// class of reason; see `SalmaEngine.cpp`.
 #[derive(Debug, Default)]
 pub struct InstallationService;
 
@@ -95,30 +147,43 @@ impl InstallationService {
     }
 
     /// Install `archive_path` into `mod_path`, optionally driven by a selections
-    /// JSON at `json_path` (empty means "derive from the archive stem").
+    /// JSON at `json_path`. An empty `json_path` derives one from the archive
+    /// stem. Returns `mod_path` on success.
     ///
-    /// Mirror of `InstallationService::install_mod`
-    /// (`InstallationService.cpp:23-146`). Returns `mod_path` on success.
-    ///
-    /// Lifecycle, in C++ order:
+    /// Lifecycle:
     /// 1. Reset the sticky disk-full marker.
     /// 2. Fail if the archive does not exist.
     /// 3. Create `mod_path` and a fresh `%TEMP%/fomod-<8 hex>/archive`.
-    /// 4. Extract, locate a `fomod` folder, dispatch.
-    /// 5. Remove the temp tree (failures warn, they do not fail the install).
-    /// 6. Convert a disk-full marker into a hard failure.
+    /// 4. Extract, locate a `fomod` folder, dispatch (all inside `run_install`).
+    /// 5. Remove the temp tree if step 3 got that far. A removal failure warns
+    ///    and does not fail the install.
+    /// 6. Turn a disk-full marker into a hard failure.
     ///
-    /// The temp tree is removed on BOTH exit paths. `mod_path` is deliberately
-    /// NOT cleaned up on failure, matching `InstallationService.hpp:122-128`:
-    /// once the copy passes have run, partial content is left for the caller.
+    /// **Cleanup.** The single `fs::remove_dir_all(&temp_dir)` runs after
+    /// `run_install` returns, on both its exit paths. It does not run at all on
+    /// the two earlier returns:
+    ///
+    /// - A failed `fs::create_dir_all(mod_path)` returns
+    ///   `Err("Cannot create mod directory: {e}")` and leaks nothing, because no
+    ///   temp directory exists yet.
+    /// - A failed `fs::create_dir_all(<temp>/archive)` returns
+    ///   `Err("Cannot create temp directory: {e}")` and can leak:
+    ///   `create_dir_all` creates `%TEMP%/fomod-<8 hex>` before its `archive`
+    ///   child, so the parent directory survives when the child fails. That
+    ///   leak is deliberate: both creations sit ahead of the region the cleanup
+    ///   covers. An operator who finds orphaned `%TEMP%\fomod-*` directories is
+    ///   looking at this path. See PARITY-NOTES.md before moving them.
+    ///
+    /// `mod_path` is deliberately not cleaned up on failure: once the copy
+    /// passes have run, partial content is left for the caller.
     pub fn install_mod(
         &mut self,
         archive_path: &str,
         mod_path: &str,
         json_path: &str,
     ) -> Result<String, InstallError> {
-        // Clear the sticky disk-full marker before any work so a previous
-        // install's disk pressure does not poison this run (IS 36).
+        // Clear the sticky disk-full marker before any work, so a previous
+        // install's disk pressure does not poison this run.
         FileOperations::reset_disk_full();
 
         let logger = Logger::instance();
@@ -135,8 +200,8 @@ impl InstallationService {
             )));
         }
 
-        // Size is read purely to log it; a failure warns and reports 0, as in
-        // the C++ (which swallows the error_code and keeps going).
+        // Size is read only to log it; a failure warns, reports 0, and keeps
+        // going.
         let archive_size = match fs::metadata(archive_path) {
             Ok(meta) => meta.len(),
             Err(err) => {
@@ -149,9 +214,8 @@ impl InstallationService {
             archive_size as f64 / 1024.0 / 1024.0
         ));
 
-        // The C++ `fs::create_directories` throws on failure and the exception
-        // escapes install_mod BEFORE any temp dir exists, so there is nothing to
-        // clean up on this path. Same here.
+        // This failure returns before any temp directory exists, so there is
+        // nothing to clean up on this path.
         fs::create_dir_all(mod_path)
             .map_err(|e| InstallError::new(format!("Cannot create mod directory: {e}")))?;
         logger.log(&format!("[install] Created mod directory: {mod_path}"));
@@ -173,8 +237,8 @@ impl InstallationService {
             &archive_extract_dir,
         );
 
-        // Cleanup is symmetric across both exit paths (IS 103-113 on success,
-        // IS 132-145 in the catch-all). Removal failures only warn.
+        // Cleanup is symmetric across both exit paths. A removal failure only
+        // warns.
         match fs::remove_dir_all(&temp_dir) {
             Ok(()) => logger.log("[install] Cleaned up temporary directory"),
             Err(err) if outcome.is_ok() => logger.log_warning(&format!(
@@ -194,9 +258,8 @@ impl InstallationService {
 
         // Some files could not be copied because the volume ran out of space.
         // Surface it as a hard failure so a half-empty mod is never reported as
-        // installed (IS 120-128). The C++ throws here, INSIDE the try, so its
-        // catch-all runs `remove_all` a second time; that is a no-op on an
-        // already-removed tree, which is why one removal above suffices.
+        // installed. The temp tree is already removed above, so returning here
+        // leaks nothing.
         if FileOperations::disk_full_encountered() {
             return Err(InstallError::new(
                 "Install aborted: disk full while copying files. Free space and retry.",
@@ -206,9 +269,9 @@ impl InstallationService {
         Ok(result)
     }
 
-    /// The body of the C++ `try` block (`InstallationService.cpp:68-101`):
-    /// extract, find the FOMOD folder, dispatch. Split out so the caller can
-    /// run the temp-dir cleanup on both exit paths without duplicating it.
+    /// Extract, find the FOMOD folder, dispatch. Split out of
+    /// [`InstallationService::install_mod`] so the temp-directory cleanup runs
+    /// on both exit paths without being written twice.
     fn run_install(
         &mut self,
         archive_path: &str,
@@ -228,10 +291,8 @@ impl InstallationService {
                     .to_str()
                     .ok_or_else(|| InstallError::new("Temp directory path is not valid UTF-8"))?,
             )
-            // The C++ lets bit7z / libarchive errors propagate as-is, so their
-            // `what()` becomes the ABI's error string. The Rust backends carry
-            // their own wording (see PARITY-NOTES "Task 15"), so the FAILURE is
-            // parity but the TEXT is not.
+            // The archive back end's own error text becomes the ABI error
+            // string. The failure is the contract; the wording is not.
             .map_err(|e| InstallError::new(e.to_string()))?;
         logger.log(&format!(
             "[install] Archive extracted to {} in {:.2} seconds",
@@ -265,20 +326,53 @@ impl InstallationService {
     }
 }
 
-/// Find the first directory named `fomod` (case-insensitively) that contains a
+/// Find the first directory named `fomod` (case-insensitively) that holds a
 /// `moduleconfig.xml` (case-insensitively).
 ///
-/// Mirror of `InstallationService::find_fomod_folder`
-/// (`InstallationService.cpp:148-168`). The C++ walks a
-/// `recursive_directory_iterator` and returns the FIRST match in iteration
-/// order; there is no shallowest-path preference here, unlike the inference
-/// pipeline's ModuleConfig lookup. That asymmetry is real and is reproduced.
+/// There is no shallowest-path preference here, unlike the ModuleConfig lookup
+/// in [`crate::fomod_inference_service`], which tracks depth and prefers the
+/// shallowest hit. For an archive carrying more than one FOMOD, inference and
+/// install can therefore disagree about which `ModuleConfig.xml` is
+/// authoritative.
 ///
-/// Returns `None` when no such folder exists.
+/// **Traversal order.** The walk is level-then-descend, not pre-order
+/// depth-first. It reads one directory, tests every immediate subdirectory, and
+/// returns on the first one named `fomod` that holds a `moduleconfig.xml`. Only
+/// after that whole loop finishes does it recurse into the collected
+/// subdirectories, in `read_dir` order. There is no explicit stack; the
+/// recursion plus the `subdirs` vector is what produces this order.
+///
+/// The order decides the winner whenever `read_dir` returns a wrapper directory
+/// before a shallow `fomod`:
+///
+/// ```text
+///   root/
+///     Data/
+///       fomod/ModuleConfig.xml     <- a pre-order depth-first walk stops here
+///     fomod/ModuleConfig.xml       <- this walk stops here
+///
+///   visit order, this walk:  Data, fomod       -> root/fomod
+///   visit order, pre-order:  Data, Data/fomod  -> root/Data/fomod
+/// ```
+///
+/// PARITY-NOTES.md still describes install as taking the first pre-order
+/// depth-first hit, which this walk does not do. Correct that entry, or change
+/// the walk (move the recursion inside the child loop), before relying on
+/// either description.
+///
+/// Returns `None` when no such folder exists, including when `archive_root`
+/// cannot be read.
 fn find_fomod_folder(archive_root: &Path) -> Option<PathBuf> {
-    // Explicit stack: the C++ `recursive_directory_iterator` yields entries
-    // depth-first, visiting a directory's own entry before descending into it.
-    // Matching that order matters because the FIRST match wins.
+    // Tests every immediate subdirectory of `dir` first, then descends into
+    // them in read_dir order. A directory named `fomod` that has no
+    // moduleconfig.xml is still descended into, because `subdirs` collects it
+    // unconditionally.
+    //
+    // `path.is_dir()` follows symlinks and Windows junctions, and this
+    // recursion has no visited set and no depth cap, so a link cycle under
+    // `archive_root` recurses until the stack overflows. The input is always a
+    // freshly extracted temp tree owned by this process, so that is not
+    // reachable today.
     fn walk(dir: &Path) -> Option<PathBuf> {
         let entries = fs::read_dir(dir).ok()?;
         let mut subdirs = Vec::new();
@@ -307,8 +401,8 @@ fn find_fomod_folder(archive_root: &Path) -> Option<PathBuf> {
     walk(archive_root)
 }
 
-/// Whether `dir` holds a regular file named `moduleconfig.xml`, case-insensitively
-/// (`InstallationService.cpp:158-165`).
+/// Whether `dir` holds a regular file named `moduleconfig.xml`,
+/// case-insensitively. A directory of that name does not count.
 fn contains_module_config(dir: &Path) -> bool {
     let Ok(entries) = fs::read_dir(dir) else {
         return false;
@@ -325,8 +419,10 @@ fn contains_module_config(dir: &Path) -> bool {
 
 /// Non-FOMOD install: pick a content root and copy it, or copy the whole tree.
 ///
-/// Mirror of `InstallationService::handle_non_fomod_install`
-/// (`InstallationService.cpp:170-295`).
+/// One candidate from [`find_main_mod_folders`] is copied without further
+/// checks. Several candidates need a `moduleName` from the selections JSON to
+/// disambiguate, and no match or several matches is fatal. No candidate at all
+/// falls back to copying the archive root flat.
 fn handle_non_fomod_install(
     archive_root: &Path,
     mod_path: &str,
@@ -354,9 +450,9 @@ fn handle_non_fomod_install(
         }
     }
 
-    // Path separators and parent segments are rejected by clearing the value,
-    // NOT by failing (IS 209-216). A cleared name then falls through to the
-    // ambiguous-folder failure below when several candidates exist.
+    // Path separators and parent segments clear the value rather than failing.
+    // A cleared name then falls through to the ambiguous-folder failure below
+    // when several candidates exist.
     if module_name_lower.contains('/')
         || module_name_lower.contains('\\')
         || module_name_lower.contains("..")
@@ -368,7 +464,7 @@ fn handle_non_fomod_install(
     }
 
     // Windows reserved device names cannot be directory names and fail
-    // silently, so they are rejected the same way (IS 218-235).
+    // silently, so they are cleared the same way.
     if !module_name_lower.is_empty() {
         let stem = match module_name_lower.rfind('.') {
             Some(dot) => &module_name_lower[..dot],
@@ -446,8 +542,9 @@ fn handle_non_fomod_install(
 /// FOMOD install: parse the config, build the dependency context, run the three
 /// file passes, then move the staged tree into place.
 ///
-/// Mirror of `InstallationService::handle_fomod_install`
-/// (`InstallationService.cpp:297-466`).
+/// The passes stage into `<temp>/unfomod` and only the final
+/// `move_directory_contents` touches `mod_path`, so a failure before that point
+/// leaves the mod directory as it was.
 fn handle_fomod_install(
     fomod_folder: &Path,
     archive_root: &Path,
@@ -458,9 +555,17 @@ fn handle_fomod_install(
 ) -> Result<String, InstallError> {
     let logger = Logger::instance();
     let xml_path = fomod_folder.join("ModuleConfig.xml");
-    // The C++ joins the EXACT casing `ModuleConfig.xml` even though
-    // find_fomod_folder matched case-insensitively; Windows resolves it either
-    // way, so both sides open whatever casing the archive shipped.
+    // The join uses the fixed casing `ModuleConfig.xml` even though
+    // find_fomod_folder matched case-insensitively. Windows resolves either
+    // spelling, so this opens whatever casing the archive shipped.
+    //
+    // That only holds on a case-insensitive filesystem. On a case-sensitive one
+    // an archive shipping `fomod/moduleconfig.xml` passes find_fomod_folder,
+    // which lowercases both names, and then fails the fs::read below as
+    // "Cannot parse XML (...)". The engine is Windows-only and CI runs on
+    // windows-latest, so nothing exercises the other case. Lifting the
+    // limitation means having contains_module_config return the matched entry
+    // name so this join can reuse the shipped casing.
     let src_base = fomod_folder
         .parent()
         .unwrap_or(fomod_folder)
@@ -473,21 +578,20 @@ fn handle_fomod_install(
     fs::create_dir_all(&dst_base)
         .map_err(|e| InstallError::new(format!("Cannot create staging directory: {e}")))?;
 
-    // Parse XML. The C++ `doc.load_file` auto-detects encoding; the Rust
-    // `parse_module_config` performs the same detection over the raw bytes.
+    // `parse_module_config` detects the encoding from the raw bytes, so the
+    // file is read as bytes rather than as a string.
     let bytes =
         fs::read(&xml_path).map_err(|e| InstallError::new(format!("Cannot parse XML ({e})")))?;
     let installer = parse_module_config(&bytes, "")
-        // C++: std::format("Cannot parse XML ({})", xml_result.description()).
-        // The wording of the inner description differs between pugixml and the
-        // Rust loader; the failure itself is parity. See PARITY-NOTES "Task 15".
+        // The inner description comes from the XML loader. The failure is the
+        // contract; the wording is not.
         .map_err(|e| InstallError::new(format!("Cannot parse XML ({e})")))?;
     logger.log(&format!("[install] Loaded XML: {}", xml_path.display()));
 
     let config_json = if !effective_json.is_empty() && Path::new(&effective_json).exists() {
         let value = read_json_config(&effective_json, "FOMOD JSON");
-        // The C++ emits this AFTER the catch, so it appears even when the parse
-        // failed (`InstallationService.cpp:329-340`).
+        // Logged after the parse attempt, so the line appears even when the
+        // parse failed and `value` came back null.
         logger.log(&format!("[install] Loaded JSON: {effective_json}"));
         value
     } else {
@@ -521,8 +625,7 @@ fn handle_fomod_install(
         }
     }
 
-    // Scan the game Data directory for plugins (IS 367-386). One level deep,
-    // matching `fs::directory_iterator`.
+    // Scan the game Data directory for plugins, one level deep.
     if !context.game_path.is_empty() {
         let data_dir = Path::new(&context.game_path).join("Data");
         if data_dir.exists()
@@ -545,8 +648,8 @@ fn handle_fomod_install(
                     context.installed_plugins.insert(name);
                 }
             }
-            // The C++ reports the whole set size, which already holds the five
-            // seeded masters, so the count overstates what the scan found.
+            // The logged count is the whole set, which already holds the five
+            // seeded masters, so it overstates what this scan found.
             logger.log(&format!(
                 "[install] Found {} plugins in game Data directory",
                 context.installed_plugins.len()
@@ -554,8 +657,7 @@ fn handle_fomod_install(
         }
     }
 
-    // Populate installed_files from an existing mod directory, for re-installs
-    // (IS 388-404).
+    // Populate installed_files from an existing mod directory, for re-installs.
     let mod_dir = Path::new(mod_path);
     if mod_dir.is_dir() {
         collect_installed_files(mod_dir, mod_dir, &mut context.installed_files);
@@ -579,8 +681,8 @@ fn handle_fomod_install(
 
     if !config_json.is_null() {
         logger.log("[install] Validating JSON selections...");
-        // A malformed plugin `name` is where the C++ `value("name", "")` throws,
-        // which aborts the whole install; a merely INVALID selection only warns.
+        // A step or group `name` of the wrong type aborts the whole install; a
+        // merely invalid selection only warns.
         let valid = fomod_service
             .validate_json_selections(&config_json)
             .map_err(|e| InstallError::new(e.to_string()))?;
@@ -651,7 +753,7 @@ fn handle_fomod_install(
 }
 
 /// The file name of `p` as a display string, for the log lines that quote a
-/// candidate folder by name (the C++ `path.filename().string()`).
+/// candidate folder by name.
 fn file_name_of(p: &Path) -> String {
     p.file_name()
         .unwrap_or_default()
@@ -661,19 +763,26 @@ fn file_name_of(p: &Path) -> String {
 
 /// Recursively collect mod-relative file paths into `out`.
 ///
-/// Mirror of the `recursive_directory_iterator` block at
-/// `InstallationService.cpp:391-398`: regular files only, path made relative to
-/// the mod root, backslashes folded to forward slashes.
+/// Regular files only. Keys are relative to `root`, use forward slashes, and
+/// keep their on-disk case. `out` is added to, never cleared.
 ///
-/// Two faithful reproductions worth naming:
-/// - The C++ does NOT lowercase these keys, while
-///   `FomodDependencyEvaluator::evaluate_file_dependency` normalizes (and thus
-///   lowercases) the value it looks up. A mixed-case installed file therefore
-///   never matches a file dependency. That is a latent C++ bug; it is
-///   reproduced here, not fixed. See PARITY-NOTES "Task 15".
-/// - The C++ `fs::relative` RESOLVES symlinks while this strips a prefix
-///   lexically, the same divergence already documented for the Task 12
-///   installed-file scan.
+/// Keeping the case is deliberate even though it makes some keys unmatchable:
+/// `FomodDependencyEvaluator::evaluate_file_dependency` normalizes, and so
+/// lowercases, the value it looks up, so a mixed-case installed file never
+/// satisfies a file dependency. Lowercasing here would change which files a
+/// re-install decides are already present. See PARITY-NOTES.md.
+///
+/// The prefix is stripped lexically rather than resolved, so a path reached
+/// through a link keeps the link's spelling.
+///
+/// **Traversal.** The recursion descends whenever `path.is_dir()` is true, and
+/// `Path::is_dir` resolves through `fs::metadata`, so directory symlinks and
+/// Windows junctions are followed and the files behind them land in `out`.
+/// There is no visited set and no depth cap, so a link cycle under `root`
+/// recurses until the stack overflows, which is fatal inside an FFI call:
+/// `capi::guard` catches panics, not stack exhaustion. `find_fomod_folder` has
+/// the same shape. Contrast [`FileOperations::copy_folder`], which uses
+/// `DirEntry::file_type` and skips linked entries on purpose.
 fn collect_installed_files(root: &Path, dir: &Path, out: &mut HashSet<String>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -692,24 +801,20 @@ fn collect_installed_files(root: &Path, dir: &Path, out: &mut HashSet<String>) {
 
 /// Read a JSON config, yielding [`Value::Null`] on any failure.
 ///
-/// Mirror of the `ifstream` + `f >> config` blocks at
-/// `InstallationService.cpp:187-207` and `:327-341`. A parse error is CAUGHT and
-/// warned about in the C++, leaving `config` default-constructed (null); it is
-/// NOT fatal, despite `InstallationService.hpp:91` listing "Invalid JSON in
-/// selections file" under fatal errors. The code wins over the doc; the
-/// doc-vs-code gap is recorded in PARITY-NOTES "Task 15".
+/// An unreadable file and a malformed one are both warnings, never fatal: the
+/// caller then proceeds as if no selections were supplied. `label` names the
+/// config in that warning.
 fn read_json_config(path: &str, label: &str) -> Value {
     let Ok(text) = fs::read_to_string(path) else {
-        // Unreadable file: the C++ `if (f)` guard skips the parse and leaves
-        // config null. Non-UTF-8 lands here too, where nlohmann would have
-        // thrown a parse_error and been caught to the same effect.
+        // An unreadable file, non-UTF-8 content included, skips the parse and
+        // leaves the config null.
         return Value::Null;
     };
     match json::parse(&text) {
         Ok(value) => value,
         Err(err) => {
-            // The C++ uses two wordings for the same failure, one per call site:
-            // "JSON config" in the non-FOMOD path, "FOMOD JSON" in the other.
+            // Two call sites, two labels: "JSON config" on the non-FOMOD path,
+            // "FOMOD JSON" on the FOMOD path.
             Logger::instance()
                 .log_warning(&format!("[install] Failed to parse {label} {path}: {err}"));
             Value::Null
@@ -719,12 +824,27 @@ fn read_json_config(path: &str, label: &str) -> Value {
 
 /// Resolve the selections JSON path, or an empty string when there is none.
 ///
-/// Mirror of `InstallationService::resolve_json_path`
-/// (`InstallationService.cpp:468-494`): an explicit `json_path` is trusted
-/// as-is; otherwise a sibling `<archive stem>.json` is accepted only when it
-/// really sits beside the archive, guarded by [`is_inside`].
+/// Two rules, both weaker than they look:
+///
+/// - A non-empty `json_path` is returned verbatim. There is no existence check,
+///   no extension check, no traversal check and no [`is_inside`] check. All
+///   validation of this argument lives in the mo2-server
+///   `InstallationController`.
+/// - An empty `json_path` derives `<archive stem>.json` next to the archive.
+///   `file_stem` strips only the last extension, so `mod.tar.gz` derives
+///   `mod.tar.json`. The derived path is returned only if it exists.
+///
+/// The [`is_inside`] containment guard on the derived path is conditional: it
+/// runs only when `archive_path` has a non-empty parent. For a bare filename
+/// the parent is empty, the guard is skipped, the derived `<stem>.json` carries
+/// no directory component, its existence probe hits the process current working
+/// directory, and the path is returned unchecked. Inside a DLL loaded by MO2
+/// that working directory is not under this code's control. Deliberate; see
+/// PARITY-NOTES.md.
+///
+/// Returns an empty string when no selections file applies.
 fn resolve_json_path(json_path: &str, archive_path: &str) -> String {
-    // Caller provided an explicit path - trust it.
+    // An explicit path from the caller is trusted as-is.
     if !json_path.is_empty() {
         return json_path.to_string();
     }
@@ -801,8 +921,8 @@ mod tests {
         stdfs::remove_dir_all(&root).ok();
     }
 
-    /// A `fomod` DIRECTORY holding only a subdirectory named moduleconfig.xml is
-    /// not a hit: the C++ requires a regular file.
+    /// A `fomod` directory holding only a subdirectory named moduleconfig.xml
+    /// is not a hit: a regular file is required.
     #[test]
     fn find_fomod_folder_ignores_a_directory_named_module_config() {
         let root = scratch("ff-dir");
@@ -890,7 +1010,7 @@ mod tests {
 
     // -- moduleName sanitization ------------------------------------------
 
-    /// Separators, parent segments, and reserved device names all CLEAR the
+    /// Separators, parent segments, and reserved device names all clear the
     /// name rather than failing, which only becomes fatal when several
     /// candidate folders need disambiguating.
     #[test]
@@ -1016,8 +1136,8 @@ mod tests {
 
     // -- installed-file scan ----------------------------------------------
 
-    /// The C++ keeps the ORIGINAL casing here (no `to_lower`), so the port must
-    /// too, even though it makes mixed-case files unmatchable downstream.
+    /// Keys keep their on-disk casing, even though that makes a mixed-case file
+    /// unmatchable by a file dependency downstream.
     #[test]
     fn installed_file_scan_preserves_case_and_uses_forward_slashes() {
         let root = scratch("scan");
