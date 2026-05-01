@@ -1,66 +1,107 @@
-//! Archive I/O facade - Rust port of `src/ArchiveService.hpp` / `.cpp`.
+//! Archive listing, reading and extraction behind one facade.
 //!
-//! The C++ service fronts two libraries (libarchive for zip/tar, bit7z for
-//! 7z/rar/.001). The Rust port replaces both with a pure-crate stack chosen by
-//! an empirical corpus evaluation (16/16 real archives byte-match on
-//! `list_entries_with_sizes`):
+//! Three backends, picked by file extension:
 //!
-//! - zip (`zip`)  -> ZIP: central-directory order, forward-slash paths.
-//! - 7z (`sevenz_rust2`) -> 7z and `.001`: solid-block aware, header-only list.
-//! - RAR (`unrar`) -> RAR: sequential; links the proprietary unRAR C sources.
+//! - `zip` for ZIP: central-directory order, forward-slash paths.
+//! - `sevenz_rust2` for `.7z` and `.001`: solid-block aware, header-only list.
+//! - `unrar` for RAR: sequential; links the proprietary unRAR C sources.
 //!
-//! ## Byte-parity of `list_entries_with_sizes`
+//! Entry order and path separators differ per backend and are load-bearing.
+//! Later stages consume a listing in the order it arrives and match entry paths
+//! against an already-installed mod tree, so reordering or re-separating a
+//! listing can change which options the engine infers. The rules below are the
+//! contract, not an implementation detail.
 //!
-//! The golden `archive_entries.json` snapshots the C++
-//! `list_entries_with_sizes` (which routes 7z/rar through bit7z, echoing
-//! 7-Zip's case-insensitive stored order). Reproducing it is per-format:
+//! ## Per-format listing rules
 //!
-//! - ZIP: native central-directory order, no sort, keep `/`, skip directory
-//!   entries. (The C++ ZIP lister is libarchive, which pushes every header, but
-//!   its output for the corpus zips carrying explicit directory markers contains
-//!   NONE of them - libarchive does not surface those markers - so skipping
-//!   `is_dir()` is the faithful match. See PARITY-NOTES "Task 11".)
-//! - 7z: skip directories, convert `/` -> `\` (bit7z reports `\` for 7z), then
-//!   case-insensitive sort by the backslash path.
-//! - RAR: skip directories, keep unrar's native `\`, case-insensitive sort by
-//!   the backslash path.
+//! ```text
+//! format | crate        | dir entries | separator  | order
+//! -------+--------------+-------------+------------+---------------------------
+//! .zip   | zip          | skip is_dir | keep '/'   | central-directory, no sort
+//! .7z    | sevenz_rust2 | skip is_dir | '/' -> '\' | ci-sort by backslash path
+//! .001   | sevenz_rust2 | as .7z      | as .7z     | as .7z
+//! .rar   | unrar        | skip is_dir | native '\' | ci-sort by backslash path
+//! ```
 //!
-//! The ci-sort is the order-parity assumption: 7-Zip/WinRAR store entries
-//! case-insensitively sorted, so bit7z (and 7z.exe, which generated the golden)
-//! echo that order, while `sevenz_rust2`/`unrar` return raw header order; the
-//! sort reconciles them. An archive authored with an unsorted directory would
-//! diverge. See `PARITY-NOTES.md` ("Task 11").
+//! Extension routing is `format_of`. The rows map to `list_zip`, `list_7z` and
+//! `list_rar`, with `sevenz_backslash_name` for the 7z separator conversion and
+//! `ci_sort_by_path` for the sort.
 //!
-//! ## Normalization profiles (from the C++ hpp table)
+//! The case-insensitive sort exists because 7-Zip and WinRAR store entries in
+//! case-insensitive order, while `sevenz_rust2` and `unrar` hand back raw header
+//! order. Sorting reconciles the two. An archive authored with an unsorted
+//! directory diverges from what those tools list.
 //!
-//! `sizes` keys and the `read_entry` / `read_entries_batch` match comparisons
-//! use the Full profile ([`normalize_path`]: lowercase + `\`->`/` + strip
-//! leading `./` and `/`). The hpp doc table claims a "Light" profile for the
-//! libarchive `read_entry` / `read_entries_batch` paths, but the C++
-//! implementation calls `normalize_entry_path` (== `normalize_path`, Full)
-//! uniformly on those; this port matches the implementation, not the stale doc
-//! table (noted in PARITY-NOTES).
+//! The unit tests at the end of this file cover extension routing, the size
+//! cap, the entry-side normalization split, the traversal guard and the ZIP
+//! listing shape, so a change to any of the last three fails in-tree first, at
+//! `extract_prefix_entry_norm_light_for_zip_full_for_7z_rar` (the split),
+//! `extract_rejects_path_traversal_entries` and
+//! `safe_output_path_rejects_all_escape_classes` (the guard), or
+//! `list_zip_strips_dirs_keeps_order_and_sizes` (the ZIP shape).
 //!
-//! ## `[archive]` log lines
+//! No test in this file opens a real 7z or RAR archive; every archive test
+//! builds an in-memory zip. The 7z and RAR listing, read and extract paths are
+//! therefore unbacked in-tree, order and separator rules included, and so is
+//! the solid-block drain in `for_each_7z_entry`, where a missing drain surfaces
+//! as wrong bytes or a CRC failure rather than a test failure. The Light
+//! normalization of the `prefix` argument in
+//! [`ArchiveService::extract_prefix`] is unbacked as well. Validate a change to
+//! any of them against a live MO2 instance, through `scripts/run_harness.py`
+//! and `test_all.py`. `PARITY-NOTES.md` records the measurements that fixed the
+//! rules.
 //!
-//! The C++ names its libraries in these lines ("via bit7z", "falling back to
-//! libarchive", "Using libarchive for extraction"). Neither library exists here,
-//! so every such line names the crate that actually ran instead - `zip`,
-//! `sevenz_rust2` or `unrar` - keeping the C++ line shape, tag and position.
-//! Lines describing machinery with no counterpart at all are not emitted: the
-//! `7z.dll` discovery narrative ("[archive] 7z library: ...", "[archive] 7z.dll
-//! not found in SEVENZIP_PATH...") and libarchive's per-entry "Write header
-//! warning" / "Copy data warning" / "copy_data failed for entry" (this port has
-//! no separate write-disk handle that can warn without failing). There is
-//! likewise no bit7z-versus-libarchive fallback, so the four "falling back to
-//! libarchive" lines have no trigger. See PARITY-NOTES "Task 17".
+//! ## Normalization profiles
 //!
-//! [`ArchiveService::extract_prefix`] is the one deliberate exception: the C++
-//! ZIP path (libarchive fallback, `ArchiveService.cpp:615-617`) normalizes the
-//! entry with Light (lowercase + `\`->`/`, NO leading strip) while its bit7z
-//! 7z/rar path uses Full (`:584`). The port normalizes the entry side per
-//! format there (Light for ZIP, Full for 7z/rar) rather than uniformly, so a
-//! stored `/textures/x` matches prefix `textures` only where the C++ would.
+//! Two profiles, and they are not interchangeable.
+//!
+//! - Full is [`normalize_path`]. Six ordered steps: lowercase, `\` -> `/`,
+//!   strip leading `./` then leading `/`, strip trailing `/`, collapse repeated
+//!   `/`, drop `.` and `..` segments. Its own doc holds the pipeline and a
+//!   worked trace.
+//! - Light is `to_lower(entry).replace('\\', "/")` and nothing else. It has two
+//!   users: the `prefix` argument of [`ArchiveService::extract_prefix`], which
+//!   is Light-normalized for every format, and the ZIP entry side of prefix
+//!   matching in `prefix_entry_norm`. Switching `prefix_entry_norm` to Full for
+//!   every format does not retire the profile; the prefix side stays Light.
+//!
+//! `sizes` keys and the [`ArchiveService::read_entry`] /
+//! [`ArchiveService::read_entries_batch`] match comparisons all use Full.
+//!
+//! Light differs from Full in four steps, not one. The same entry through both:
+//!
+//! ```text
+//! entry:  ".\Textures//X.dds"
+//!
+//! Light (the prefix argument for every format; ZIP entries, prefix_entry_norm)
+//!   lowercase          -> ".\textures//x.dds"
+//!   '\' -> '/'         -> "./textures//x.dds"   <- stops here
+//!
+//! Full (normalize_path: sizes keys, read_entry, 7z/rar entries)
+//!   lowercase          -> ".\textures//x.dds"
+//!   '\' -> '/'         -> "./textures//x.dds"
+//!   strip leading ./   -> "textures//x.dds"
+//!   strip leading /    -> "textures//x.dds"
+//!   strip trailing /   -> "textures//x.dds"
+//!   collapse //        -> "textures/x.dds"
+//!   drop . and .. segs -> "textures/x.dds"
+//!
+//! prefix "textures":  Light misses, Full matches
+//! ```
+//!
+//! The leading `./` and `/` strip is the step that decides a prefix match, and
+//! it is why [`ArchiveService::extract_prefix`] keeps the two paths split
+//! instead of normalizing uniformly. The trailing-slash strip, the
+//! repeated-slash collapse and the `.` / `..` drop are Full-only too, so the
+//! profiles also disagree on `Textures//X.dds`: Light keeps `textures//x.dds`,
+//! Full yields `textures/x.dds`.
+//!
+//! ## Logging
+//!
+//! Every line this module writes carries the `[archive]` tag. The lines that
+//! name a backend name the crate that actually ran: `zip`, `sevenz_rust2` or
+//! `unrar`. Many lines name none, so `[archive]` output is not a reliable
+//! source of the backend for a given archive.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -72,22 +113,37 @@ use std::time::Instant;
 use crate::logger::Logger;
 use crate::utils::{self, normalize_path, to_lower};
 
-/// Maximum decompressed entry size buffered in memory (256 MiB), mirror of
-/// `kMaxEntrySize` in `ArchiveService.cpp`. A decompression-bomb guard: the
-/// in-memory read paths ([`ArchiveService::read_entry`],
-/// [`ArchiveService::read_entries_batch`]) reject any entry whose header
-/// uncompressed size exceeds this before allocating.
+/// Maximum decompressed entry size buffered in memory, in bytes: 256 MiB.
+///
+/// A decompression-bomb guard. The in-memory read paths
+/// ([`ArchiveService::read_entry`], [`ArchiveService::read_entries_batch`])
+/// reject any entry whose header uncompressed size exceeds this before
+/// allocating. The cap applies uniformly to all six read helpers
+/// (`read_entry_zip`, `_7z`, `_rar` and `read_batch_zip`, `_7z`, `_rar`), so an
+/// oversized entry comes back empty from a single read and absent from a batch
+/// read, whatever the format. Archives are untrusted input; do not weaken the
+/// guard or exempt a format from it. See `PARITY-NOTES.md`.
+///
+/// The `extract*` methods carry no such rejection, and only the ZIP path bounds
+/// even the up-front allocation: `extract_zip` passes the archive-declared size
+/// through `prealloc_hint`, and the buffer still grows to the real size.
+/// `extract_7z` grows from an empty `Vec` and `extract_rar` takes unrar's own
+/// buffer, so nothing bounds the allocation there. Every backend materializes a
+/// whole entry in memory; see `COPY_CHUNK`.
 pub const MAX_ENTRY_SIZE: i64 = 256 * 1024 * 1024;
 
-/// Streaming copy buffer for extraction / zip creation (8 KiB, matching the
-/// C++ `create_zip` chunk size).
+/// Copy buffer for `create_zip` only: 8 KiB.
+///
+/// No extraction path uses it. The ZIP and 7z backends read a whole entry with
+/// `read_to_end` and the RAR backend takes unrar's own buffer, so an extracted
+/// entry is fully buffered in RAM rather than streamed block by block. See the
+/// memory-model note in `PARITY-NOTES.md`.
 const COPY_CHUNK: usize = 8192;
 
 /// True when the entry's header uncompressed size exceeds the 256 MiB cap.
 ///
-/// The C++ guard is `size < 0 || size > kMaxEntrySize` over a signed `int64`.
-/// Header sizes here are `u64`, so the negative branch is unreachable; any
-/// value above the cap (including forged multi-gigabyte sizes) is rejected.
+/// Header sizes are unsigned, so only the upper bound can trip. A forged
+/// multi-gigabyte size is rejected like any other over-cap value.
 fn exceeds_entry_cap(size: u64) -> bool {
     size > MAX_ENTRY_SIZE as u64
 }
@@ -96,22 +152,19 @@ fn exceeds_entry_cap(size: u64) -> bool {
 /// `Vec::with_capacity` hint.
 ///
 /// The zip central directory records the uncompressed size as an
-/// attacker-controlled `u64` (zip64), and `extract` streams whole entries into
-/// memory. Passing that raw size straight to `with_capacity` lets a forged huge
-/// value force an unbounded up-front allocation - an uncatchable
-/// `handle_alloc_error` abort for a large-but-`<isize::MAX` value, or a
-/// "capacity overflow" panic beyond `isize::MAX` - BEFORE a single byte is read.
-/// Clamping the hint to the 256 MiB cap bounds the pre-allocation while the
-/// buffer still grows to the real size as bytes stream in. The C++ `extract`
-/// path streams block-by-block (`copy_data`) and never pre-allocates from the
-/// header size, so this only tightens an allocation the C++ never made.
+/// attacker-controlled `u64` (zip64), and `extract` reads whole entries into
+/// memory. Passing that raw size to `with_capacity` lets a forged value force an
+/// unbounded up-front allocation before a single byte is read: an uncatchable
+/// `handle_alloc_error` abort below `isize::MAX`, a "capacity overflow" panic
+/// beyond it. Clamping the hint to the 256 MiB cap bounds the pre-allocation,
+/// and the buffer still grows to the real size as bytes stream in.
 fn prealloc_hint(size: u64) -> usize {
     size.min(MAX_ENTRY_SIZE as u64) as usize
 }
 
-/// Archive format after extension routing. Mirror of the bit7z-vs-libarchive
-/// split: `.7z` and `.001` -> [`Format::SevenZ`], `.rar` -> [`Format::Rar`],
-/// everything else -> [`Format::Zip`].
+/// Archive format after extension routing: `.7z` and `.001` ->
+/// [`Format::SevenZ`], `.rar` -> [`Format::Rar`], everything else ->
+/// [`Format::Zip`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Format {
     Zip,
@@ -119,11 +172,10 @@ enum Format {
     Rar,
 }
 
-/// Errors from the fallible archive operations (the C++ methods that
-/// `throw std::runtime_error`): [`ArchiveService::extract`],
-/// [`ArchiveService::extract_filtered`], [`ArchiveService::extract_prefix`],
-/// [`ArchiveService::create_zip`]. The listing / read methods never surface an
-/// error - they return empty results on failure, exactly like the C++.
+/// Errors from the fallible archive operations: [`ArchiveService::extract`],
+/// [`ArchiveService::extract_filtered`], [`ArchiveService::extract_prefix`] and
+/// [`ArchiveService::create_zip`]. The listing and read methods never surface an
+/// error; they return empty results on failure.
 #[derive(Debug)]
 pub enum ArchiveError {
     /// The archive could not be opened or a fatal read error occurred.
@@ -153,12 +205,12 @@ impl From<std::io::Error> for ArchiveError {
 /// Result alias for the fallible archive operations.
 pub type ArchiveResult<T> = Result<T, ArchiveError>;
 
-/// Result of a header-only archive scan. Mirror of
-/// `ArchiveService::EntryListing`.
+/// Result of a header-only archive scan.
 ///
 /// `paths` preserves each entry's original casing and per-format separators in
-/// listing order; `sizes` maps the [`normalize_path`] (lowercase,
-/// forward-slash) key to the uncompressed size for case-insensitive lookup.
+/// listing order. `sizes` maps the [`normalize_path`] key (lowercase,
+/// forward-slash) to the uncompressed size in bytes, for case-insensitive
+/// lookup.
 #[derive(Debug, Default)]
 pub struct EntryListing {
     /// Entry paths in listing order (original casing / separators).
@@ -167,31 +219,34 @@ pub struct EntryListing {
     pub sizes: HashMap<String, u64>,
 }
 
-/// Unified archive I/O facade. Stateless (a unit struct): the C++ instance
-/// holds no fields either, and each call opens the archive fresh. Not intended
-/// to be shared across threads while extracting; construct one per use.
+/// Unified archive I/O facade. Stateless: each call opens the archive fresh.
+///
+/// The handle is zero-sized and `Copy`, so it is trivially `Send + Sync` and
+/// costs nothing to share between threads. The only process-global state the
+/// methods touch is the `Logger` singleton, whose file state is mutex-guarded.
+/// The constraint is on the destination, not the handle: two extractions running
+/// at the same time into the same destination directory race on the same output
+/// files, so concurrent calls are safe only when their destinations differ.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ArchiveService;
 
 impl ArchiveService {
-    /// Construct a service handle. Cheap: there is no state.
+    /// Construct a service handle. There is no state to build.
     pub fn new() -> Self {
         ArchiveService
     }
 
-    /// Whether an archive routes to the 7z/rar backend based on its extension.
-    /// Mirror of `ArchiveService::use_bit7z`: lowercased final extension in
-    /// `{.7z, .rar, .001}`.
+    /// Whether an archive routes to the 7z/rar backend: true when the lowercased
+    /// final extension is `7z`, `rar` or `001`.
     pub fn use_bit7z(archive_path: &str) -> bool {
         matches!(extension_lower(archive_path).as_str(), "7z" | "rar" | "001")
     }
 
-    /// List entries with uncompressed sizes (header-only, no extraction).
-    /// Mirror of `ArchiveService::list_entries_with_sizes`.
+    /// List entries with uncompressed sizes, reading headers only.
     ///
-    /// Returns an empty listing on any open/read failure (never errors), as the
-    /// C++ does. See the module docs for the per-format order/separator rules
-    /// that reproduce the golden `archive_entries.json` byte-for-byte.
+    /// Returns an empty listing on any open or read failure; it never errors,
+    /// so an unreadable archive is indistinguishable from an empty one. The
+    /// module docs hold the per-format order and separator rules.
     pub fn list_entries_with_sizes(&self, archive_path: &str) -> EntryListing {
         let backend = backend_name(format_of(archive_path));
         let ext = dotted_extension(archive_path);
@@ -213,19 +268,18 @@ impl ArchiveService {
         listing
     }
 
-    /// List all entry paths (header-only). Mirror of
-    /// `ArchiveService::list_entries`: the `paths` vector from
-    /// [`Self::list_entries_with_sizes`] (same order / casing).
+    /// List entry paths only: the `paths` vector from
+    /// [`Self::list_entries_with_sizes`], same order and casing.
     pub fn list_entries(&self, archive_path: &str) -> Vec<String> {
         self.list_entries_with_sizes(archive_path).paths
     }
 
-    /// Read a single entry into memory. Mirror of `ArchiveService::read_entry`.
+    /// Read a single entry into memory.
     ///
     /// Matching is case-insensitive with normalized separators
     /// ([`normalize_path`], the Full profile). Returns an empty vector when the
-    /// entry is not found, the header size exceeds the 256 MiB cap, or the
-    /// archive cannot be opened (no error is surfaced).
+    /// entry is missing, its header size exceeds the 256 MiB cap, or the archive
+    /// cannot be opened. No error is surfaced, so the three cases look alike.
     pub fn read_entry(&self, archive_path: &str, entry_name: &str) -> Vec<u8> {
         let target = normalize_path(entry_name);
         match format_of(archive_path) {
@@ -235,22 +289,25 @@ impl ArchiveService {
         }
     }
 
-    /// Read multiple entries in a single archive pass. Mirror of
-    /// `ArchiveService::read_entries_batch`.
+    /// Read several entries in a single archive pass.
     ///
-    /// `entry_names` are assumed already Full-normalized (lowercase,
-    /// forward-slash), matching the C++ contract; each archive entry is
-    /// normalized and looked up in the set. The returned map is keyed by the
-    /// normalized path; entries not present in the archive are absent. For a
-    /// solid 7z the whole block is decoded once via `for_each_entries` rather
-    /// than re-decoded per entry.
+    /// `entry_names` must already be Full-normalized (lowercase, forward-slash);
+    /// each archive entry is normalized and looked up in that set. The returned
+    /// map is keyed by the normalized path, and an entry the archive does not
+    /// hold is simply absent. A solid 7z block is decoded once through
+    /// `for_each_entries` rather than re-decoded per entry.
+    ///
+    /// Two entries can normalize onto one key, for example `Textures/x.dds` and
+    /// `textures/x.dds`. Which one's bytes survive depends on the backend: zip
+    /// keeps the last such entry, 7z and rar keep the first.
+    /// [`Self::read_entry`] keeps the first for every format.
     pub fn read_entries_batch(
         &self,
         archive_path: &str,
         entry_names: &HashSet<String>,
     ) -> HashMap<String, Vec<u8>> {
-        // The empty check precedes the logging in the C++ (`:707-715`), so an
-        // empty request emits nothing at all.
+        // This check runs before the log line, so an empty request emits nothing
+        // at all and never opens the archive.
         if entry_names.is_empty() {
             return HashMap::new();
         }
@@ -276,17 +333,14 @@ impl ArchiveService {
         results
     }
 
-    /// Extract every entry to a destination directory. Mirror of
-    /// `ArchiveService::extract`.
+    /// Extract every entry to a destination directory.
     ///
-    /// Each entry is rejected (skipped, no write) when its resolved path would
-    /// escape `destination_path` (the traversal guard, [`utils::is_inside`]).
-    /// Errors if the archive cannot be opened.
+    /// An entry whose resolved path would escape `destination_path` is skipped
+    /// and never written (the traversal guard, [`utils::is_inside`]). Errors if
+    /// the archive cannot be opened.
     pub fn extract(&self, archive_path: &str, destination_path: &str) -> ArchiveResult<()> {
-        // The C++ `extract` and `extract_filtered` are separate entry points with
-        // separate narratives; this port implements the former via the latter, so
-        // it calls the shared counted body directly rather than the public
-        // `extract_filtered` (whose closing line belongs to that entry point).
+        // Calls the shared counted body rather than `extract_filtered`, whose
+        // closing log line belongs to that entry point alone.
         Logger::instance().log(&format!("[archive] Extracting archive: {archive_path}"));
         let count = self.extract_counted(archive_path, destination_path, |_| true)?;
         Logger::instance().log(&format!(
@@ -296,14 +350,27 @@ impl ArchiveService {
         Ok(())
     }
 
-    /// Extract only entries accepted by `filter`. Mirror of
-    /// `ArchiveService::extract_filtered`.
+    /// Extract only the entries `filter` accepts.
     ///
-    /// `filter` receives each entry's raw path (original casing / separators).
-    /// The C++ runs this over a single libarchive pass regardless of format;
-    /// this port routes per backend but keeps the observable contract (the
-    /// filter decides which entries are written). Rejected entries are skipped
-    /// without decompression where the backend allows.
+    /// `filter` receives each entry's path with its original casing, but the
+    /// separators are per backend:
+    ///
+    /// - ZIP passes the `zip` crate's stored name unchanged, so forward slashes.
+    /// - RAR passes unrar's native name unchanged, so backslashes on Windows.
+    /// - 7z passes the backslash form: `sevenz_rust2` reports forward slashes
+    ///   and [`sevenz_backslash_name`] rewrites every `/` to `\` before the
+    ///   closure sees it.
+    ///
+    /// A filter that must work for every format therefore has to be
+    /// separator-insensitive, for example by running [`normalize_path`] on its
+    /// argument before matching. `safe_output_path` builds the output path from
+    /// the same string the filter saw, so accepting an entry and predicting
+    /// where it lands use identical input.
+    ///
+    /// Rejecting an entry costs no memory for ZIP (the entry is never read) or
+    /// RAR (unrar skips it), but a rejected 7z entry is still pushed through the
+    /// block decoder into a sink: the solid block stays aligned only if every
+    /// entry before the last kept one is drained. See `for_each_7z_entry`.
     pub fn extract_filtered<F>(
         &self,
         archive_path: &str,
@@ -321,9 +388,9 @@ impl ArchiveService {
     }
 
     /// Route to the per-format extraction backend and return the number of
-    /// entries actually written. Shared, silent body behind [`Self::extract`],
+    /// entries actually written. Shared silent body behind [`Self::extract`],
     /// [`Self::extract_filtered`] and [`Self::extract_prefix`], each of which
-    /// owns its own C++ log narrative.
+    /// emits its own log lines.
     fn extract_counted<F>(
         &self,
         archive_path: &str,
@@ -340,23 +407,21 @@ impl ArchiveService {
         }
     }
 
-    /// Extract entries whose normalized path starts with `prefix`. Mirror of
-    /// `ArchiveService::extract_prefix`.
+    /// Extract entries whose normalized path starts with `prefix`.
     ///
-    /// Comparison is case-insensitive with `\`->`/` normalization on both
-    /// sides. The prefix is always lowercase + `\`->`/` (matching the C++, which
-    /// lowercases and slash-folds the prefix but does not strip it). The entry
-    /// side is normalized PER FORMAT to mirror the two C++ code paths:
+    /// Comparison is case-insensitive with `\` -> `/` folding on both sides. The
+    /// prefix always gets the Light treatment: lowercase and slash-fold, no
+    /// stripping. The entry side is normalized per format:
     ///
-    /// - ZIP -> the C++ libarchive fallback (`ArchiveService.cpp:615-617`) uses
-    ///   Light (lowercase + `\`->`/`, NO leading `./` or `/` strip), so a stored
-    ///   `/textures/x` does NOT match prefix `textures` there.
-    /// - 7z / rar -> the C++ bit7z path (`:584`) uses Full
-    ///   ([`normalize_path`], which also strips a leading `./` and `/`).
+    /// - ZIP uses Light too, so a stored `/textures/x` does not match prefix
+    ///   `textures`.
+    /// - 7z and rar use Full ([`normalize_path`]), whose four extra steps strip
+    ///   a leading `./` and `/`, strip a trailing `/`, collapse repeated `/`,
+    ///   and drop `.` and `..` segments.
     ///
-    /// Using one uniform Full profile would make the ZIP path match strictly
-    /// more entries than the C++ (any leading-`/` or `./` entry), an install
-    /// replay divergence; the per-format split keeps byte parity.
+    /// The split is deliberate. A uniform Full profile would make the ZIP path
+    /// accept strictly more entries (every leading-`/` or `./` one), which
+    /// changes what an install replay writes to disk. Keep the two paths apart.
     pub fn extract_prefix(
         &self,
         archive_path: &str,
@@ -375,14 +440,31 @@ impl ArchiveService {
         Ok(())
     }
 
-    /// Create a zip archive from a directory tree. Mirror of
-    /// `ArchiveService::create_zip`.
+    /// Create a zip archive from a directory tree.
     ///
-    /// Recursively adds every file under `folder_path` with default deflate
+    /// Adds every file under `folder_path` recursively with default deflate
     /// compression; directory entries are implied, not stored. Parent
-    /// directories of `output_zip_path` are created. Errors if the output file
-    /// cannot be opened. Entry names use forward slashes (see PARITY-NOTES for
-    /// the intentional separator divergence from the C++ `fs::relative` output).
+    /// directories of `output_zip_path` are created. Entry names use forward
+    /// slashes, and entry order is the sorted order of the collected file paths,
+    /// so the same tree always produces the same sequence. See `PARITY-NOTES.md`
+    /// for the separator choice.
+    ///
+    /// **Failure modes.** The method errors when the output file cannot be
+    /// created, when `start_file` fails for an entry, when an input file cannot
+    /// be opened, when a read of an input file fails, when a write into the zip
+    /// stream fails, or when `finish` fails. Each of these abandons the
+    /// partially written archive rather than skipping the offending entry, so
+    /// the archive can be left truncated and unreadable, and the caller must
+    /// delete it. That control flow is deliberate; see `PARITY-NOTES.md` before
+    /// turning any of these errors back into a skip.
+    ///
+    /// Two cases are dropped instead of surfaced: a subdirectory whose
+    /// `read_dir` fails, and a collected path that does not start with
+    /// `folder_path`. Both skip silently, without a warning or an error, so an
+    /// unreadable subtree yields a smaller archive and `Ok(())`.
+    ///
+    /// No engine code calls this. Only unit tests and the zip fixture builder in
+    /// the `capi` tests exercise it.
     pub fn create_zip(&self, folder_path: &str, output_zip_path: &str) -> ArchiveResult<()> {
         create_zip_impl(folder_path, output_zip_path)
     }
@@ -399,12 +481,14 @@ impl ArchiveService {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-/// Lowercased final extension (no dot) of a path, via the last `.` in the file
-/// name. Mirror of `to_lower(fs::path(p).extension().string())` minus the dot.
+/// Lowercased final extension of a path, without the dot, from
+/// [`Path::extension`].
+///
+/// That is not "the text after the last `.`". [`Path::extension`] yields nothing
+/// when the file name holds no embedded dot, or when it begins with a dot and
+/// has no other dot, so `.7z` and `C:/a/.7z` both give `""` and `format_of`
+/// routes them to [`Format::Zip`]. `a.7z` gives `7z`, `mod.tar.gz` gives `gz`,
+/// `a.` gives `""`.
 fn extension_lower(archive_path: &str) -> String {
     Path::new(archive_path)
         .extension()
@@ -416,19 +500,28 @@ fn extension_lower(archive_path: &str) -> String {
 fn format_of(archive_path: &str) -> Format {
     match extension_lower(archive_path).as_str() {
         "rar" => Format::Rar,
-        // `.001` routes to the 7z backend (bit7z handled split volumes); no
-        // `.001` fixture exists in the corpus, so this routing is UNTESTED.
+        // `.001` routes to the 7z backend. The extension mapping is covered by
+        // `format_routing` and `use_bit7z_matches_extension_set`; opening a
+        // genuine split volume set is not, and that is a known behavioral gap
+        // rather than a coverage gap. sevenz_rust2 0.21.3 has no multi-volume
+        // support and both `Archive::open` and `ArchiveReader::open` take a
+        // single path, so a real `.001` first volume, whose end-of-archive
+        // header lives in the last volume, is expected to fail to open.
         "7z" | "001" => Format::SevenZ,
         _ => Format::Zip,
     }
 }
 
-/// Normalize an entry path for [`ArchiveService::extract_prefix`] prefix
-/// matching, per format. ZIP mirrors the C++ libarchive fallback
-/// (`ArchiveService.cpp:615-617`): Light = lowercase + `\`->`/`, NO leading
-/// strip. 7z / rar mirror the C++ bit7z path (`:584`): Full [`normalize_path`],
-/// which additionally strips a leading `./` and `/`. See the module-level
-/// normalization note for why the two paths must differ.
+/// Normalize an entry path for [`ArchiveService::extract_prefix`] matching, per
+/// format.
+///
+/// ZIP uses the Light profile, exactly `to_lower(entry).replace('\\', "/")`. 7z
+/// and rar use Full ([`normalize_path`]), which adds four steps on top of Light:
+/// strip a leading `./` and `/`, strip a trailing `/`, collapse repeated `/`,
+/// drop `.` and `..` segments. The leading strip is the step that changes prefix
+/// results, so `./textures/x.dds` matches prefix `textures` for 7z and rar but
+/// not for ZIP. The module-level normalization section traces one entry through
+/// both profiles.
 fn prefix_entry_norm(format: Format, entry_path: &str) -> String {
     match format {
         Format::Zip => to_lower(entry_path).replace('\\', "/"),
@@ -436,10 +529,14 @@ fn prefix_entry_norm(format: Format, entry_path: &str) -> String {
     }
 }
 
-/// Build an [`EntryListing`] from the per-format ordered raw list: `paths`
-/// keeps the original strings in order; `sizes` maps `normalize_path(path)` to
-/// size (last-write-wins on a normalization collision, mirroring the C++ map
-/// insert order which equals the listing order for both backends).
+/// Build an [`EntryListing`] from the per-format ordered raw list. `paths` keeps
+/// the original strings in order; `sizes` maps `normalize_path(path)` to the
+/// uncompressed size in bytes.
+///
+/// Two entries can collapse onto one `sizes` key, for example `Textures/x.dds`
+/// and `textures/x.dds` in a case-preserving archive. The last such entry in
+/// listing order wins, because `HashMap::insert` overwrites. Both entries still
+/// appear in `paths`, so `paths.len()` can exceed `sizes.len()`.
 fn build_listing(raw: Vec<(String, u64)>) -> EntryListing {
     let mut listing = EntryListing::default();
     for (path, size) in raw {
@@ -449,25 +546,35 @@ fn build_listing(raw: Vec<(String, u64)>) -> EntryListing {
     listing
 }
 
-/// Stable case-insensitive sort of (path, size) pairs by the backslash path -
-/// the 7z/rar order-parity step. Stable so entries equal under lowercasing keep
+/// Stable case-insensitive sort of (path, size) pairs by the backslash path, the
+/// ordering step for 7z and rar. Stable, so entries equal under lowercasing keep
 /// their raw header order.
 fn ci_sort_by_path(entries: &mut [(String, u64)]) {
     entries.sort_by_key(|entry| to_lower(&entry.0));
 }
 
 /// Join an entry's (possibly hostile) path onto the destination and confirm the
-/// result stays inside it, mirroring the C++ traversal guard
-/// (`weakly_canonical(dest/entry).lexically_relative(dest)` rejected when empty
-/// or starting with `..`). Returns the safe output path, or `None` to skip.
+/// result stays inside it.
+///
+/// Returns the safe output path, or `None` when the entry must be skipped.
+/// `None` has two causes and the caller cannot tell them apart:
+///
+/// 1. A genuine traversal: the joined path resolves outside `destination`.
+/// 2. A canonicalization failure on either path for any reason other than
+///    not-found, for example a permission or I/O error. [`utils::is_inside`]
+///    deliberately treats that as false.
+///
+/// Both cases log the same `[archive] Skipping path-traversal entry` warning, so
+/// an environment failure is reported with traversal wording, and the extraction
+/// quietly produces fewer files instead of returning an error. The guard fails
+/// closed on purpose; do not change that.
 fn safe_output_path(destination: &Path, entry_path: &str) -> Option<PathBuf> {
     let full_output = destination.join(entry_path);
     if utils::is_inside(destination, &full_output) {
         Some(full_output)
     } else {
-        // The C++ emits this from both of its extraction loops
-        // (`ArchiveService.cpp:307` and `:531`); routing every backend through
-        // this one guard emits it from all three here.
+        // All three extraction backends route through this guard, so the warning
+        // has a single call site.
         Logger::instance().log_warning(&format!(
             "[archive] Skipping path-traversal entry: {entry_path}"
         ));
@@ -475,10 +582,9 @@ fn safe_output_path(destination: &Path, entry_path: &str) -> Option<PathBuf> {
     }
 }
 
-/// The extension WITH its leading dot, lowercased, as the C++ log lines carry it
-/// (`ArchiveService.cpp:402` keeps `fs::path::extension()`'s dot, so the line
-/// reads "for .7z file"). An extensionless path yields "", matching the C++
-/// "for  file" exactly rather than emitting a bare ".".
+/// The extension with its leading dot, lowercased, as the `[archive]` log lines
+/// carry it: "for .7z file". An extensionless path yields "", so the line reads
+/// "for  file" rather than showing a bare ".".
 fn dotted_extension(archive_path: &str) -> String {
     let ext = extension_lower(archive_path);
     if ext.is_empty() {
@@ -488,9 +594,7 @@ fn dotted_extension(archive_path: &str) -> String {
     }
 }
 
-/// Name of the crate that backs a format, for the `[archive]` log lines. The C++
-/// names `bit7z` / `libarchive` in the same positions; this port has neither, so
-/// the true backend is named instead (see PARITY-NOTES "Task 17").
+/// Name of the crate that backs a format, for the `[archive]` log lines.
 fn backend_name(format: Format) -> &'static str {
     match format {
         Format::Zip => "zip",
@@ -499,8 +603,7 @@ fn backend_name(format: Format) -> &'static str {
     }
 }
 
-/// Count an extracted entry and emit the C++ per-100 progress line
-/// (`ArchiveService.cpp:343-346`).
+/// Count an extracted entry and emit the progress line every 100 entries.
 fn note_extracted(count: &mut usize) {
     *count += 1;
     if *count % 100 == 0 {
@@ -519,23 +622,15 @@ fn write_extracted_file(output: &Path, bytes: &[u8]) -> ArchiveResult<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// ZIP backend
-// ---------------------------------------------------------------------------
-
-/// List a zip in native central-directory order, skipping directory entries,
+/// List a zip in native central-directory order, skipping directory entries and
 /// keeping the stored forward-slash names.
 ///
-/// Directory entries ARE skipped, which empirically matches the C++ golden
-/// (review finding, Task 11 - DISPROVEN): although the C++ ZIP lister is
-/// libarchive and `ArchiveService.cpp:459-474` pushes every
-/// `archive_entry_pathname` with no explicit `AE_IFDIR` skip, the
-/// C++-generated `archive_entries.json` for the four corpus zips that DO store
-/// explicit directory entries (an 11-step ZIP fixture, a SelectAtMostOne ZIP fixture,
-/// a SelectExactlyOne ZIP fixture, a SelectExactlyOne ZIP fixture) contains ZERO
-/// directory entries (e.g. cbbe: 466 golden entries vs 1156 stored). libarchive
-/// does not surface these zip directory markers, so skipping `is_dir()` is the
-/// FAITHFUL reproduction, not a coincidence; including them breaks 16/16 parity.
+/// Skipping `is_dir()` entries is required, not incidental. A zip may store
+/// explicit directory markers, and the listing must contain files only.
+/// Restoring the markers changes the entry count and the entry order for every
+/// archive that stores them, which shifts what later stages see. The shape test
+/// `list_zip_strips_dirs_keeps_order_and_sizes` below is the only in-repo check;
+/// `PARITY-NOTES.md` records the measurement that fixed the rule.
 fn list_zip(archive_path: &str) -> ArchiveResult<Vec<(String, u64)>> {
     let file = File::open(archive_path).map_err(|e| ArchiveError::Open(e.to_string()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| ArchiveError::Open(e.to_string()))?;
@@ -624,10 +719,10 @@ where
             continue;
         };
         // Clamp the capacity hint: `entry.size()` is the archive-controlled
-        // uncompressed size, so a forged value would otherwise abort/panic on
-        // the pre-allocation. `extract` intentionally has NO 256 MiB rejection
-        // (parity with the uncapped C++ streaming extract); the buffer still
-        // grows to the real size via `read_to_end`.
+        // uncompressed size, so a forged value would otherwise abort or panic on
+        // the pre-allocation. `extract` deliberately applies no 256 MiB
+        // rejection here; the buffer still grows to the real size via
+        // `read_to_end`.
         let mut buf = Vec::with_capacity(prealloc_hint(entry.size()));
         entry.read_to_end(&mut buf)?;
         write_extracted_file(&output, &buf)?;
@@ -636,12 +731,8 @@ where
     Ok(count)
 }
 
-// ---------------------------------------------------------------------------
-// 7z backend
-// ---------------------------------------------------------------------------
-
-/// The backslash entry path bit7z reports for a 7z entry: sevenz_rust2 stores
-/// forward slashes, so convert.
+/// Rewrite a 7z entry name into the backslash form the listing rules require.
+/// `sevenz_rust2` reports forward slashes, so every `/` is converted.
 fn sevenz_backslash_name(name: &str) -> String {
     name.replace('/', "\\")
 }
@@ -697,10 +788,10 @@ fn read_batch_7z(
             read.read_to_end(&mut buf)?;
             results.insert(norm, buf);
         }
-        // Stop once every requested entry has been collected, mirroring the C++
-        // `remaining` early-out (`ArchiveService.cpp:848`). Unmatched or over-cap
-        // entries (and every entry before the last match) keep the pass going;
-        // `for_each_7z_entry` drains each one so the solid block stays aligned.
+        // Stop once every requested entry has been collected. Unmatched or
+        // over-cap entries, and every entry before the last match, keep the pass
+        // going; `for_each_7z_entry` drains each one so the solid block stays
+        // aligned.
         Ok(results.len() < entry_names.len())
     })
     .ok()?;
@@ -710,7 +801,33 @@ fn read_batch_7z(
 /// Decode a 7z once, invoking `each(name, size, reader)` per file entry. The
 /// closure returns `Ok(true)` to continue or `Ok(false)` to stop early. This is
 /// the solid-block-friendly path: `for_each_entries` decodes each block a single
-/// time and streams every entry in it.
+/// time and streams every entry in it. `name` carries the crate's forward-slash
+/// spelling; callers that need the backslash form convert with
+/// [`sevenz_backslash_name`].
+///
+/// **Solid-block alignment.** Every entry in a solid block reads from one shared
+/// decode stream, and that stream advances only by the bytes the closure
+/// actually consumes. An entry the closure ignores must therefore still be
+/// drained, which this function does after the closure returns `Ok(true)`:
+///
+/// ```text
+/// solid block: one decode stream, cursor moves only by bytes that are read
+///
+///   [--- a.dds ---][--- b.esp ---][--- c.nif ---]
+///   ^cursor
+///
+/// good  skipped entry drained into a sink:
+///   [=== a.dds ===][--- b.esp ---]...
+///                  ^cursor    b.esp decodes correctly
+///
+/// bad   skipped entry left partly read:
+///   [== a.dds ==...][--- b.esp ---]...
+///               ^cursor    b.esp decodes from inside a.dds:
+///                          wrong bytes, or a Crc32VerifyingReader error
+///                          that surfaces as empty, absent or Err
+/// ```
+///
+/// The drain is not dead work. Do not remove it.
 fn for_each_7z_entry<F>(archive_path: &str, mut each: F) -> Result<(), sevenz_rust2::Error>
 where
     F: FnMut(&str, u64, &mut dyn Read) -> Result<bool, std::io::Error>,
@@ -726,20 +843,19 @@ where
             each(&name, size, rd).map_err(sevenz_rust2::Error::from)?
         };
         if keep_going {
-            // CRITICAL solid-block alignment: fully drain THIS entry's reader
-            // before the block decoder advances to the next file. sevenz_rust2
-            // layers every file's reader (a `BoundedReader`, optionally wrapped in
-            // a `Crc32VerifyingReader`) over ONE shared per-block decode stream and
-            // gives it no Drop / auto-skip (reader.rs), so the shared stream only
-            // moves forward by bytes the closure actually read. A closure that read
-            // none of a skipped entry (the not-matching / filtered-out / traversal
-            // cases) or only part of it would leave the shared stream mid-file, and
-            // the NEXT kept entry would then decode from a misaligned offset -
-            // returning wrong bytes, or (when the file has a CRC) failing
-            // `Crc32VerifyingReader` and surfacing as empty/absent/Err. This
-            // mirrors the crate's own `read_file`, which `read_to_end`s every entry
-            // precisely to stay aligned. Draining is skipped only when stopping
-            // early (`keep_going == false`), where no further entry is decoded.
+            // Solid-block alignment: fully drain this entry's reader before the
+            // block decoder advances to the next file. The diagram in this
+            // function's doc comment shows what a partial read does to the next
+            // entry. sevenz_rust2 layers every file's reader (a `BoundedReader`,
+            // optionally wrapped in a `Crc32VerifyingReader`) over one shared
+            // per-block decode stream and gives it no Drop or auto-skip
+            // (reader.rs), so the shared stream moves forward only by bytes the
+            // closure actually read. The closure reads nothing in the
+            // not-matching, filtered-out and traversal cases, so those are
+            // exactly the entries that need this drain. The crate's own
+            // `read_file` does the same thing for the same reason. Draining is
+            // skipped only when stopping early (`keep_going == false`), where no
+            // further entry is decoded.
             std::io::copy(rd, &mut std::io::sink()).map_err(sevenz_rust2::Error::from)?;
         }
         Ok(keep_going)
@@ -755,7 +871,7 @@ where
     fs::create_dir_all(dest)?;
     let mut io_err: Option<std::io::Error> = None;
     for_each_7z_entry(archive_path, |name, _size, read| {
-        // bit7z reports 7z paths with backslashes; feed the filter the same.
+        // The filter contract gives 7z entries backslash separators.
         let back = sevenz_backslash_name(name);
         if !filter(&back) {
             return Ok(true);
@@ -782,10 +898,6 @@ where
     }
     Ok(count)
 }
-
-// ---------------------------------------------------------------------------
-// RAR backend
-// ---------------------------------------------------------------------------
 
 /// unrar reports the filename as a `PathBuf` built from the RAR wide-char name,
 /// which preserves the archive's native backslash separators on Windows.
@@ -903,10 +1015,6 @@ where
     Ok(count)
 }
 
-// ---------------------------------------------------------------------------
-// create_zip
-// ---------------------------------------------------------------------------
-
 fn create_zip_impl(folder_path: &str, output_zip_path: &str) -> ArchiveResult<()> {
     let out_path = Path::new(output_zip_path);
     if let Some(parent) = out_path.parent() {
@@ -921,14 +1029,15 @@ fn create_zip_impl(folder_path: &str, output_zip_path: &str) -> ArchiveResult<()
 
     let folder = Path::new(folder_path);
     let mut stack = vec![folder.to_path_buf()];
-    // Deterministic walk: sort each directory's children so entry order is
-    // stable across runs (fs read_dir order is unspecified).
+    // Collect every file into one flat vector first. `fs::read_dir` order is
+    // unspecified, so the walk alone is not deterministic.
     let mut files: Vec<PathBuf> = Vec::new();
     while let Some(dir) = stack.pop() {
         let mut children: Vec<PathBuf> = match fs::read_dir(&dir) {
             Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
             Err(_) => continue,
         };
+        // Only orders the stack pushes; the global sort below overrides it.
         children.sort();
         for child in children {
             if child.is_dir() {
@@ -938,6 +1047,8 @@ fn create_zip_impl(folder_path: &str, output_zip_path: &str) -> ArchiveResult<()
             }
         }
     }
+    // This sort is what fixes the zip entry order: entries are written in
+    // `files` order, so the same tree always yields the same archive layout.
     files.sort();
 
     for path in files {
@@ -949,13 +1060,10 @@ fn create_zip_impl(folder_path: &str, output_zip_path: &str) -> ArchiveResult<()
         writer
             .start_file(rel_name.clone(), options)
             .map_err(|e| ArchiveError::Open(e.to_string()))?;
-        // The C++ probes `fs::file_size` here (libarchive needs the size up
-        // front) and SKIPS the entry when that fails; the zip crate needs no
-        // size, so the nearest failure is the open. NOTE the divergence beyond
-        // the message: the C++ `continue`s to the next file, this port
-        // propagates and abandons the archive. Pre-existing, recorded in
-        // PARITY-NOTES "Task 17"; not changed here because altering control flow
-        // is outside a logging task.
+        // The warning says "skipping", but the `?` propagates and abandons the
+        // partially written archive. That mismatch is deliberate; see the
+        // failure-modes note on `create_zip` and `PARITY-NOTES.md` before
+        // turning it into a `continue`.
         let mut input = File::open(&path).inspect_err(|_| {
             Logger::instance().log_warning(&format!(
                 "[archive] Skipping file in zip (cannot read size): {rel_name}"
@@ -967,8 +1075,8 @@ fn create_zip_impl(folder_path: &str, output_zip_path: &str) -> ArchiveResult<()
             if n == 0 {
                 break;
             }
-            // Same shape: the C++ warns and moves to the next file, this port
-            // propagates.
+            // Same shape as the open above: warn, then propagate and abandon the
+            // archive.
             writer.write_all(&chunk[..n]).map_err(|e| {
                 Logger::instance()
                     .log_warning(&format!("[archive] Write error in zip for: {rel_name}"));
@@ -1051,9 +1159,8 @@ mod tests {
 
     #[test]
     fn extract_prefix_entry_norm_light_for_zip_full_for_7z_rar() {
-        // ZIP mirrors the C++ libarchive fallback: Light (lowercase + slash-fold,
-        // NO leading-./ or -/ strip), so a stored "./x" or "/x" keeps the leading
-        // segment - exactly as the C++ zip prefix filter (ArchiveService.cpp:615).
+        // ZIP uses Light: lowercase and slash-fold, no leading-./ or -/ strip,
+        // so a stored "./x" or "/x" keeps its leading segment.
         assert_eq!(
             prefix_entry_norm(Format::Zip, "./Textures/X.dds"),
             "./textures/x.dds"
@@ -1066,7 +1173,7 @@ mod tests {
             prefix_entry_norm(Format::Zip, "Textures\\X.dds"),
             "textures/x.dds"
         );
-        // 7z / rar mirror bit7z Full normalize_path, which strips leading ./ and /.
+        // 7z and rar use Full normalize_path, which strips leading ./ and /.
         assert_eq!(
             prefix_entry_norm(Format::SevenZ, "./Textures/X.dds"),
             "textures/x.dds"
@@ -1075,8 +1182,8 @@ mod tests {
             prefix_entry_norm(Format::Rar, "\\Textures\\X.dds"),
             "textures/x.dds"
         );
-        // The observable divergence the fix pins: prefix "textures" matches a
-        // leading-"./" entry under the 7z Full profile but NOT under zip Light.
+        // The observable difference this pins: prefix "textures" matches a
+        // leading-"./" entry under the 7z Full profile but not under zip Light.
         let leading = "./textures/x.dds";
         assert!(!prefix_entry_norm(Format::Zip, leading).starts_with("textures"));
         assert!(prefix_entry_norm(Format::SevenZ, leading).starts_with("textures"));
@@ -1147,10 +1254,8 @@ mod tests {
         let listing = svc.list_entries_with_sizes(zip_path.to_str().unwrap());
 
         // The directory entry "sub/" is stripped; files keep stored order. This
-        // reproduces the C++ golden byte-for-byte: libarchive does not surface
-        // zip directory markers, so the C++ listing omits them too (a review
-        // finding claiming C++ includes them was DISPROVEN on the corpus zips
-        // that store explicit dir entries - see list_zip / PARITY-NOTES).
+        // checks the shape only. Nothing in this repository can prove the order
+        // rule itself; see `list_zip` and `PARITY-NOTES.md`.
         assert_eq!(listing.paths, vec!["a.txt", "sub/b.bin", "c.dat"]);
         assert_eq!(listing.sizes["a.txt"], 5);
         assert_eq!(listing.sizes["sub/b.bin"], 4);
@@ -1224,9 +1329,9 @@ mod tests {
         let dir = temp_dir("traversal");
         let zip_path = dir.join("evil.zip");
         // Benign file plus malicious names that try to escape the destination:
-        // relative `..` (both separators), a rooted/absolute name, and a
+        // relative `..` (both separators), a rooted or absolute name, and a
         // sibling-prefix escape (`../out-evil/*` from dest `out`, which shares a
-        // name prefix with the destination but is NOT inside it).
+        // name prefix with the destination but is not inside it).
         let bytes = build_zip(&[
             ("safe/benign.txt", b"OK"),
             ("../evil_rel.txt", b"PWNED"),
@@ -1243,11 +1348,11 @@ mod tests {
 
         // Benign file landed inside the destination.
         assert!(out.join("safe/benign.txt").exists());
-        // No escaped file landed at any location the escapes actually target.
-        // These are checked at their REAL resolved paths (the previous revision
-        // asserted `out.join("evil_abs.txt")`, a path no build ever writes, so it
-        // was vacuously true; the drive-root escape is covered deterministically
-        // by `safe_output_path_rejects_all_escape_classes` below).
+        // No escaped file landed where the escapes actually target. Assert at the
+        // resolved paths, not at `out.join("evil_abs.txt")`: nothing ever writes
+        // there, so such an assertion passes vacuously. The drive-root escape is
+        // covered deterministically by
+        // `safe_output_path_rejects_all_escape_classes` below.
         assert!(!dir.join("evil_rel.txt").exists());
         assert!(!dir.join("evil_bs.txt").exists());
         assert!(!dir.join("out-evil").exists());
@@ -1276,8 +1381,8 @@ mod tests {
         assert!(safe_output_path(&dest, "../evil_rel.txt").is_none());
         assert!(safe_output_path(&dest, "..\\evil_bs.txt").is_none());
         // Rooted-but-driveless names: on Windows dest.join("/x") replaces
-        // everything after the drive prefix -> C:\x, i.e. the DRIVE ROOT, outside
-        // the destination. This is the case the item-5 guard mutation targets.
+        // everything after the drive prefix, giving C:\x at the drive root,
+        // outside the destination. A weakened guard would write there unnoticed.
         assert!(safe_output_path(&dest, "/evil_abs.txt").is_none());
         assert!(safe_output_path(&dest, "\\evil_abs.txt").is_none());
         // Sibling-prefix escape: dest ".../out", entry resolves to ".../out-evil/x".
