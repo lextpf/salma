@@ -1,35 +1,49 @@
-//! Shared utility functions - Rust port of `src/Utils.hpp` / `src/Utils.cpp`.
+//! Shared helpers: byte-level string and path normalization, FNV-1a hashing,
+//! FOMOD attribute parsing, path-safety screens, and module directory lookups.
 //!
-//! Every function here mirrors the C++ implementation byte-for-byte in its
-//! observable behavior; see `PARITY-NOTES.md` ("Task 3 - Utils port")
-//! for the mapping decisions, notably:
+//! Four things to know before editing anything here.
 //!
-//! - The C++ compile-time dispatch helpers (`EnumStringMap`, `HashDispatch`,
-//!   `operator""_h`, `no_hash_collisions`) are replaced by plain `match`
-//!   expressions ([`parse_plugin_type_string`], [`plugin_type_to_string`]).
-//! - The pugixml-typed helpers (`get_ordered_nodes`,
-//!   `xml_bool_attribute_true`) are ported generically over strings; Task 4
-//!   wires them to the real XML crate.
+//! - Everything is byte-level and ASCII-only. [`to_lower`] touches `A`-`Z` and
+//!   nothing else, so every comparison built on it is a byte comparison, never
+//!   a Unicode case-fold or a locale collation.
+//! - [`normalize_path`] and [`normalize_destination_for_join`] look
+//!   interchangeable and are not. They run the same two strip loops in opposite
+//!   orders and disagree on inputs like `.//foo`. Each item doc gives its own
+//!   order. Do not unify them.
+//! - [`is_safe_destination`] and [`is_safe_mod_name`] are string screens, not
+//!   containment guarantees. Both accept inputs that escape the intended root
+//!   once joined. A caller that needs a containment guarantee must also run
+//!   [`is_inside`] on the joined path: `is_safe_mod_name`'s caller does, while
+//!   `fomod_service::enqueue_entry` deliberately does not and reproduces the
+//!   resulting hole. The two item docs are authoritative on each screen's
+//!   contract and name the exact hole.
+//! - [`get_ordered_nodes`] and [`xml_bool_attribute_true`] are generic over
+//!   plain strings rather than over an XML type, so the XML library stays out
+//!   of this module. [`crate::fomod_ir_parser`] adapts roxmltree's node and
+//!   attribute types onto those signatures.
+//!
+//! Several rules here look like bugs and are deliberate. For the path and
+//! string rules the reason is one and the same: the installed mod layouts this
+//! engine has to reproduce were produced by exactly these rules. That reason
+//! does not extend to the Win32 lookups in the private `win` module, whose one
+//! quirk states its own. Each case is marked at its site. See
+//! `PARITY-NOTES.md`.
 
 use crate::types::PluginType;
 use std::path::{Component, Path, PathBuf};
 
 /// Lowercase a string at the byte level.
 ///
-/// Mirror of `mo2core::to_lower`: the C++ implementation casts each byte to
-/// `unsigned char` and passes it to `std::tolower` under the default "C"
-/// locale, which lowercases only ASCII `A`-`Z` and leaves bytes >= 0x80
-/// unchanged. `str::to_ascii_lowercase` has exactly those semantics (and
-/// multi-byte UTF-8 sequences consist solely of bytes >= 0x80, so they pass
-/// through untouched). This is a byte-level lowercaser, not a Unicode
-/// case-folder.
+/// Only ASCII `A`-`Z` change. Bytes >= 0x80 pass through, and every byte of a
+/// multi-byte UTF-8 sequence is >= 0x80, so non-ASCII text is untouched. This
+/// is a byte-level lowercaser, not a Unicode case-folder.
 pub fn to_lower(s: &str) -> String {
     s.to_ascii_lowercase()
 }
 
-/// Normalize an archive/mod path. Mirror of `mo2core::normalize_path`.
+/// Normalize an archive or mod path.
 ///
-/// The pipeline is applied in the same order as the C++ implementation:
+/// Six stages, in this order:
 ///
 /// 1. lowercase ([`to_lower`])
 /// 2. backslash to forward slash
@@ -39,11 +53,30 @@ pub fn to_lower(s: &str) -> String {
 /// 6. drop `.` and `..` segments (syntactic strip, no filesystem resolution)
 ///
 /// The output is lowercase, uses forward slashes only, has no leading or
-/// trailing slashes, no repeated `/`, and no `.` or `..` path segments.
+/// trailing slash, no repeated `/`, and no `.` or `..` segment.
+///
+/// Stage 3 is two sequential loops, not one combined loop, and their order
+/// decides the result: the `./` loop can re-expose a slash, and the `/` loop
+/// runs after it and eats that slash. One trace through all six stages:
+///
+/// ```text
+///   input          ./\Textures\\LOD/
+///   1 to_lower     ./\textures\\lod/
+///   2 \ -> /       .//textures//lod/
+///   3a strip ./    /textures//lod/     one "./" consumed, a slash re-exposed
+///   3b strip /     textures//lod/      the second loop then eats it
+///   4 trim trail   textures//lod
+///   5 collapse //  textures/lod
+///   6 drop . ..    textures/lod
+/// ```
+///
+/// [`normalize_destination_for_join`] runs the same two loops in the opposite
+/// order and so does not clean up after itself: `.//foo` gives `/foo` there and
+/// `foo` here. The difference is deliberate. Do not unify the two.
 pub fn normalize_path(p: &str) -> String {
     let lowered = to_lower(p).replace('\\', "/");
     // Strip leading "./" or "/" prefixes that some archivers emit. Two
-    // sequential loops, exactly as in the C++ implementation.
+    // sequential loops, "./" first: see the item doc.
     let mut s: &str = &lowered;
     while let Some(rest) = s.strip_prefix("./") {
         s = rest;
@@ -69,11 +102,11 @@ pub fn normalize_path(p: &str) -> String {
     parts.join("/")
 }
 
-/// FNV-1a 64-bit hash. Mirror of `mo2core::fnv1a_hash` in `src/Utils.hpp`.
+/// FNV-1a 64-bit hash.
 ///
-/// `h0 = 0xCBF29CE484222325`; `h_{i+1} = (h_i XOR b_i) * 0x100000001B3`,
-/// with u64 wrapping multiplication, fed byte-stream order. `const fn` so it
-/// can seed compile-time constants, mirroring the C++ `constexpr`.
+/// `h0 = 0xCBF29CE484222325`; `h_{i+1} = (h_i XOR b_i) * 0x100000001B3`, with
+/// u64 wrapping multiplication, fed in byte-stream order. `const fn`, so it can
+/// seed compile-time constants.
 pub const fn fnv1a_hash(data: &[u8]) -> u64 {
     let mut hash: u64 = 14695981039346656037;
     let mut i = 0;
@@ -85,13 +118,21 @@ pub const fn fnv1a_hash(data: &[u8]) -> u64 {
     hash
 }
 
-/// Boost-style hash combiner. Mirror of `hash_combine` in
-/// `src/FomodCSPPrecompute.cpp` (it lives in the CSP module in C++, not in
-/// Utils; hosted here so Task 8 can consume it):
+/// Boost-style hash combiner:
 ///
 /// `seed ^= v + 0x9e3779b97f4a7c15 + (seed << 6) + (seed >> 2)`
 ///
-/// with u64 wrapping addition throughout.
+/// with u64 wrapping addition throughout. `seed` is updated in place.
+///
+/// It lives here because three CSP modules need it:
+/// [`crate::fomod_csp_precompute`] (flag-state signatures),
+/// [`crate::fomod_csp_options`] (option signatures) and
+/// [`crate::fomod_csp_solver`] (memo keys).
+///
+/// The fold is not commutative: combining the same values in a different order
+/// generally gives a different seed. A caller that needs an order-free
+/// signature must fold its inputs in a fixed order, sorted for example, which
+/// is what the CSP signature helpers do.
 pub fn hash_combine(seed: &mut u64, v: u64) {
     *seed ^= v
         .wrapping_add(0x9e3779b97f4a7c15)
@@ -99,33 +140,29 @@ pub fn hash_combine(seed: &mut u64, v: u64) {
         .wrapping_add(*seed >> 2);
 }
 
-/// The C++ `random_hex_string` default argument (`length = 12`). Rust has no
-/// default arguments, so callers spell `random_hex_string(RANDOM_HEX_DEFAULT_LEN)`.
+/// Length callers pass to [`random_hex_string`] for an ordinary scratch-name
+/// token: 12 characters.
 pub const RANDOM_HEX_DEFAULT_LEN: usize = 12;
 
-/// Generate a random lowercase-hex string of exactly `length` characters
-/// using a thread-local RNG. Mirror of `mo2core::random_hex_string`.
+/// Generate a random lowercase-hex string of exactly `length` characters.
 ///
-/// Output alphabet (`0-9a-f`) and length semantics are identical to C++.
-/// The randomness source differs: C++ uses a thread-local `std::mt19937`
-/// seeded from `std::random_device`; this port uses a thread-local SplitMix64
-/// stream seeded from `RandomState` (OS-seeded std entropy) mixed with the
-/// system clock, avoiding an external `rand` dependency. Both are
-/// non-cryptographic; every C++ call site uses the value as a scratch-name /
-/// uniqueness token.
+/// The alphabet is `0-9a-f`. The source is a thread-local SplitMix64 stream,
+/// seeded once per thread from std's OS-seeded hasher entropy mixed with the
+/// system clock, so no external `rand` dependency is needed. It is not
+/// cryptographic: use the output as a uniqueness token for scratch names, never
+/// as a secret.
 pub fn random_hex_string(length: usize) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     use std::cell::Cell;
     thread_local! {
-        // thread_local avoids contention when multiple threads extract
-        // concurrently (same rationale as the C++ thread_local mt19937).
+        // Per-thread state avoids contention when several threads extract
+        // concurrently.
         static RNG_STATE: Cell<u64> = Cell::new(random_seed());
     }
     RNG_STATE.with(|state| {
         let mut out = String::with_capacity(length);
         for _ in 0..length {
-            // One SplitMix64 step per character (the C++ draws one
-            // uniform_int_distribution value per character).
+            // One SplitMix64 step per character.
             let x = state.get().wrapping_add(0x9e3779b97f4a7c15);
             state.set(x);
             let mut z = x;
@@ -139,8 +176,8 @@ pub fn random_hex_string(length: usize) -> String {
     })
 }
 
-/// Build a per-thread seed from std's OS-seeded hasher entropy plus the
-/// system clock. Plays the role of the C++ `std::random_device{}()` seeding.
+/// Build a per-thread seed from std's OS-seeded hasher entropy plus the system
+/// clock.
 fn random_seed() -> u64 {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
@@ -160,21 +197,28 @@ fn random_seed() -> u64 {
 /// `optionalFileGroups`, and `plugins` collections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeOrder {
-    /// Alphabetical by `name` attribute (the schema default).
+    /// Ascending byte-wise lexicographic order on the `name` attribute (the
+    /// schema default). Case-sensitive: uppercase ASCII sorts before
+    /// lowercase, so `"Banana"` comes before `"apple"`.
     Ascending,
-    /// Reverse alphabetical by `name` attribute.
+    /// Descending byte-wise lexicographic order on the `name` attribute.
+    /// Case-sensitive in the same way as [`NodeOrder::Ascending`].
     Descending,
     /// Document order (no sort).
     Explicit,
 }
 
-/// Map an `order` attribute value to a [`NodeOrder`], mirroring the exact
-/// C++ branch structure in `mo2core::get_ordered_nodes`:
+/// Map an `order` attribute value to a [`NodeOrder`]:
 ///
-/// - missing attribute defaults to `"Ascending"`
+/// - a missing attribute defaults to `"Ascending"`
 /// - `"Descending"` sorts descending, `"Ascending"` sorts ascending
-/// - anything else (including `"Explicit"`, unknown values, and any casing
-///   mismatch) falls through to document order
+/// - anything else, including `"Explicit"`, unknown values and any casing
+///   mismatch, falls through to document order
+///
+/// The match arms are exact, case-sensitive string comparisons with no trimming
+/// and no case folding, so `"ascending"` and `" Ascending"` both land on
+/// [`NodeOrder::Explicit`]. That fall-through is the intended behavior, not an
+/// oversight.
 pub fn parse_node_order(order_attr: Option<&str>) -> NodeOrder {
     match order_attr.unwrap_or("Ascending") {
         "Descending" => NodeOrder::Descending,
@@ -183,16 +227,22 @@ pub fn parse_node_order(order_attr: Option<&str>) -> NodeOrder {
     }
 }
 
-/// Respect the FOMOD `order` attribute. Generic port of
-/// `mo2core::get_ordered_nodes`: the C++ takes a pugixml parent node, reads
-/// its `order` attribute, and sorts the named children by their `name`
-/// attribute; this port takes the already-read attribute value plus the
-/// collected children (in document order) and a name projection. Task 4 wires
-/// it to the real XML crate.
+/// Reorder sibling nodes per the FOMOD `order` attribute.
 ///
-/// Sorting uses `sort_unstable_by`, matching `std::ranges::sort`: when two
-/// nodes share the same name under Ascending/Descending, their relative order
-/// is unspecified in both implementations.
+/// Takes the already-read attribute value, the children in document order, and
+/// a projection to each child's `name`. [`crate::fomod_ir_parser`] supplies the
+/// roxmltree adapter that fills those three arguments. `nodes` comes back
+/// reordered; no element is added or removed.
+///
+/// Ordering guarantees, which feed straight into the inference grid:
+///
+/// - The comparison is `str::cmp`: byte-wise lexicographic over the UTF-8 bytes
+///   of the projected name, case-sensitive, so `"Banana"` sorts before
+///   `"apple"`. This is neither alphabetical order nor a locale collation.
+/// - Sorting is `sort_unstable_by`, so two nodes sharing a name under Ascending
+///   or Descending land in an unspecified relative order.
+/// - [`NodeOrder::Explicit`] performs no sort at all and preserves document
+///   order exactly.
 pub fn get_ordered_nodes<T, F>(order_attr: Option<&str>, mut nodes: Vec<T>, name_of: F) -> Vec<T>
 where
     F: Fn(&T) -> &str,
@@ -205,12 +255,14 @@ where
     nodes
 }
 
-/// Parse an XML boolean attribute using XML Schema semantics. Generic port of
-/// `mo2core::xml_bool_attribute_true`: the C++ takes a pugixml attribute; this
-/// port takes `None` for a missing attribute and `Some(value)` otherwise.
+/// Parse an XML boolean attribute using XML Schema semantics. Pass `None` for a
+/// missing attribute and `Some(value)` otherwise; [`crate::fomod_ir_parser`]
+/// feeds roxmltree attribute values in.
 ///
-/// Returns true for `"true"`/`"1"` (case-insensitive), false otherwise
-/// (including missing).
+/// True for `"true"` and `"1"` only, compared after ASCII-lowercasing with
+/// [`to_lower`]. Everything else is false, including a missing attribute, the
+/// empty string, `"yes"`, and any value with surrounding whitespace. There is
+/// no error path: an unparsable value is simply false.
 pub fn xml_bool_attribute_true(attr: Option<&str>) -> bool {
     let Some(raw) = attr else {
         return false;
@@ -219,10 +271,8 @@ pub fn xml_bool_attribute_true(attr: Option<&str>) -> bool {
     value == "true" || value == "1"
 }
 
-/// Map a FOMOD plugin type name string to its [`PluginType`] value. Mirror of
-/// `mo2core::parse_plugin_type_string` (an `EnumStringMap` lookup in C++,
-/// a plain `match` here): unrecognized names, including the empty string,
-/// default to [`PluginType::Optional`].
+/// Map a FOMOD plugin type name to its [`PluginType`]. Unrecognized names,
+/// including the empty string, default to [`PluginType::Optional`].
 pub fn parse_plugin_type_string(type_name: &str) -> PluginType {
     match type_name {
         "Required" => PluginType::Required,
@@ -230,16 +280,13 @@ pub fn parse_plugin_type_string(type_name: &str) -> PluginType {
         "Optional" => PluginType::Optional,
         "NotUsable" => PluginType::NotUsable,
         "CouldBeUsable" => PluginType::CouldBeUsable,
-        // C++ EnumStringMap default_value on lookup miss.
+        // Unknown type names install as Optional.
         _ => PluginType::Optional,
     }
 }
 
-/// Map a [`PluginType`] value to its FOMOD type name string. Mirror of
-/// `mo2core::plugin_type_to_string`. The C++ `EnumStringMap` returns
-/// `"Unknown"` on a lookup miss, but every `PluginType` value is in the map,
-/// so the miss is unreachable; the exhaustive `match` here encodes that
-/// directly.
+/// Map a [`PluginType`] to its FOMOD type name. The match is exhaustive, so
+/// every value has a name and there is no fallback string.
 pub fn plugin_type_to_string(plugin_type: PluginType) -> &'static str {
     match plugin_type {
         PluginType::Required => "Required",
@@ -250,14 +297,21 @@ pub fn plugin_type_to_string(plugin_type: PluginType) -> &'static str {
     }
 }
 
-/// Strip leading slashes and `./` from FOMOD destinations so they are safe to
-/// join with a mod-root directory path. Mirror of
-/// `mo2core::normalize_destination_for_join`.
+/// Strip leading slashes and `./` from a FOMOD destination so it is safe to
+/// join onto a mod-root directory path.
 ///
-/// FOMOD destinations are mod-root-relative: values like `\` or `/` mean
-/// "root", not an absolute filesystem path. As in C++, the two strip loops
-/// run sequentially (all leading slashes first, then `./` / `.\` prefixes),
-/// so an input like `.//foo` keeps the slash the `./` strip re-exposes.
+/// FOMOD destinations are mod-root-relative: a value like `\` or `/` means
+/// "root", not an absolute filesystem path. Only leading separators are
+/// stripped; a separator anywhere else is left exactly as written.
+///
+/// The two strip loops run in this order: all leading slashes first, then `./`
+/// and `.\` prefixes. Nothing runs after the second loop, so a slash that the
+/// `./` strip re-exposes survives, and `.//foo` returns `/foo`. That looks like
+/// a bug and is load-bearing: the installed layouts this engine reproduces were
+/// produced by exactly this order. It is harmless downstream because the FOMOD
+/// IR parser re-normalizes with [`normalize_path`], which runs the same two
+/// loops the other way round and does clean up. Do not reorder the loops here.
+/// See `PARITY-NOTES.md`.
 pub fn normalize_destination_for_join(destination: &str) -> String {
     let mut s = destination.trim_start_matches(['\\', '/']);
     while let Some(rest) = s.strip_prefix("./").or_else(|| s.strip_prefix(".\\")) {
@@ -266,15 +320,30 @@ pub fn normalize_destination_for_join(destination: &str) -> String {
     s.to_string()
 }
 
-/// Resolve a `<file>`/`<folder>` node's destination, handling empty
-/// destinations and trailing-slash directory semantics, then normalize for
-/// filesystem join. Mirror of `mo2core::resolve_file_destination`:
+/// Resolve a `<file>` or `<folder>` node's destination, handling empty
+/// destinations and trailing-slash directory semantics, then normalize it for a
+/// filesystem join. All five branches:
 ///
-/// - `<file>` with an empty destination installs to the source's filename
-/// - `<file>` with a destination ending in `/` or `\` treats the destination
-///   as a directory and appends the source's filename
-/// - `<folder>` destinations pass through unchanged (empty stays empty)
-/// - the result goes through [`normalize_destination_for_join`]
+/// ```text
+///   is_file | raw_destination      | intermediate result
+///   --------+----------------------+------------------------------------
+///    true   | ""                   | filename(source)
+///    true   | ends with / or \     | raw_destination + filename(source)
+///    true   | anything else        | raw_destination
+///    false  | ""                   | ""   (folder contents land at mod root)
+///    false  | anything else        | raw_destination
+///
+///   then: normalize_destination_for_join(intermediate result)
+/// ```
+///
+/// `filename(source)` is everything after the last `/` or `\` in `source`, or
+/// the whole of `source` when it holds no separator.
+///
+/// The trailing-separator arm keeps the separator the caller wrote, so a
+/// `dest\` destination yields `dest\plugin.esp`, backslash included.
+/// [`normalize_destination_for_join`] strips leading separators only and does
+/// not convert that one. A caller that needs forward slashes must run
+/// [`normalize_path`] itself.
 pub fn resolve_file_destination(source: &str, raw_destination: &str, is_file: bool) -> String {
     let mut destination = raw_destination.to_string();
     if is_file && destination.is_empty() {
@@ -285,9 +354,8 @@ pub fn resolve_file_destination(source: &str, raw_destination: &str, is_file: bo
     normalize_destination_for_join(&destination)
 }
 
-/// Filename part of a source path: everything after the last `/` or `\`, or
-/// the whole string when no separator is present (the C++
-/// `find_last_of("/\\")` idiom).
+/// Filename part of a source path: everything after the last `/` or `\`, or the
+/// whole string when it holds no separator.
 fn source_filename(source: &str) -> &str {
     match source.rfind(['/', '\\']) {
         Some(pos) => &source[pos + 1..],
@@ -295,14 +363,34 @@ fn source_filename(source: &str) -> &str {
     }
 }
 
-/// Reject destination paths that would escape the mod directory via traversal
-/// or absolute paths. Mirror of `mo2core::is_safe_destination`.
+/// Screen a FOMOD destination string. Returns true for "accepted".
 ///
-/// [`normalize_path`] strips every `.` and `..` segment, so traversal
-/// sequences cannot survive into the normalized form. A non-empty input that
-/// consists solely of those segments normalizes to empty, which is also safe
-/// (it resolves to the mod root). The remaining guard rejects absolute paths
-/// (`/etc/passwd`) and Windows drive letters (`C:/...`).
+/// What the check does, in order:
+///
+/// 1. An empty input is accepted; it resolves to the mod root.
+/// 2. The input goes through [`normalize_path`], which strips every `.` and
+///    `..` segment, so no traversal sequence survives into the normalized form.
+///    An input made only of those segments normalizes to empty and is accepted,
+///    again as the mod root.
+/// 3. The normalized form is rejected when its second byte is `:`, which
+///    catches a Windows drive letter such as `C:/evil`. This is the only live
+///    rejection.
+///
+/// The leading-`/` arm in the code is unreachable, because step 2 already
+/// stripped every leading slash before the first byte is tested. So
+/// `is_safe_destination("/etc/passwd")` returns true. Keep the dead branch and
+/// do not describe it as protection; `PARITY-NOTES.md` records why it stays.
+///
+/// **Caller contract.** This is a string screen, not a containment check. It
+/// says nothing about the path the caller builds from the string, and the one
+/// caller that matters joins the raw destination rather than the normalized
+/// one. A rooted destination such as `/etc/passwd` passes the screen and then
+/// discards the base during the join, because a root component wins in
+/// `Path::join`. On Windows only the base's drive prefix survives:
+/// `Path::new(r"D:\mods").join("/etc/passwd")` is `D:/etc/passwd`. A caller
+/// that needs a containment guarantee must also run [`is_inside`] on the joined
+/// path. `fomod_service::enqueue_entry` deliberately does not, and reproduces
+/// the hole rather than closing it; that decision is documented there.
 pub fn is_safe_destination(dest: &str) -> bool {
     if dest.is_empty() {
         return true;
@@ -312,32 +400,47 @@ pub fn is_safe_destination(dest: &str) -> bool {
         return true;
     }
     let bytes = norm.as_bytes();
+    // `bytes[0] == b'/'` is dead: normalize_path already stripped every leading
+    // slash, so only the drive-letter test can fire. Kept on purpose; see
+    // PARITY-NOTES.md.
     if bytes[0] == b'/' || (bytes.len() >= 2 && bytes[1] == b':') {
         return false;
     }
     true
 }
 
-/// C-locale `isspace` set: space, `\t`, `\n`, `\v`, `\f`, `\r`. Bytes >= 0x80
-/// are not whitespace in the "C" locale, so multi-byte UTF-8 is unaffected.
-/// (`u8::is_ascii_whitespace` omits `\v`, so it is not a faithful mirror.)
+/// The C-locale `isspace` set: space, `\t`, `\n`, `\v`, `\f`, `\r`. Bytes of
+/// 0x80 and above never count, so multi-byte UTF-8 is unaffected.
+/// `u8::is_ascii_whitespace` omits `\v`, so it is not a drop-in replacement.
 fn is_c_locale_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\x0b' | b'\x0c' | b'\r')
 }
 
-/// Reject mod-name strings that are unsafe to use as a single directory
-/// component under a mods root. Mirror of `mo2core::is_safe_mod_name`,
-/// including the rule order:
+/// Screen a mod-name string for use as a single directory component under a
+/// mods root. Returns true for "accepted". Rejects a name that:
 ///
-/// - empty
-/// - leading or trailing C-locale whitespace
-/// - contains `/` or `\` (path separators)
-/// - parses as an absolute path (defensive; unreachable once separators are
-///   rejected, kept for parity)
+/// - is empty
+/// - starts or ends with C-locale whitespace (space, `\t`, `\n`, `\v`, `\f`,
+///   `\r`)
+/// - contains the path separators `/` or `\`
+/// - parses as an absolute path (defensive only; unreachable once separators
+///   are rejected, since every absolute path contains one)
 /// - equals `.` or `..`
-/// - trailing `.` (CreateFile strips it silently on Windows)
-/// - lowercase stem (before the final `.`) matches a Windows reserved device
-///   name: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+/// - ends with `.`, which `CreateFile` strips silently on Windows
+/// - has a lowercase stem, meaning everything before the final `.`, matching a
+///   Windows reserved device name: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+///
+/// **Limit of the check.** A Windows drive-relative name such as `C:` or
+/// `C:evil` is accepted: it holds no separator, and `Path::is_absolute` is
+/// false for a path with a prefix but no root. Joining such a name onto a mods
+/// root discards the root, because on Windows a component with a prefix and no
+/// root replaces the whole path. `Path::new(r"D:\mods").join("C:")` is `C:`,
+/// not `D:\mods\C:`.
+///
+/// So this is a screen, not a containment guarantee. Every caller must also run
+/// [`is_inside`] on the joined path. `InstallationController.cpp` does exactly
+/// that: `is_safe_mod_name` on the request field, then `is_inside` on the path
+/// it built, with the second check deciding.
 pub fn is_safe_mod_name(name: &str) -> bool {
     if name.is_empty() {
         return false;
@@ -370,7 +473,7 @@ pub fn is_safe_mod_name(name: &str) -> bool {
 
     // Reject Windows reserved device names. Compare against the lowercase
     // stem (everything before the final '.') so "CON", "con", and "CON.txt"
-    // are all rejected. Mirrors the kReservedNames set in the C++ source.
+    // are all rejected.
     let mut stem = to_lower(name);
     if let Some(dot) = stem.rfind('.') {
         stem.truncate(dot);
@@ -402,13 +505,13 @@ pub fn is_safe_mod_name(name: &str) -> bool {
     )
 }
 
-/// Lexical normalization of a path, mirroring C++
-/// `std::filesystem::path::lexically_normal` for the cases the containment
-/// check needs: drop `.` components, fold `name/..` pairs, drop `..` directly
-/// after a root directory, and turn an all-elided non-empty input into `.`.
-/// (C++ preserves a trailing separator as a trailing empty element; Rust
-/// component iteration ignores trailing separators, which does not affect the
-/// component-wise comparison in [`is_inside`].)
+/// Normalize a path lexically, without touching the filesystem: drop `.`
+/// components, fold `name/..` pairs, drop `..` directly after a root directory,
+/// keep a leading `..` in a relative path, and turn an all-elided non-empty
+/// input into `.`. An empty input stays empty.
+///
+/// Component iteration ignores a trailing separator, which does not affect the
+/// component-wise comparison in [`is_inside`].
 fn lexically_normal(p: &Path) -> PathBuf {
     if p.as_os_str().is_empty() {
         return PathBuf::new();
@@ -446,15 +549,43 @@ fn lexically_normal(p: &Path) -> PathBuf {
     out
 }
 
-/// Weakly-canonical equivalent of C++
-/// `std::filesystem::weakly_canonical(p, ec)`.
+/// Canonicalize a path that does not have to exist.
 ///
-/// `std::fs::canonicalize` fails on nonexistent paths, while `weakly_canonical`
-/// does not. This port canonicalizes the deepest existing prefix and appends
-/// the nonexistent remainder lexically normalized (the same shrink-from-the-end
-/// strategy as the MSVC STL). Errors other than "does not exist" propagate,
-/// mirroring the C++ error-code path; a path with no existing prefix at all
+/// `std::fs::canonicalize` fails on a nonexistent path. This shrinks from the
+/// end instead: it canonicalizes the deepest existing prefix, then appends the
+/// remainder in lexically normal form. A path with no existing prefix at all
 /// resolves to its lexically normal form.
+///
+/// ```text
+///   p = D:\mods\SkyUI\does\not\exist
+///
+///   canonicalize(D:\mods\SkyUI\does\not\exist)  -> NotFound
+///   canonicalize(D:\mods\SkyUI\does\not)        -> NotFound
+///   canonicalize(D:\mods\SkyUI\does)            -> NotFound
+///   canonicalize(D:\mods\SkyUI)                 -> OK \\?\D:\mods\SkyUI
+///                                                  push does\not\exist
+///                                                  then lexically_normal
+///
+///   nothing canonicalizes -> lexically_normal(p), no syscall result used
+/// ```
+///
+/// **I/O and errors.** This performs blocking filesystem I/O: one
+/// `canonicalize` call for the full path, then up to one more per shorter
+/// leading prefix, so a fully nonexistent path of N components costs N
+/// syscalls. Canonicalization follows symlinks, so the answer depends on
+/// filesystem state at the moment of the call.
+///
+/// Two error kinds are swallowed and drive the shrink: `NotFound` and
+/// `NotADirectory`. `NotADirectory` is grouped with `NotFound` because a
+/// regular file in the middle of the path (`mods/readme.txt/sub`) means the
+/// remainder cannot exist either, so shrinking is still the right move. Every
+/// other error kind propagates as `Err`, and [`is_inside`] turns that `Err`
+/// into `false`.
+///
+/// On Windows a successful result carries the `\\?\` verbatim prefix that
+/// `std::fs::canonicalize` produces. [`is_inside`] compares two such results
+/// against each other, so the prefix is on both sides and containment is
+/// unaffected.
 fn weakly_canonical(p: &Path) -> std::io::Result<PathBuf> {
     use std::io::ErrorKind;
     match std::fs::canonicalize(p) {
@@ -482,20 +613,36 @@ fn weakly_canonical(p: &Path) -> std::io::Result<PathBuf> {
             Err(_) => {}
         }
     }
-    // Nothing exists: purely lexical result, as weakly_canonical produces.
+    // Nothing exists: purely lexical result.
     Ok(lexically_normal(p))
 }
 
-/// Validate that `child` resolves to a location inside `parent` (no
-/// traversal). Mirror of `mo2core::is_inside`.
+/// Validate that `child` resolves to a location inside `parent`, with no
+/// traversal out of it.
 ///
-/// The C++ computes `weakly_canonical(child).lexically_relative(
-/// weakly_canonical(parent))` and requires the result to be non-empty and not
-/// start with `..`. Both weakly-canonical results are in lexically normal
-/// form, so that reduces to a component-wise prefix test; note that
-/// `child == parent` yields `.` in C++, which passes, so equality is "inside"
-/// here too. Canonicalization errors are treated as `false`, exactly as the
-/// C++ swallows the error codes.
+/// Both sides go through [`weakly_canonical`], which yields lexically normal
+/// paths, so containment reduces to a component-wise prefix test. Two
+/// consequences worth knowing: `child == parent` counts as inside, and the test
+/// is component-wise rather than string-prefix-wise, so `C:/foobar` is not
+/// inside `C:/foo`.
+///
+/// This is a security predicate that touches the disk. Its operational
+/// contract:
+///
+/// - It performs blocking filesystem I/O through [`weakly_canonical`], up to
+///   one `canonicalize` syscall per path component for a path that does not
+///   exist. Do not call it in a tight loop over untrusted input.
+/// - It fails closed: any canonicalization error on either side returns
+///   `false`.
+/// - It resolves symlinks and reflects filesystem state at the moment of the
+///   call, so the answer is point-in-time and TOCTOU-sensitive. A path that is
+///   inside now can be outside by the time the caller opens it. Use it as a
+///   screen before an operation, not as a substitute for opening the file
+///   safely.
+/// - Neither argument has to exist. A nonexistent path resolves as far as it
+///   can and the remainder is treated lexically.
+/// - On Windows both sides are compared as `\\?\` verbatim paths, so the prefix
+///   does not affect containment.
 pub fn is_inside(parent: &Path, child: &Path) -> bool {
     let Ok(canonical_child) = weakly_canonical(child) else {
         return false;
@@ -506,15 +653,14 @@ pub fn is_inside(parent: &Path, child: &Path) -> bool {
     canonical_child.starts_with(&canonical_parent)
 }
 
-/// Directory of the host executable. Mirror of
-/// `mo2core::executable_directory` (`GetModuleFileNameW(nullptr, ...)`).
+/// Directory of the host executable (`GetModuleFileNameW(nullptr, ...)`).
 ///
-/// Use this for resources tied to a specific executable. Do not use it for
-/// resources that should follow the calling binary inside MO2; use
-/// [`module_directory`] for those (inside MO2 the host EXE is
-/// `ModOrganizer.exe`, so this function would point at MO2's install root).
+/// Use this for resources tied to the running program. Do not use it for
+/// resources that should follow the calling binary inside MO2: there the host
+/// EXE is `ModOrganizer.exe`, so this points at MO2's install root. Use
+/// [`module_directory`] instead.
 ///
-/// Falls back to the current working directory if the Win32 lookup fails or
+/// Falls back to the current working directory when the Win32 lookup fails or
 /// the platform is not Windows.
 pub fn executable_directory() -> PathBuf {
     #[cfg(windows)]
@@ -526,15 +672,15 @@ pub fn executable_directory() -> PathBuf {
     current_dir_fallback()
 }
 
-/// Directory of the module containing `anchor`. Mirror of
-/// `mo2core::module_directory`.
+/// Directory of the module containing `anchor`.
 ///
-/// On Windows, resolves to the directory of the DLL or EXE the address lives
-/// in (via `GetModuleHandleExW` with `GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS`),
-/// regardless of the host process's working directory or the host EXE's
-/// location. Use this for resources owned by the binary the code itself is in
-/// (logs next to `mo2_salma_rs.dll`). Falls back to the current working
-/// directory if the lookup fails or the platform is not Windows.
+/// On Windows this resolves to the directory of the DLL or EXE the address
+/// lives in, via `GetModuleHandleExW` with
+/// `GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS`, regardless of the host process's
+/// working directory or the host EXE's location. Use it for resources owned by
+/// the binary the code itself is in, such as the log next to
+/// `mo2_salma_rs.dll`. Falls back to the current working directory when the
+/// lookup fails or the platform is not Windows.
 ///
 /// `anchor` is any address inside the module to query; a function pointer to
 /// a symbol defined in this crate is sufficient, e.g.
@@ -553,17 +699,16 @@ pub fn module_directory(anchor: *const core::ffi::c_void) -> PathBuf {
     current_dir_fallback()
 }
 
-/// Shared fallback for the directory lookups. The C++ falls back to
-/// `std::filesystem::current_path()`, which throws on failure; this port maps
-/// that (practically unreachable) failure to `"."` instead of panicking.
+/// Shared fallback for the directory lookups: the current working directory,
+/// or `"."` when even that cannot be read. Never panics.
 fn current_dir_fallback() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 #[cfg(windows)]
 mod win {
-    //! Win32 module lookups, mirror of the `#ifdef _WIN32` block in
-    //! `src/Utils.cpp`.
+    //! Win32 module path lookups behind [`super::executable_directory`] and
+    //! [`super::module_directory`].
 
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
@@ -576,9 +721,25 @@ mod win {
 
     /// Resolve the parent directory of the file backing `hmod`. Pass null to
     /// query the host executable. Returns `None` on lookup failure; callers
-    /// fall back to the current working directory. Mirror of the C++
-    /// `module_path_for`, including the buffer-doubling retry loop capped at
-    /// `kMaxRetries = 5`.
+    /// then fall back to the current working directory.
+    ///
+    /// The buffer starts at `MAX_PATH` (260 wide chars) and doubles on each
+    /// retry, capped at `MAX_RETRIES = 5`, so the last attempt reaches 8320
+    /// wide chars.
+    ///
+    /// `None` comes back in three cases: the Win32 call reported length 0, the
+    /// path still needs more room after five doublings, and, less obviously,
+    /// the path first fits on the fifth doubling. That last result is discarded
+    /// even though the call returned a complete path, because the success test
+    /// re-checks `retries < MAX_RETRIES` and `retries` is already 5 by then.
+    ///
+    /// The third case looks like a bug and is deliberate. The retry loop and
+    /// its discard on `len == 0` or exhausted retries are reproduced as
+    /// recorded in `PARITY-NOTES.md`, and there is no other justification for
+    /// it. Relaxing the `retries` bound in the success test changes what both
+    /// callers resolve for a module path that long, from the current working
+    /// directory to the real module directory, so it is a behavior change and
+    /// not a cleanup.
     pub(super) fn module_path_for(hmod: HMODULE) -> Option<PathBuf> {
         const MAX_RETRIES: u32 = 5;
         let mut buf: Vec<u16> = vec![0; MAX_PATH as usize];
@@ -599,9 +760,8 @@ mod win {
         None
     }
 
-    /// `GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, anchor, ...)`
-    /// then [`module_path_for`]. Mirror of the Windows branch of the C++
-    /// `module_directory`.
+    /// `GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, anchor, ...)`,
+    /// then [`module_path_for`]. `None` if the handle lookup fails.
     pub(super) fn module_directory_for_address(
         anchor: *const core::ffi::c_void,
     ) -> Option<PathBuf> {
@@ -627,11 +787,6 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // Ported 1:1 from tests/utils_test.cpp (59 TEST()/TEST_F() cases, same
-    // inputs and expected outputs, names converted to snake_case). The
-    // pugixml-based fixtures (GetOrderedNodesTest, XmlBoolAttributeTest) map
-    // to the generic string-based ports; see PARITY-NOTES "Task 3".
 
     // --- to_lower ---
 
@@ -731,8 +886,6 @@ mod tests {
 
     #[test]
     fn random_hex_string_default_length() {
-        // C++ calls random_hex_string() and relies on the default argument
-        // (12); Rust has no default arguments, so the default is a constant.
         let s = random_hex_string(RANDOM_HEX_DEFAULT_LEN);
         assert_eq!(s.len(), 12);
     }
@@ -770,9 +923,8 @@ mod tests {
 
     // --- get_ordered_nodes ---
     //
-    // The C++ TEST_F fixtures parse XML documents; the generic port takes the
-    // pre-read order attribute plus (name, doc_index) pairs in document order.
-    // Same inputs (names and document positions) and expected outputs.
+    // Inputs are the pre-read order attribute plus (name, document index)
+    // pairs in document order, standing in for parsed XML children.
 
     fn names<'a>(nodes: &'a [(&str, usize)]) -> Vec<&'a str> {
         nodes.iter().map(|n| n.0).collect()
@@ -815,8 +967,7 @@ mod tests {
 
     // --- xml_bool_attribute_true ---
     //
-    // The C++ TEST_F fixtures parse XML attributes; the generic port takes
-    // None for a missing attribute and Some(value) otherwise.
+    // None stands for a missing attribute, Some(value) for a present one.
 
     #[test]
     fn xml_bool_attribute_true_string() {
@@ -997,11 +1148,11 @@ mod tests {
         assert!(is_safe_mod_name("My_Cool-Mod"));
     }
 
-    // Containment invariant: even if a hostile name slipped past
-    // is_safe_mod_name, the defense-in-depth is_inside check on the joined
-    // path catches it. This exercises the integration the upload controller
-    // relies on. (Directory name differs from the C++ test's so the two
-    // suites cannot collide when run concurrently.)
+    // Containment invariant: even when a hostile name slips past
+    // is_safe_mod_name, the is_inside check on the joined path catches it.
+    // This exercises the pairing the upload controller relies on. The temp
+    // directory name is unique to this test so concurrent suites cannot
+    // collide.
     #[test]
     fn is_inside_rejects_mod_name_traversal_generated_path_stays_inside_mods_dir() {
         let tmp = std::env::temp_dir().join("salma_rs_modname_containment_test");
@@ -1011,10 +1162,10 @@ mod tests {
         std::fs::remove_dir_all(&tmp).expect("remove temp dir");
     }
 
-    // --- Rust-only additions below (not part of the C++ utils_test.cpp) ---
+    // --- hashing, path resolution and module lookups ---
 
-    /// FNV-1a-64 known vectors (published FNV test values), pinning the
-    /// offset basis / prime / byte order.
+    /// Published FNV-1a-64 test vectors, pinning the offset basis, the prime
+    /// and the byte order.
     #[test]
     fn fnv1a_hash_known_vectors() {
         assert_eq!(fnv1a_hash(b""), 0xcbf29ce484222325);
@@ -1022,23 +1173,19 @@ mod tests {
         assert_eq!(fnv1a_hash(b"foobar"), 0x85944171f73967e8);
     }
 
-    /// fnv1a_hash is const-evaluable, mirroring the C++ constexpr (used for
-    /// the "..."_h dispatch pattern, which Rust replaces with match).
+    /// fnv1a_hash is const-evaluable, so it can seed compile-time constants.
     #[test]
     fn fnv1a_hash_const_eval() {
         const H: u64 = fnv1a_hash(b"flagDependency");
         assert_eq!(H, fnv1a_hash(b"flagDependency"));
     }
 
-    /// FNV-1a 64 reference vectors, each computed with an INDEPENDENT Python
-    /// implementation of the same algorithm the C++ `Utils.cpp` uses
-    /// (offset basis 14695981039346656037, prime 1099511628211).
+    /// Further FNV-1a-64 vectors, each computed with an independent Python
+    /// implementation of the same algorithm (offset basis
+    /// 14695981039346656037, prime 1099511628211).
     ///
-    /// These used to hash two committed mod fixtures. They are inline vectors
-    /// now: the fixture corpus was replaced with synthetic cases when the real
-    /// one was retired, and an inline vector tests the hash function more
-    /// directly anyway - it cannot silently start passing because a fixture
-    /// changed underneath it.
+    /// The inputs are inline rather than read off disk, so the test cannot
+    /// start passing because a fixture changed underneath it.
     #[test]
     fn fnv1a_hash_matches_reference_vectors() {
         let cases: &[(&[u8], u64)] = &[
@@ -1060,9 +1207,9 @@ mod tests {
         }
     }
 
-    /// hash_combine reference values, computed once with a python model of
-    /// the exact C++ formula in src/FomodCSPPrecompute.cpp
-    /// (seed ^= v + 0x9e3779b97f4a7c15 + (seed << 6) + (seed >> 2), mod 2^64).
+    /// hash_combine reference values, computed once with a Python model of
+    /// `seed ^= v + 0x9e3779b97f4a7c15 + (seed << 6) + (seed >> 2)` mod 2^64.
+    /// These constants are the reference for the formula.
     #[test]
     fn hash_combine_matches_cpp_formula() {
         let mut seed = 0u64;
@@ -1105,9 +1252,8 @@ mod tests {
         assert_eq!(normalize_destination_for_join("dir/file"), "dir/file");
     }
 
-    /// The strip loops run sequentially (slashes first, then "./"), so a
-    /// slash re-exposed by the "./" strip survives - C++ quirk replicated
-    /// exactly (see PARITY-NOTES).
+    /// The strip loops run in sequence, slashes first and then "./", so a
+    /// slash re-exposed by the "./" strip survives. Deliberate.
     #[test]
     fn normalize_destination_for_join_sequential_strip_quirk() {
         assert_eq!(normalize_destination_for_join(".//foo"), "/foo");
@@ -1164,15 +1310,20 @@ mod tests {
         assert!(is_safe_destination(".."));
         assert!(is_safe_destination("../.."));
         assert!(is_safe_destination("a/../b"));
-        // Drive letters are rejected after normalization.
+        // Drive letters are rejected after normalization, the only live
+        // rejection.
         assert!(!is_safe_destination("C:/evil"));
         assert!(!is_safe_destination("c:\\evil"));
+        // Deliberately not asserted here: a rooted destination such as
+        // "/etc/passwd" is accepted, because normalize_path strips the leading
+        // slash before the leading-slash branch is reached. The consequence is
+        // pinned by fomod_service's
+        // enqueue_entry_reproduces_the_rooted_destination_hole.
     }
 
     #[test]
     fn is_inside_accepts_equal_paths_like_cpp_dot_relative() {
-        // C++ lexically_relative(p, p) == "." which does not start with "..",
-        // so a path is considered inside itself.
+        // A path counts as inside itself.
         let tmp = std::env::temp_dir();
         assert!(is_inside(&tmp, &tmp));
     }
