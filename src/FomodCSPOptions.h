@@ -8,7 +8,6 @@
 #include <vector>
 
 /**
- * @file FomodCSPOptions.h
  * @brief Free functions that enumerate solver-relevant plugin options
  *        for a given (step, group, flag-state, cap) tuple.
  *
