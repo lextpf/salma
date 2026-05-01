@@ -88,13 +88,18 @@
  *
  * ## :material-help: Thread Safety
  *
- * The API is thread-safe. Each call returns an independent heap
- * allocation, so there is no shared buffer to worry about.
- * Note: `installSucceeded()` reads a mutex-guarded global bool that is
- * set by `install()` / `installWithConfig()`. If multiple threads call
- * these functions concurrently, `installSucceeded()` reflects the
- * outcome of whichever install completed last, not necessarily the
- * caller's own install.
+ * Each entry point is reentrant and may be called from multiple
+ * threads. Returned `const char*` strings are independent heap
+ * allocations, so there is no shared output buffer.
+ *
+ * **Caveat -- shared "last install" flag.** `install()` /
+ * `installWithConfig()` write a process-global success flag that
+ * `installSucceeded()` reads under a mutex. If two threads run
+ * concurrent installs, `installSucceeded()` reflects whichever one
+ * finished last, not necessarily the caller's own install. The MO2
+ * Python plugin avoids the race by reading `installSucceeded()` from
+ * the same thread that called `install()`. Mixed-thread polling is
+ * not supported.
  *
  * @see InstallationService, FomodInferenceService
  */
@@ -217,11 +222,16 @@ extern "C"
      * present in @p modPath. Returns a JSON object describing which
      * options were selected in each step.
      *
-     * Returns an empty string if the archive has no FOMOD installer or
-     * if inference fails entirely. Null `archivePath` or `modPath` is a
-     * usage error and returns the literal string
-     * `"archivePath and modPath must not be null"` (not empty) - callers
-     * that gate on empty-string-as-failure should also handle this case.
+     * Return cases:
+     * - Both inputs non-null, success -> heap-allocated JSON selections.
+     * - Both inputs non-null, archive has no FOMOD installer -> empty string.
+     * - Both inputs non-null, inference pipeline throws internally -> empty
+     *   string (the exception is caught and logged).
+     * - Either @p archivePath or @p modPath is `nullptr` -> heap-allocated
+     *   literal `"archivePath and modPath must not be null"` (not empty).
+     *
+     * Callers that distinguish "no FOMOD" from "usage error" must check
+     * for the literal error string in addition to empty.
      *
      * @param archivePath Null-terminated UTF-8 path to the archive. Must not be `nullptr`.
      * @param modPath Null-terminated UTF-8 path to the installed mod
@@ -243,13 +253,21 @@ extern "C"
     MO2_API bool installSucceeded();
 
     /**
-     * @brief Free a result string returned by install(), installWithConfig(), or
-     * inferFomodSelections().
+     * @brief Free a result string returned by install(), installWithConfig(),
+     *        inferFomodSelections(), or resolveModArchive().
      *
      * Each call to those functions returns a heap-allocated string. The caller
      * **must** call freeResult() to release the memory when done.
      *
-     * @param result Pointer previously returned by an API function, or `nullptr` (no-op).
+     * @param result Pointer previously returned by one of the listed API
+     *        functions, or `nullptr` (no-op via `free(nullptr)`).
+     * @warning Passing a pointer that was not returned by one of the listed
+     *          API functions (e.g. a foreign allocation, a stack pointer, or
+     *          a pointer that has already been freed) is **undefined
+     *          behavior**. The implementation calls `free()` directly with
+     *          no validation.
+     * @warning `getApiVersion()` returns a pointer to a static constant
+     *          inside the DLL; do **not** pass that pointer here.
      */
     MO2_API void freeResult(const char* result);
 
