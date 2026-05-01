@@ -75,6 +75,13 @@ struct GroupRef
     int plugin_count = 0; /**< Number of plugins in this group. */
 };
 
+/**
+ * @brief Boolean mask of selected plugins within a single group.
+ *
+ * Indexed by the group's local plugin position (not the global flat
+ * index). `option[i] == true` means the i-th plugin of the group is
+ * selected for this candidate option.
+ */
 using GroupOption = std::vector<bool>;
 
 /**
@@ -170,6 +177,9 @@ struct SolverStats
     int pruned_memo = 0;        /**< Subtrees pruned by memoization hit. */
     int skipped_invisible = 0;  /**< Groups skipped because their step is not visible. */
     int pruned_node_limit = 0;  /**< Subtrees abandoned after exceeding the per-pass node limit. */
+    int max_depth_aborts = 0;   /**< Branches abandoned because backtrack stack exceeded
+                                     `kMaxBacktrackDepth`. The first abort emits a one-shot
+                                     warning; the counter accumulates across the whole solve. */
     /** @} */
 
     std::vector<bool> logged_group_options; /**< Tracks which groups have had their options logged
@@ -319,7 +329,9 @@ struct Precompute
 struct OptionCacheKey
 {
     int group_idx = 0;       /**< Index into `Precompute::groups`. */
-    uint64_t flags_sig = 0;  /**< Hash of the flag values relevant to this group's conditions. */
+    uint64_t flags_sig = 0;  /**< Hash of the subset of flag values that this group's conditions
+                                 read; built via `hash_flag_subset(flags, group_cache_flags[gidx])`
+                                 so unrelated flag changes do not invalidate cached options. */
     int select_any_cap = 0;  /**< Maximum number of SelectAny options to enumerate. */
     bool exact_mode = false; /**< When true, uncapped enumeration is used for this group. */
 
@@ -430,7 +442,9 @@ static constexpr int kSelectAnyCapMedium = 256; /**< Medium cap for component an
 static constexpr int kSelectAnyCapFull = 0; /**< No cap (0 = enumerate all valid combinations). */
 }  // namespace csp_detail
 
-// Re-export for internal use.
+// Re-export the SelectAny caps into `mo2core` so callers do not need to
+// qualify them with `csp_detail::`. The constants themselves are
+// documented in the `csp_detail` block above.
 using csp_detail::kSelectAnyCapFull;
 using csp_detail::kSelectAnyCapMedium;
 using csp_detail::kSelectAnyCapNarrow;
