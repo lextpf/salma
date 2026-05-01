@@ -50,7 +50,14 @@ static bool contains_keyword(const std::string& line, std::string_view word)
 // as if it were complete and the client receives a chopped-off last
 // entry like "2026-04-27 11" with nextOffset already past the bytes,
 // so the truncation persists across all subsequent fetches.
+//
+// `to_read` is capped at `kMaxLogReadChunk` so a client passing
+// `offset=0` against a multi-megabyte log cannot force the request
+// handler to allocate the entire file. Larger reads naturally span
+// multiple requests via the incremental-offset protocol.
 // ---------------------------------------------------------------------------
+static constexpr size_t kMaxLogReadChunk = 4 * 1024 * 1024;
+
 static std::pair<std::vector<std::string>, int64_t> read_complete_lines(const fs::path& log_path,
                                                                         int64_t start,
                                                                         int64_t file_size)
@@ -64,7 +71,7 @@ static std::pair<std::vector<std::string>, int64_t> read_complete_lines(const fs
         return {std::move(lines), 0};
     ifs.seekg(start);
 
-    auto to_read = static_cast<size_t>(file_size - start);
+    auto to_read = std::min(static_cast<size_t>(file_size - start), kMaxLogReadChunk);
     std::string buf;
     buf.resize(to_read);
     ifs.read(buf.data(), static_cast<std::streamsize>(to_read));
