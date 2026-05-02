@@ -99,6 +99,27 @@ export interface InstallStatus {
   error?: string
 }
 
+export type ConfidenceBand = 'high' | 'medium' | 'low'
+
+export interface ConfidenceComponents {
+  evidence: number
+  propagation: number
+  repro: number
+  ambiguity: number
+}
+
+export interface ConfidenceScore {
+  composite: number
+  band: ConfidenceBand
+  components: ConfidenceComponents
+}
+
+export interface FomodReason {
+  code: string
+  message: string
+  detail?: Record<string, unknown>
+}
+
 export interface FomodPlugin {
   name?: string
   pluginName?: string
@@ -106,11 +127,17 @@ export interface FomodPlugin {
   file?: string
   selected?: boolean
   isSelected?: boolean
+  confidence?: ConfidenceScore
+  reasons?: FomodReason[]
 }
 
 export interface FomodGroup {
   name?: string
   plugins?: FomodPlugin[]
+  deselected?: FomodPlugin[]
+  confidence?: ConfidenceScore
+  resolved_by?: string
+  reasons?: FomodReason[]
 }
 
 export interface FomodStep {
@@ -118,11 +145,27 @@ export interface FomodStep {
   optionalFileGroups?: FomodGroup[]
   groups?: FomodGroup[]
   plugins?: FomodPlugin[]
+  confidence?: ConfidenceScore
+  visible?: boolean
+  reasons?: FomodReason[]
+}
+
+export interface RunDiagnostics {
+  confidence: ConfidenceScore
+  exact_match: boolean
+  phase_reached: string
+  nodes_explored: number
+  groups: { total: number; resolved_by_propagation: number; resolved_by_csp: number }
+  repro: { missing: number; extra: number; size_mismatch: number; hash_mismatch: number; reproduced: number }
+  timings_ms: { list: number; scan: number; solve: number; total: number }
+  cache: { hit: boolean; source: string }
 }
 
 export interface FomodDetail {
   moduleName?: string
   steps?: FomodStep[]
+  diagnostics?: RunDiagnostics
+  schema_version?: number
   updated?: number
   modified?: number
 }
