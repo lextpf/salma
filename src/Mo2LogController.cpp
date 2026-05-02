@@ -268,7 +268,7 @@ crow::response Mo2Controller::get_logs(const crow::request& req)
 
 crow::response Mo2Controller::get_test_logs(const crow::request& req)
 {
-    // test.log lives next to test.py, which itself lives next to the exe.
+    // test.log lives next to test_all.py, which itself lives next to the exe.
     return read_log_file(mo2core::executable_directory() / "test.log", req);
 }
 
