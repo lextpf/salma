@@ -12,6 +12,28 @@ using json = nlohmann::json;
 namespace mo2core
 {
 
+namespace
+{
+
+// Schema-tolerant plugin name reader. Supports the legacy schema-v1 format
+// where `plugins` is `[string, ...]` and the schema-v2 format where it is
+// `[{"name": "...", ...}, ...]`. Returns the empty string when the entry
+// cannot be parsed (caller should skip).
+std::string read_plugin_name(const json& entry)
+{
+    if (entry.is_string())
+    {
+        return entry.get<std::string>();
+    }
+    if (entry.is_object() && entry.contains("name") && entry["name"].is_string())
+    {
+        return entry["name"].get<std::string>();
+    }
+    return {};
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // set_installer
 // ---------------------------------------------------------------------------
@@ -194,13 +216,10 @@ bool FomodService::validate_json_selections(const json& config_json)
                 {
                     for (const auto& plugin : group["plugins"])
                     {
-                        if (!plugin.is_string())
+                        std::string plugin_name = read_plugin_name(plugin);
+                        if (plugin_name.empty())
                             continue;
-                        std::string plugin_name = plugin.get<std::string>();
-                        if (!plugin_name.empty())
-                        {
-                            selected_plugins[step_name][group_name].insert(plugin_name);
-                        }
+                        selected_plugins[step_name][group_name].insert(plugin_name);
                     }
                 }
             }
@@ -412,15 +431,11 @@ void FomodService::process_optional_files(const json& config_json,
 
                     for (const auto& json_plugin : json_group["plugins"])
                     {
-                        if (!json_plugin.is_string())
-                        {
-                            logger.log_warning("[fomod] Skipping non-string plugin entry in JSON");
-                            continue;
-                        }
-                        std::string plugin_name = json_plugin.get<std::string>();
+                        std::string plugin_name = read_plugin_name(json_plugin);
                         if (plugin_name.empty())
                         {
-                            logger.log("[fomod] Skipping empty plugin name");
+                            logger.log_warning(
+                                "[fomod] Skipping plugin entry with no readable name");
                             continue;
                         }
 
