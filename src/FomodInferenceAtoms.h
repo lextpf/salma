@@ -1,8 +1,10 @@
 #pragma once
 
+#include "Export.h"
 #include "FomodAtom.h"
 #include "FomodCSPSolver.h"
 #include "FomodIR.h"
+#include "InferenceDiagnostics.h"
 #include "Logger.h"
 #include "Utils.h"
 
@@ -128,19 +130,29 @@ std::unordered_set<std::string> compute_excluded_dests(const AtomIndex& atom_ind
 TargetTree build_target_tree(const std::unordered_map<std::string, uint64_t>& installed_files);
 
 /**
- * @brief Convert a SolverResult into a JSON response describing the inferred
- *        FOMOD selections.
+ * @brief Convert a SolverResult + InferenceDiagnostics into a JSON response.
  *
  * Walks the installer's step/group/plugin hierarchy and cross-references the
  * solver's 3-D boolean selection grid to classify each plugin as selected or
  * deselected. Out-of-bounds indices are logged as warnings and default to
  * false (deselected).
  *
- * @return A JSON object with a "steps" array, where each step contains its
- *         name and a "groups" array. Each group contains "plugins" (selected
- *         plugin names) and "deselected" (deselected plugin names).
+ * Schema v2 wire format:
+ * - Top level carries `schema_version` (2), `steps` array, and a `diagnostics`
+ *   block (run-level summary).
+ * - Each step is an object with `name`, `confidence`, `visible`, `reasons`,
+ *   and `groups`.
+ * - Each group is an object with `name`, `confidence`, `resolved_by`,
+ *   `reasons`, `plugins` (selected as object array), and `deselected`
+ *   (deselected as object array).
+ * - Each plugin is an object with `name`, `selected`, `confidence`, and
+ *   `reasons`.
+ *
+ * @return A JSON object matching the schema-v2 wire format.
  * @throw std::bad_alloc if JSON construction runs out of memory.
  */
-nlohmann::json assemble_json(const FomodInstaller& installer, const SolverResult& result);
+MO2_API nlohmann::json assemble_json(const FomodInstaller& installer,
+                                     const SolverResult& result,
+                                     const InferenceDiagnostics& diagnostics);
 
 }  // namespace mo2core
