@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { getFomod, listFomods } from './api'
+import ConfidenceBreakdown from './components/ConfidenceBreakdown'
+import ConfidencePill from './components/ConfidencePill'
 import FomodStepCard from './components/FomodStepCard'
 import Section from './components/Section'
-import type { FomodDetail } from './types'
+import type { FomodDetail, RunDiagnostics } from './types'
 
 const RETRY_DELAY_MS = 2000
 const MAX_RETRIES = 3
@@ -56,6 +58,85 @@ function MetaChip({ label, value }: { label: string; value: string }) {
         {value}
       </span>
     </span>
+  )
+}
+
+function DiagnosticsCard({ diagnostics }: { diagnostics: RunDiagnostics }) {
+  const repro = diagnostics.repro
+  const timings = diagnostics.timings_ms
+  const groups = diagnostics.groups
+  return (
+    <div
+      style={{
+        background: 'var(--card)',
+        border: '1px solid var(--rule)',
+        borderRadius: 'var(--radius-md)',
+        padding: '20px 24px',
+      }}
+    >
+      <div className="flex items-center" style={{ gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+        <ConfidencePill confidence={diagnostics.confidence} size="lg" />
+        <span style={{ width: 1, height: 14, background: 'var(--rule)' }} />
+        <MetaChip label="Phase" value={diagnostics.phase_reached || 'n/a'} />
+        <span style={{ width: 1, height: 14, background: 'var(--rule)' }} />
+        <MetaChip label="Match" value={diagnostics.exact_match ? 'exact' : 'partial'} />
+        <span style={{ width: 1, height: 14, background: 'var(--rule)' }} />
+        <MetaChip label="Nodes" value={String(diagnostics.nodes_explored)} />
+        {diagnostics.cache.hit && (
+          <>
+            <span style={{ width: 1, height: 14, background: 'var(--rule)' }} />
+            <MetaChip label="Cache" value={diagnostics.cache.source || 'hit'} />
+          </>
+        )}
+      </div>
+
+      <ConfidenceBreakdown components={diagnostics.confidence.components} />
+
+      <div
+        className="flex"
+        style={{
+          gap: 24,
+          marginTop: 18,
+          paddingTop: 14,
+          borderTop: '1px solid var(--rule-soft)',
+          flexWrap: 'wrap',
+        }}
+      >
+        <div className="flex flex-col" style={{ gap: 4, minWidth: 200 }}>
+          <span className="ui-label" style={{ fontSize: 10, letterSpacing: '0.18em' }}>
+            Reproduction
+          </span>
+          <div className="flex" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <MetaChip label="Repr" value={String(repro.reproduced)} />
+            <MetaChip label="Miss" value={String(repro.missing)} />
+            <MetaChip label="Extra" value={String(repro.extra)} />
+            <MetaChip label="SizeMM" value={String(repro.size_mismatch)} />
+            <MetaChip label="HashMM" value={String(repro.hash_mismatch)} />
+          </div>
+        </div>
+        <div className="flex flex-col" style={{ gap: 4, minWidth: 200 }}>
+          <span className="ui-label" style={{ fontSize: 10, letterSpacing: '0.18em' }}>
+            Groups
+          </span>
+          <div className="flex" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <MetaChip label="Total" value={String(groups.total)} />
+            <MetaChip label="Prop" value={String(groups.resolved_by_propagation)} />
+            <MetaChip label="CSP" value={String(groups.resolved_by_csp)} />
+          </div>
+        </div>
+        <div className="flex flex-col" style={{ gap: 4, minWidth: 220 }}>
+          <span className="ui-label" style={{ fontSize: 10, letterSpacing: '0.18em' }}>
+            Timings (ms)
+          </span>
+          <div className="flex" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <MetaChip label="List" value={String(timings.list)} />
+            <MetaChip label="Scan" value={String(timings.scan)} />
+            <MetaChip label="Solve" value={String(timings.solve)} />
+            <MetaChip label="Total" value={String(timings.total)} />
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -309,6 +390,20 @@ export default function FomodDetailPage() {
         </div>
       ) : (
         <>
+          {/* Diagnostics (only when schema v2 inference produced a diagnostics block) */}
+          {data.diagnostics && (
+            <div className="reveal reveal-delay-4" style={{ marginBottom: 16 }}>
+              <Section
+                n="00"
+                label="Diagnostics"
+                title="Inference confidence"
+                corner="00"
+              >
+                <DiagnosticsCard diagnostics={data.diagnostics} />
+              </Section>
+            </div>
+          )}
+
           {/* Steps */}
           <div className="reveal reveal-delay-4" style={{ marginBottom: 16 }}>
             <Section
