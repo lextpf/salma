@@ -7,6 +7,9 @@
 #include "FomodIR.h"
 #include "Types.h"
 
+#include <nlohmann/json.hpp>
+
+#include <cstdint>
 #include <string>
 #include <tuple>
 #include <unordered_set>
@@ -14,6 +17,9 @@
 
 namespace mo2core
 {
+
+/// Forward declaration so we can reference ReasonCode without a circular include.
+enum class ReasonCode : int;
 
 /**
  * @struct PropagationResult
@@ -23,6 +29,12 @@ namespace mo2core
  * Contains narrowed plugin domains and a list of groups that were fully
  * resolved without backtracking. When `fully_resolved` is true the CSP
  * solver can be skipped entirely.
+ *
+ * Diagnostic fields (`plugin_reasons`, `plugin_reason_details`, `resolved_by`)
+ * are populated alongside the domain-narrowing rules so the inference
+ * service can render a per-decision explanation chain. They are sized to
+ * match the installer hierarchy when non-empty; when empty they signal
+ * that the propagator did not record diagnostic state (legacy callers).
  */
 struct PropagationResult
 {
@@ -32,6 +44,33 @@ struct PropagationResult
     std::vector<std::tuple<int, int>>
         resolved_groups;         /**< Groups fully resolved by propagation (step_idx, group_idx). */
     bool fully_resolved = false; /**< Whether all groups were resolved (no CSP needed). */
+
+    /**
+     * Per-plugin reason code (integer-backed `mo2core::ReasonCode`).
+     * Indexed `[step][group][plugin]`. Default value is `IMPLICIT_DEFAULT`
+     * (0); each rule firing overwrites with a more specific code.
+     *
+     * Stored as `int` to avoid pulling the full `InferenceDiagnostics.h`
+     * into this header; consumers `static_cast` to `ReasonCode`.
+     */
+    std::vector<std::vector<std::vector<int>>> plugin_reasons;
+
+    /**
+     * Optional structured payload accompanying each plugin reason. Empty
+     * `nlohmann::json` (`null`) when the reason is self-explanatory.
+     * Indexed identically to `plugin_reasons`.
+     */
+    std::vector<std::vector<std::vector<nlohmann::json>>> plugin_reason_details;
+
+    /**
+     * Per-group identifier for the rule that completed the group's
+     * resolution. Stable string from the set
+     * `{"propagation.required", "propagation.unique_evidence",
+     *   "propagation.cardinality", "propagation.select_all"}`. Empty when
+     * the group was not fully resolved by propagation.
+     * Indexed `[step][group]`.
+     */
+    std::vector<std::vector<std::string>> resolved_by;
 };
 
 /**
