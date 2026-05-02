@@ -278,7 +278,82 @@ TargetTree build_target_tree(const std::unordered_map<std::string, uint64_t>& in
 // Assemble JSON from solver result
 // ---------------------------------------------------------------------------
 
-nlohmann::json assemble_json(const FomodInstaller& installer, const SolverResult& result)
+namespace
+{
+
+// Build a plugin object from name + diagnostic fields. The wire format always
+// carries `name` and `selected`; `confidence` and `reasons` ride along when
+// the diagnostic record exists for this position.
+nlohmann::json build_plugin_object(const std::string& name,
+                                   bool selected,
+                                   const PluginDiagnostics* diag)
+{
+    nlohmann::json j;
+    j["name"] = name;
+    j["selected"] = selected;
+    if (diag != nullptr)
+    {
+        j["confidence"] = serialize_confidence(diag->confidence);
+        nlohmann::json reasons = nlohmann::json::array();
+        for (const auto& r : diag->reasons)
+        {
+            reasons.push_back(serialize_reason(r));
+        }
+        j["reasons"] = std::move(reasons);
+    }
+    return j;
+}
+
+const PluginDiagnostics* lookup_plugin_diag(const InferenceDiagnostics& diag,
+                                            size_t s,
+                                            size_t g,
+                                            size_t p)
+{
+    if (s >= diag.steps.size())
+    {
+        return nullptr;
+    }
+    const auto& step = diag.steps[s];
+    if (g >= step.groups.size())
+    {
+        return nullptr;
+    }
+    const auto& group = step.groups[g];
+    if (p >= group.plugins.size())
+    {
+        return nullptr;
+    }
+    return &group.plugins[p];
+}
+
+const GroupDiagnostics* lookup_group_diag(const InferenceDiagnostics& diag, size_t s, size_t g)
+{
+    if (s >= diag.steps.size())
+    {
+        return nullptr;
+    }
+    const auto& step = diag.steps[s];
+    if (g >= step.groups.size())
+    {
+        return nullptr;
+    }
+    return &step.groups[g];
+}
+
+const StepDiagnostics* lookup_step_diag(const InferenceDiagnostics& diag, size_t s)
+{
+    if (s >= diag.steps.size())
+    {
+        return nullptr;
+    }
+    return &diag.steps[s];
+}
+
+}  // namespace
+
+nlohmann::json assemble_json(const FomodInstaller& installer,
+                             const SolverResult& result,
+                             const InferenceDiagnostics& diagnostics)
 {
     nlohmann::json j_steps = nlohmann::json::array();
     for (size_t si = 0; si < installer.steps.size(); ++si)
@@ -286,17 +361,42 @@ nlohmann::json assemble_json(const FomodInstaller& installer, const SolverResult
         const auto& step = installer.steps[si];
         nlohmann::json j_step;
         j_step["name"] = step.name;
-        nlohmann::json j_groups = nlohmann::json::array();
 
+        const StepDiagnostics* step_diag = lookup_step_diag(diagnostics, si);
+        if (step_diag != nullptr)
+        {
+            j_step["confidence"] = serialize_confidence(step_diag->confidence);
+            j_step["visible"] = step_diag->visible;
+            nlohmann::json reasons = nlohmann::json::array();
+            for (const auto& r : step_diag->reasons)
+            {
+                reasons.push_back(serialize_reason(r));
+            }
+            j_step["reasons"] = std::move(reasons);
+        }
+
+        nlohmann::json j_groups = nlohmann::json::array();
         for (size_t gi = 0; gi < step.groups.size(); ++gi)
         {
             const auto& group = step.groups[gi];
             nlohmann::json j_group;
             j_group["name"] = group.name;
 
-            std::vector<std::string> selected;
-            std::vector<std::string> deselected;
+            const GroupDiagnostics* group_diag = lookup_group_diag(diagnostics, si, gi);
+            if (group_diag != nullptr)
+            {
+                j_group["confidence"] = serialize_confidence(group_diag->confidence);
+                j_group["resolved_by"] = group_diag->resolved_by;
+                nlohmann::json reasons = nlohmann::json::array();
+                for (const auto& r : group_diag->reasons)
+                {
+                    reasons.push_back(serialize_reason(r));
+                }
+                j_group["reasons"] = std::move(reasons);
+            }
 
+            nlohmann::json j_selected = nlohmann::json::array();
+            nlohmann::json j_deselected = nlohmann::json::array();
             for (size_t pi = 0; pi < group.plugins.size(); ++pi)
             {
                 bool sel = false;
@@ -315,22 +415,29 @@ nlohmann::json assemble_json(const FomodInstaller& installer, const SolverResult
                                     pi));
                 }
 
+                const PluginDiagnostics* plugin_diag = lookup_plugin_diag(diagnostics, si, gi, pi);
+                auto j_plugin = build_plugin_object(group.plugins[pi].name, sel, plugin_diag);
                 if (sel)
-                    selected.push_back(group.plugins[pi].name);
+                {
+                    j_selected.push_back(std::move(j_plugin));
+                }
                 else
-                    deselected.push_back(group.plugins[pi].name);
+                {
+                    j_deselected.push_back(std::move(j_plugin));
+                }
             }
-
-            j_group["plugins"] = selected;
-            j_group["deselected"] = deselected;
-            j_groups.push_back(j_group);
+            j_group["plugins"] = std::move(j_selected);
+            j_group["deselected"] = std::move(j_deselected);
+            j_groups.push_back(std::move(j_group));
         }
-        j_step["groups"] = j_groups;
-        j_steps.push_back(j_step);
+        j_step["groups"] = std::move(j_groups);
+        j_steps.push_back(std::move(j_step));
     }
 
     nlohmann::json out;
-    out["steps"] = j_steps;
+    out["schema_version"] = diagnostics.schema_version;
+    out["steps"] = std::move(j_steps);
+    out["diagnostics"] = serialize_run_diagnostics(diagnostics.run);
     return out;
 }
 
