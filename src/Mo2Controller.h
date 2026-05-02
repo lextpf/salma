@@ -367,8 +367,8 @@ public:
     crow::response run_tests(const crow::request& req);
 
     /**
-     * @brief Checks whether the test_all.py process is still running. Cleans up the process handle on
-     * completion.
+     * @brief Checks whether the test_all.py process is still running. Cleans up the process handle
+     * on completion.
      * @return 200 with `running` flag; includes `exitCode` once the process has finished.
      */
     crow::response get_test_status();
