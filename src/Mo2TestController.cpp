@@ -16,7 +16,7 @@ namespace mo2server
 {
 
 // ---------------------------------------------------------------------------
-// POST /api/test/run   -- spawn test.py in background
+// POST /api/test/run   -- spawn test_all.py in background
 // ---------------------------------------------------------------------------
 
 crow::response Mo2Controller::run_tests(const crow::request& req)
@@ -85,12 +85,12 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
     }
 
     auto exe_dir = mo2core::executable_directory();
-    auto py_path = exe_dir / "test.py";
+    auto py_path = exe_dir / "test_all.py";
     if (!fs::exists(py_path))
         return json_response(404,
-                             {{"error", std::format("test.py not found in {}", exe_dir.string())}});
+                             {{"error", std::format("test_all.py not found in {}", exe_dir.string())}});
 
-    // Build command line - test.py handles its own logging to test.log
+    // Build command line - test_all.py handles its own logging to test.log
     std::string cmd = std::format("python \"{}\" {}", py_path.string(), args);
 
     STARTUPINFOA si{};
@@ -112,7 +112,7 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
     {
         auto err = GetLastError();
         return json_response(500,
-                             {{"error", std::format("Failed to start test.py (error {})", err)}});
+                             {{"error", std::format("Failed to start test_all.py (error {})", err)}});
     }
 
     CloseHandle(pi.hThread);
