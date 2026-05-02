@@ -23,6 +23,12 @@ namespace mo2core
  * records which plugins the solver chose. The quality counters (`missing`,
  * `extra`, `size_mismatch`, `hash_mismatch`) describe how closely the
  * resulting install plan reproduces the target file tree.
+ *
+ * Diagnostic fields (`phase_per_group`, `alternatives_per_group`,
+ * `phase_reached`) are populated by the solver phases so the inference
+ * service can render which phase resolved each group and how ambiguous the
+ * decision was. They are sized to match the installer hierarchy when
+ * non-empty; when empty they signal that no diagnostic state was recorded.
  */
 struct SolverResult
 {
@@ -36,6 +42,34 @@ struct SolverResult
     int extra = 0;            /**< Selections that produce dests not in target */
     int size_mismatch = 0;    /**< Dests produced with wrong uncompressed size */
     int hash_mismatch = 0;    /**< Dests produced with wrong content hash */
+
+    /**
+     * Per-group identifier for the CSP phase that fixed the group's
+     * selection. Stable string from the set `{"csp.greedy",
+     * "csp.local_search", "csp.backtrack", "csp.repair", "csp.focused",
+     * "csp.fallback"}`, or the empty string when the group was already
+     * resolved by propagation (no CSP work needed).
+     * Indexed `[step][group]`.
+     */
+    std::vector<std::vector<std::string>> phase_per_group;
+
+    /**
+     * Per-group count of options whose evidence score was within the
+     * ambiguity window (10%) of the chosen option's score. A value of 0
+     * means the choice was unambiguous; higher values indicate that
+     * several alternatives looked similarly viable and the solver had to
+     * tie-break.
+     * Indexed `[step][group]`.
+     */
+    std::vector<std::vector<int>> alternatives_per_group;
+
+    /**
+     * Stable identifier of the highest CSP phase whose work contributed to
+     * the final result, or `"propagation"` when propagation alone resolved
+     * everything, or `"tier1_cache"` when the result was lifted from the
+     * meta.ini cache. Empty string when no diagnostic state was recorded.
+     */
+    std::string phase_reached;
 };
 
 /**
