@@ -286,7 +286,7 @@ export default function SettingsPage() {
                 label="Script arguments"
                 hint={
                   <>
-                    // passed to <span style={{ color: 'var(--ink-2)' }}>test.py</span>{' '}
+                    // passed to <span style={{ color: 'var(--ink-2)' }}>test_all.py</span>{' '}
                     when running tests
                   </>
                 }
