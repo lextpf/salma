@@ -114,7 +114,7 @@ namespace mo2server
  * **`POST /api/test/run`**
  * - Request: `{ "args"?: "..." }`
  * - Response: `{ "running": true, "pid": int }`
- * - Errors: 404 test.py missing, 409 busy, 500 CreateProcess, 501 non-Windows
+ * - Errors: 404 test_all.py missing, 409 busy, 500 CreateProcess, 501 non-Windows
  *
  * **`GET /api/test/status`**
  * - Response: `{ "running": bool }` -- when finished includes `"exitCode": int`
@@ -343,7 +343,7 @@ public:
     crow::response clear_test_logs();
 
     /**
-     * @brief Spawns `test.py` as a detached Win32 process. Only one test run may be active at a
+     * @brief Spawns `test_all.py` as a detached Win32 process. Only one test run may be active at a
      * time.
      *
      * Unlike `scan_fomods` / `deploy_plugin` / `purge_plugin`, this
@@ -361,13 +361,13 @@ public:
      * whitelist (since `.` is allowed individually).
      *
      * @param req Optional JSON body with `"args"` (whitelist-sanitized as above).
-     * @return 200 with PID on success, 400 on bad args, 404 if test.py missing, 409 if already
+     * @return 200 with PID on success, 400 on bad args, 404 if test_all.py missing, 409 if already
      * running, 500 on CreateProcess failure, 501 on non-Windows.
      */
     crow::response run_tests(const crow::request& req);
 
     /**
-     * @brief Checks whether the test.py process is still running. Cleans up the process handle on
+     * @brief Checks whether the test_all.py process is still running. Cleans up the process handle on
      * completion.
      * @return 200 with `running` flag; includes `exitCode` once the process has finished.
      */
@@ -376,9 +376,9 @@ public:
 private:
     // -- Test runner state --
     std::mutex test_mutex_;     // guards test_process_
-    bool test_running_{false};  // true while test.py is executing
+    bool test_running_{false};  // true while test_all.py is executing
 #ifdef _WIN32
-    HANDLE test_process_{nullptr};  // Win32 process handle for test.py
+    HANDLE test_process_{nullptr};  // Win32 process handle for test_all.py
 #endif
 
     /** Result of a FOMOD scan job. */
