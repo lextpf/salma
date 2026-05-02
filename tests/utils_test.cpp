@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <filesystem>
+
 #include "Utils.h"
 
 // --- to_lower ---
@@ -106,8 +108,7 @@ TEST(RandomHexString, OnlyHexChars)
     auto s = mo2core::random_hex_string(100);
     for (char c : s)
     {
-        EXPECT_TRUE((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))
-            << "Non-hex char: " << c;
+        EXPECT_TRUE((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) << "Non-hex char: " << c;
     }
 }
 
@@ -256,7 +257,8 @@ TEST(ParsePluginTypeString, NotUsable)
 
 TEST(ParsePluginTypeString, CouldBeUsable)
 {
-    EXPECT_EQ(mo2core::parse_plugin_type_string("CouldBeUsable"), mo2core::PluginType::CouldBeUsable);
+    EXPECT_EQ(mo2core::parse_plugin_type_string("CouldBeUsable"),
+              mo2core::PluginType::CouldBeUsable);
 }
 
 TEST(ParsePluginTypeString, UnknownDefaultsToOptional)
@@ -267,4 +269,124 @@ TEST(ParsePluginTypeString, UnknownDefaultsToOptional)
 TEST(ParsePluginTypeString, EmptyDefaultsToOptional)
 {
     EXPECT_EQ(mo2core::parse_plugin_type_string(""), mo2core::PluginType::Optional);
+}
+
+// --- is_safe_mod_name ---
+
+TEST(IsSafeModName, RejectsTraversalForward)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("../outside"));
+}
+
+TEST(IsSafeModName, RejectsTraversalBackward)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("..\\outside"));
+}
+
+TEST(IsSafeModName, RejectsBareDoubleDot)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name(".."));
+}
+
+TEST(IsSafeModName, RejectsAbsoluteWindowsPath)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("C:\\temp\\evil"));
+}
+
+TEST(IsSafeModName, RejectsDriveRoot)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("C:\\"));
+}
+
+TEST(IsSafeModName, RejectsLeadingSlash)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("/etc/passwd"));
+}
+
+TEST(IsSafeModName, RejectsForwardSlashInside)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("foo/bar"));
+}
+
+TEST(IsSafeModName, RejectsBackslashInside)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("foo\\bar"));
+}
+
+TEST(IsSafeModName, RejectsEmpty)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name(""));
+}
+
+TEST(IsSafeModName, RejectsWhitespaceOnly)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("   "));
+}
+
+TEST(IsSafeModName, RejectsBareDot)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("."));
+}
+
+TEST(IsSafeModName, RejectsTrailingDot)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("MyMod."));
+}
+
+TEST(IsSafeModName, RejectsTrailingSpace)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("MyMod "));
+}
+
+TEST(IsSafeModName, RejectsLeadingSpace)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name(" MyMod"));
+}
+
+TEST(IsSafeModName, RejectsWindowsReservedCon)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("CON"));
+    EXPECT_FALSE(mo2core::is_safe_mod_name("con"));
+    EXPECT_FALSE(mo2core::is_safe_mod_name("CON.txt"));
+}
+
+TEST(IsSafeModName, RejectsWindowsReservedComLpt)
+{
+    EXPECT_FALSE(mo2core::is_safe_mod_name("COM1"));
+    EXPECT_FALSE(mo2core::is_safe_mod_name("LPT9"));
+    EXPECT_FALSE(mo2core::is_safe_mod_name("nul"));
+}
+
+TEST(IsSafeModName, AcceptsSimpleName)
+{
+    EXPECT_TRUE(mo2core::is_safe_mod_name("SkyUI"));
+}
+
+TEST(IsSafeModName, AcceptsNameWithSpaces)
+{
+    EXPECT_TRUE(mo2core::is_safe_mod_name("My Mod 1.2"));
+}
+
+TEST(IsSafeModName, AcceptsDotsInside)
+{
+    EXPECT_TRUE(mo2core::is_safe_mod_name("A.B.C"));
+}
+
+TEST(IsSafeModName, AcceptsHyphensAndUnderscores)
+{
+    EXPECT_TRUE(mo2core::is_safe_mod_name("My_Cool-Mod"));
+}
+
+// Containment invariant: even if a hostile name slipped past
+// is_safe_mod_name, the defense-in-depth is_inside check on the joined
+// path catches it. This exercises the integration the upload controller
+// relies on.
+TEST(IsInsideRejectsModNameTraversal, GeneratedPathStaysInsideModsDir)
+{
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() / "salma_modname_containment_test";
+    fs::create_directories(tmp);
+    EXPECT_TRUE(mo2core::is_inside(tmp, tmp / "SkyUI"));
+    EXPECT_FALSE(mo2core::is_inside(tmp, tmp / ".." / "escape"));
+    fs::remove_all(tmp);
 }
