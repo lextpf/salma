@@ -1569,24 +1569,43 @@ SolverResult solve_fomod_csp(const FomodInstaller& installer,
                            flat_plugins,
                            pre.components.size()));
 
+    // Track which phases actually ran so the diagnostic builder can attribute
+    // the result to the deepest phase that contributed. Phase 1 always runs.
+    bool ran_phase2 = false;
+    bool ran_phase3 = false;
+    bool ran_phase4 = false;
+    bool ran_phase5 = false;
+
     // Phase 1: greedy + local search + targeted repair
     run_initial_phases(state, pre, select_any_cap, options_cache, stats);
 
     // Phase 2: component decomposition
     if (!state.search.found_exact && !state.progress.deadline_exceeded)
+    {
+        ran_phase2 = true;
         run_component_decomposition(state, pre, select_any_cap, options_cache, stats);
+    }
 
     // Phase 3: residual repair (near-perfect cleanup)
     if (!state.search.found_exact && !state.progress.deadline_exceeded)
+    {
+        ran_phase3 = true;
         run_residual_repair(state, pre, select_any_cap, options_cache, stats);
+    }
 
     // Phase 4: mismatch-focused search
     if (!state.search.found_exact && !state.progress.deadline_exceeded)
+    {
+        ran_phase4 = true;
         run_focused_search(state, pre, select_any_cap, options_cache, stats);
+    }
 
     // Phase 5: global fallback with widening
     if (!state.search.found_exact && !state.progress.deadline_exceeded)
+    {
+        ran_phase5 = true;
         run_global_fallback(state, pre, options_cache, stats);
+    }
 
     // Final reporting.
     if (state.progress.deadline_exceeded)
@@ -1630,6 +1649,52 @@ SolverResult solve_fomod_csp(const FomodInstaller& installer,
                     stats.collapsed_equivalent_options,
                     stats.forced_unique_options,
                     stats.capped_select_any_options));
+
+    // Populate diagnostic fields. The CSP solver attributes the result to the
+    // deepest phase that ran; per-group attribution mirrors that, except for
+    // groups already resolved by propagation (those carry an empty phase).
+    std::string final_phase = "csp.greedy";
+    if (ran_phase5)
+    {
+        final_phase = "csp.fallback";
+    }
+    else if (ran_phase4)
+    {
+        final_phase = "csp.focused";
+    }
+    else if (ran_phase3)
+    {
+        final_phase = "csp.repair";
+    }
+    else if (ran_phase2)
+    {
+        final_phase = "csp.local_search";
+    }
+    state.best.best.phase_reached = final_phase;
+
+    state.best.best.phase_per_group.resize(installer.steps.size());
+    state.best.best.alternatives_per_group.resize(installer.steps.size());
+    for (size_t s = 0; s < installer.steps.size(); ++s)
+    {
+        state.best.best.phase_per_group[s].resize(installer.steps[s].groups.size());
+        state.best.best.alternatives_per_group[s].assign(installer.steps[s].groups.size(), 0);
+        for (size_t g = 0; g < installer.steps[s].groups.size(); ++g)
+        {
+            bool prop_resolved = false;
+            if (propagation)
+            {
+                for (const auto& [ps, pg] : propagation->resolved_groups)
+                {
+                    if (ps == static_cast<int>(s) && pg == static_cast<int>(g))
+                    {
+                        prop_resolved = true;
+                        break;
+                    }
+                }
+            }
+            state.best.best.phase_per_group[s][g] = prop_resolved ? "" : final_phase;
+        }
+    }
 
     return state.best.best;
 }
