@@ -4,6 +4,8 @@ project(salma VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+enable_testing()
+
 # --- mo2-core (shared library) ---
 
 find_package(pugixml CONFIG REQUIRED)
@@ -14,6 +16,7 @@ find_package(unofficial-bit7z CONFIG REQUIRED)
 add_library(mo2-core SHARED
     src/Utils.cpp
     src/Logger.cpp
+    src/SecurityContext.cpp
     src/FileOperations.cpp
     src/ArchiveService.cpp
     src/ModStructureDetector.cpp
@@ -69,6 +72,7 @@ add_executable(mo2-server
     src/Mo2Helpers.cpp
     src/ConfigService.cpp
     src/MultipartHandler.cpp
+    src/SecurityMiddleware.cpp
     src/StaticFileHandler.cpp
 )
 
@@ -89,10 +93,12 @@ set_target_properties(mo2-server PROPERTIES
 # --- salma_tests (Google Test) ---
 
 find_package(GTest CONFIG REQUIRED)
+include(GoogleTest)
 
 add_executable(salma_tests
     tests/utils_test.cpp
     tests/fomod_inference_test.cpp
+    tests/security_context_test.cpp
 )
 
 target_link_libraries(salma_tests
@@ -105,6 +111,11 @@ set_target_properties(salma_tests PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+gtest_discover_tests(salma_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES TIMEOUT 60
+)
+
 # --- Copy test suite + scripts next to the exe ---
 
 # The output dir varies by config: bin/Release, bin/Debug, etc.
@@ -114,7 +125,7 @@ set(OUTDIR "$<TARGET_FILE_DIR:mo2-server>")
 add_custom_command(TARGET mo2-server POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/test.bat"
-        "${CMAKE_SOURCE_DIR}/test.py"
+        "${CMAKE_SOURCE_DIR}/test_all.py"
         "${CMAKE_SOURCE_DIR}/test_one.py"
         "${CMAKE_SOURCE_DIR}/deploy.bat"
         "${CMAKE_SOURCE_DIR}/purge.bat"
@@ -220,7 +231,7 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/scripts/"
         REGEX "/__pycache__($|/)" EXCLUDE
         PATTERN "*.pyc" EXCLUDE)
 install(FILES
-            "${CMAKE_SOURCE_DIR}/test.py"
+            "${CMAKE_SOURCE_DIR}/test_all.py"
             "${CMAKE_SOURCE_DIR}/test_one.py"
             "${CMAKE_SOURCE_DIR}/test.bat"
             "${CMAKE_SOURCE_DIR}/deploy.bat"
