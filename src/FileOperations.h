@@ -159,6 +159,46 @@ public:
     static void copy_directory_contents(const std::filesystem::path& src,
                                         const std::filesystem::path& dst);
 
+    /**
+     * @brief Move the immediate contents of a directory.
+     *
+     * Same shape as copy_directory_contents, but tries `std::filesystem::rename`
+     * first and only falls back to copy + remove when rename fails with
+     * `errc::cross_device_link` (source and destination on different volumes).
+     * Used as the final unfomod -> mod_path step so the install does not
+     * keep two full copies of the FOMOD output on disk simultaneously.
+     *
+     * The sticky disk-full flag (see disk_full_encountered()) is set on
+     * copy fallbacks just like the copy_* functions; rename failures with
+     * errc::no_space_on_device also set it.
+     *
+     * @param src Source directory whose contents are moved (must exist).
+     * @param dst Destination directory.
+     * @throw Does not throw.
+     */
+    static void move_directory_contents(const std::filesystem::path& src,
+                                        const std::filesystem::path& dst);
+
+    /**
+     * @brief True iff any copy or move call has hit "no space on device".
+     *
+     * Sticky across calls; the flag is process-global, set whenever a
+     * `std::filesystem::filesystem_error` whose code matches
+     * `std::errc::no_space_on_device` is caught. Callers (FomodService,
+     * InstallationService) check this after a batch of operations to
+     * surface disk-full as a hard install failure instead of letting
+     * the missing files masquerade as a successful partial install.
+     */
+    static bool disk_full_encountered();
+
+    /**
+     * @brief Reset the sticky disk-full flag.
+     *
+     * Called at the start of an install so a prior install's disk-full
+     * does not poison the next one. Tests also use this between cases.
+     */
+    static void reset_disk_full();
+
 private:
     std::vector<FileOperation> ops_; /**< Queued operations awaiting execute() */
 };
