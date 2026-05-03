@@ -27,6 +27,14 @@ std::string InstallationService::install_mod(const std::string& archive_path,
     auto& logger = Logger::instance();
     auto start = std::chrono::steady_clock::now();
 
+    // Clear the sticky disk-full marker before any work so a previous
+    // install's disk pressure does not poison this run. The flag gets
+    // set by FileOperations::copy_* / move_* when std::filesystem hits
+    // errc::no_space_on_device, and is checked at the bottom of this
+    // function to convert a silently-truncated install into a thrown
+    // error the caller can react to.
+    FileOperations::reset_disk_full();
+
     logger.log("[install] === Starting mod installation ===");
     logger.log(std::format("[install] Archive: {}", archive_path));
     logger.log(std::format("[install] Target mod directory: {}", mod_path));
@@ -108,6 +116,16 @@ std::string InstallationService::install_mod(const std::string& archive_path,
             std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         logger.log(
             std::format("[install] Total installation time: {:.2f} seconds", total_duration));
+
+        if (FileOperations::disk_full_encountered())
+        {
+            // Some files in the archive could not be copied because the volume
+            // ran out of space. Surface this as a hard install failure so the
+            // round-trip test harness reports "install failed" instead of
+            // "missing files" and so MO2 doesn't deploy a half-empty mod.
+            throw std::runtime_error(
+                "Install aborted: disk full while copying files. Free space and retry.");
+        }
 
         return result;
     }
@@ -435,9 +453,13 @@ std::string InstallationService::handle_fomod_install(const fs::path& fomod_fold
                                        file_op_failures));
     }
 
-    // Copy result to mod directory
-    logger.log(std::format("[install] Copying unfomod files to mod directory: {}", mod_path));
-    FileOperations::copy_directory_contents(fs::path(dst_base), mod_path);
+    // Move result into the mod directory. dst_base lives inside temp_dir,
+    // which gets removed at the bottom of install_mod, so we don't need to
+    // keep its files around. fs::rename per child is essentially free on the
+    // same volume; on cross-volume installs (temp on C:, mod_path on D:) it
+    // falls back to copy + delete inside FileOperations.
+    logger.log(std::format("[install] Moving unfomod files to mod directory: {}", mod_path));
+    FileOperations::move_directory_contents(fs::path(dst_base), mod_path);
 
     logger.log(std::format("[install] FOMOD installation steps completed in {}", temp_dir));
     return mod_path;
