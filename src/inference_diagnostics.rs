@@ -1,28 +1,95 @@
-//! Inference diagnostics - partial Rust port of `src/InferenceDiagnostics.hpp`
-//! / `.cpp`.
+//! Diagnostics layer of the inference pipeline: the reason codes attached to
+//! each decision, the confidence score derived from them, and the schema-v2
+//! JSON they serialize to.
 //!
-//! Task 7 ports only the pieces the constraint propagator (the first consumer
-//! of these codes) needs:
+//! - [`ReasonCode`] and [`reason_code_to_string`]: the integer-backed reason
+//!   enumeration and its stable wire names.
+//! - [`ReasonDetail`]: the structured payload carried beside a plugin reason.
+//!   The propagator emits [`ReasonDetail::UniqueFileEvidence`]; the builder
+//!   emits [`ReasonDetail::CspPhase`].
+//! - The data model. [`InferenceDiagnostics`] (`schema_version` 2) holds
+//!   [`RunDiagnostics`] plus a [`StepDiagnostics`] tree that descends through
+//!   [`GroupDiagnostics`] to [`PluginDiagnostics`]. Every level carries a
+//!   [`ConfidenceScore`] over [`ConfidenceComponents`] and a chain of
+//!   [`Reason`]s; [`DiagnosticTimings`], [`DiagnosticGroupCounts`] and
+//!   [`DiagnosticCacheInfo`] complete the run summary.
+//! - [`InferenceDiagnosticsBuilder`], the accumulator. It absorbs the
+//!   propagation result and the solver result, then computes the confidence
+//!   formula in [`InferenceDiagnosticsBuilder::finalize`].
+//! - [`serialize_confidence`], [`serialize_reason`] and
+//!   [`serialize_run_diagnostics`], which build [`crate::json::Value`] trees
+//!   for [`crate::fomod_inference_atoms::assemble_json`] and the Tier-1 emitter
+//!   in [`crate::fomod_inference_service`].
 //!
-//! - [`ReasonCode`] - the stable, integer-backed enumeration of reasons the
-//!   inference engine attaches to a plugin/group/step decision. Mirror of
-//!   `mo2core::ReasonCode` in `src/InferenceDiagnostics.hpp`. The WHOLE enum is
-//!   ported now (not just the `FORCED_*` / `*_FILE_EVIDENCE` codes the
-//!   propagator emits) because the CSP solver (Tasks 8-9) and the diagnostics
-//!   assembler (Task 10) reference the `CSP_PHASE_*` / `CONDITION_*` / `STEP_*`
-//!   / penalty / cache codes and the integer values must stay stable.
-//! - [`reason_code_to_string`] - stable string name for each code, mirror of
-//!   `mo2core::reason_code_to_string`.
-//! - [`ReasonDetail`] - typed replacement for the C++ `nlohmann::json` detail
-//!   payload carried alongside a plugin reason. The propagator emits exactly
-//!   one variant ([`ReasonDetail::UniqueFileEvidence`]).
+//! ## Wire stability
 //!
-//! The remainder of `InferenceDiagnostics.hpp` (the `Reason` struct, the
-//! `ConfidenceComponents` / `ConfidenceScore` scoring types, the
-//! `InferenceDiagnosticsBuilder` accumulator, and the `serialize_*` / schema-v2
-//! JSON helpers) lands with the diagnostics port in Task 10, which will EXTEND
-//! this module rather than replace it. Task 10 owns the ReasonDetail ->
-//! schema-v2 JSON mapping; no JSON model is introduced here.
+//! Both the integer value and the string name of a [`ReasonCode`] are wire
+//! format: the dashboard (`web/src/comps/WhyPanel.tsx`) keys its labels off the
+//! names, never off the human message. Append new codes; never renumber or
+//! repurpose an existing one.
+//!
+//! Six codes are reserved and have no producer anywhere in this crate, so they
+//! never reach the wire: `NO_UNIQUE_EVIDENCE` (202), `CARDINALITY_FORCED`
+//! (300), `CONDITION_FORCED_TRUE` (500), `CONDITION_FORCED_FALSE` (501),
+//! `CONDITION_UNKNOWN` (502) and `EXTRA_FILE_PRODUCED` (600). The arms that
+//! score or describe them, in `evidence_component` and in
+//! [`InferenceDiagnosticsBuilder::absorb_propagation`], are dead paths rather
+//! than live scoring. The table in the [`ReasonCode`] doc names the producer of
+//! every code.
+//!
+//! ## The confidence formula
+//!
+//! [`InferenceDiagnosticsBuilder::finalize`] implements the block below, which
+//! is the reference copy; nothing else in this file repeats it in full. Each
+//! component is a plugin-level value. A group, step or run value on the same
+//! axis is an aggregate of the level under it, never an independent
+//! measurement.
+//!
+//! ```text
+//! per plugin p, in group g of step s
+//!   evidence    = 1.0                    if the reason chain is propagation-forced
+//!               = first matching reason: UNIQUE_FILE_EVIDENCE -> 1.0
+//!                                        NO_UNIQUE_EVIDENCE   -> 0.5  (no producer)
+//!                                        EXTRA_FILE_PRODUCED  -> 0.3  (no producer)
+//!               = 0.5 if selected, 0.7 if deselected   (no evidence reason at all)
+//!   propagation = 1.0 if propagation-forced, else 0.0
+//!   repro       = 1.0                    if deselected, or if the run matched exactly
+//!               = 0.85 * repro_ratio     otherwise
+//!   ambiguity   = alternatives_per_group[s][g]: 0 -> 1.0, 1 -> 0.6, 2 -> 0.4, 3+ -> 0.2
+//!
+//! run level, computed once
+//!   repro_ratio = 1.0                    if exact_match, or target_file_count == 0
+//!               = clamp01(1 - (missing + 0.5 * (size_mismatch + hash_mismatch))
+//!                             / target_file_count)
+//!
+//! at every level
+//!   composite   = clamp01(0.40*evidence + 0.30*propagation
+//!                         + 0.20*repro  + 0.10*ambiguity)
+//!   band        = "high" if composite >= 0.85
+//!               = "medium" if composite >= 0.50
+//!               = "low" otherwise
+//!
+//! aggregation, bottom-up, one weighted mean per axis (weight <= 0 -> 1.0)
+//!   plugin -> group   weight = plugin_file_count + 1
+//!                     a group whose plugins are all propagation-forced skips
+//!                     the mean: all four components and the composite become 1.0
+//!   group  -> step    weight = plugins.len() + 1
+//!   step   -> run     weight = groups.len() + 1
+//!
+//! run composite, after the mean
+//!   composite -= 0.05 * min(SolverResult::extra, 5)
+//!   composite -= 0.10                    if phase_reached == "csp.fallback"
+//!   composite  = clamp01(composite)      so the run composite is not recoverable
+//!                                        from the four run components alone
+//! ```
+//!
+//! Three constants in that block are easy to misread. The 0.5 gives a size or
+//! hash mismatch half the weight of a miss, because the file exists at the
+//! right destination and only its content or size differs. The 0.85 is a
+//! deliberate ceiling on a selected plugin in a non-exact run, so such a plugin
+//! never scores above 0.85 on the repro axis even when nothing is missing. The
+//! `+ 1` in each aggregation weight stops a zero-file plugin, an empty group or
+//! an empty step from carrying zero weight.
 
 use crate::fomod_csp_types::{ReproMetrics, SolverResult};
 use crate::fomod_ir::FomodInstaller;
@@ -30,32 +97,61 @@ use crate::fomod_propagator::PropagationResult;
 use crate::json::Value;
 use crate::logger::Logger;
 
-/// Stable enumeration of reasons the inference engine can attach to a plugin,
-/// group, or step decision. Mirror of `mo2core::ReasonCode` in
-/// `src/InferenceDiagnostics.hpp`.
+/// Stable reason the inference engine attaches to a plugin, group or step
+/// decision.
 ///
-/// Codes are integer-backed (`#[repr(i32)]`) with the EXACT C++ integer values
-/// and are stable across releases: the dashboard maps them to UI labels and
-/// never compares against the human message. New codes are appended; existing
-/// codes never change their integer value or semantics. Read the numeric value
-/// with `code as i32` (the C++ `PropagationResult` stores `int` only to dodge an
-/// include cycle - the Rust port has no such cycle and stores the enum directly).
+/// Codes are integer-backed (`#[repr(i32)]`) and stable across releases: the
+/// dashboard maps the integer and the name to UI labels and never reads the
+/// human message. New codes are appended; an existing code never changes its
+/// integer value or its meaning. Read the numeric value with `code as i32`.
 ///
-/// Codes are grouped by the kind of decision that produced them:
+/// One row per code, naming what records it. "Reserved" means the integer is
+/// claimed but nothing emits the code.
 ///
-/// - `Forced*` come from FOMOD spec constraints (Required, NotUsable, etc.)
-///   evaluated by the propagator's plugin-type rule.
-/// - `*FileEvidence` / `NoFileEvidence` come from the target-tree evidence rule.
-/// - `CardinalityForced` comes from the group-type cardinality rule.
-/// - `CspPhase*` indicate which phase of the CSP solver made the pick.
-/// - `Condition*` and `Step*` describe override and visibility decisions.
-/// - `FomodPlusCache` is set when inference was lifted from a cached `meta.ini`
-///   Tier-1 entry.
-/// - `ImplicitDefault` is the catch-all when no other reason applies.
+/// ```text
+///  code                     value  recorded by
+///  -----------------------  -----  -------------------------------------------
+///  IMPLICIT_DEFAULT             0  default for an unfilled slot;
+///                                  absorb_propagation skips it, and
+///                                  csp_phase_to_reason returns it for an
+///                                  unrecognised phase id
+///  FORCED_REQUIRED            100  fomod_propagator rule 1 (plugin type)
+///  FORCED_NOT_USABLE          101  fomod_propagator rule 1 (plugin type)
+///  FORCED_SELECT_ALL          102  fomod_propagator rule 3 (cardinality)
+///  FORCED_AT_LEAST_ONE        103  fomod_propagator rule 3 (cardinality)
+///  FORCED_EXACTLY_ONE         104  fomod_propagator rule 3 (cardinality)
+///  UNIQUE_FILE_EVIDENCE       200  fomod_propagator rule 2 (file evidence),
+///                                  with a ReasonDetail::UniqueFileEvidence
+///  NO_FILE_EVIDENCE           201  fomod_propagator rule 2 (file evidence)
+///  NO_UNIQUE_EVIDENCE         202  reserved, no producer
+///  CARDINALITY_FORCED         300  reserved, no producer; rule 3 records the
+///                                  three FORCED_* codes instead
+///  CSP_PHASE_GREEDY           400  absorb_solver, from phase_per_group
+///  CSP_PHASE_LOCAL_SEARCH     401  absorb_solver
+///  CSP_PHASE_BACKTRACK        402  absorb_solver
+///  CSP_PHASE_REPAIR           403  absorb_solver
+///  CSP_PHASE_FOCUSED          404  absorb_solver
+///  CSP_PHASE_FALLBACK         405  absorb_solver
+///  CONDITION_FORCED_TRUE      500  reserved, no producer
+///  CONDITION_FORCED_FALSE     501  reserved, no producer
+///  CONDITION_UNKNOWN          502  reserved, no producer
+///  STEP_VISIBILITY_FORCED     510  fomod_inference_service, for a step whose
+///                                  override is ForceTrue
+///  STEP_VISIBILITY_UNKNOWN    511  fomod_inference_service, override Unknown
+///  STEP_NOT_VISIBLE           512  fomod_inference_service, override ForceFalse
+///  EXTRA_FILE_PRODUCED        600  reserved, no producer; only
+///                                  evidence_component still scores it
+///  FOMOD_PLUS_CACHE           700  set_cache_hit, on a Tier-1 meta.ini hit
+/// ```
 ///
-/// The variant identifiers are Rust UpperCamelCase; their stable wire names
-/// (the C++ SCREAMING_SNAKE enumerator text) are produced by
-/// [`reason_code_to_string`].
+/// The propagator's numbered rules are listed in the
+/// [`crate::fomod_propagator`] module doc: rule 1 evaluates plugin types, rule
+/// 2 weighs file evidence, and rule 3 enforces cardinality once the group
+/// resolves. Rule 3 is the one to watch, because the three cardinality codes
+/// appear only after a group resolves, never during narrowing.
+///
+/// Variant identifiers are UpperCamelCase; the wire names are SCREAMING_SNAKE
+/// and come from [`reason_code_to_string`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum ReasonCode {
@@ -63,34 +159,53 @@ pub enum ReasonCode {
     #[default]
     ImplicitDefault = 0,
 
-    // Forced by plugin-type constraints (Rule P).
-    /// Plugin type Required pinned the selection.
+    // Forced by plugin-type constraints (propagator rule 1).
+    /// Plugin type Required pinned the selection on.
     ForcedRequired = 100,
-    /// Plugin type NotUsable eliminated the selection.
+    /// Plugin type NotUsable eliminated the plugin. Not recorded for a dynamic
+    /// `dependencyType` evaluated without an external context: that outcome is
+    /// not definitive enough to prune on.
     ForcedNotUsable = 101,
+
+    // Forced by the cardinality rule (propagator rule 3), and only after the
+    // group resolves. SelectAtMostOne and SelectAny resolve at zero usable
+    // plugins and so record no Forced* code at all.
     /// SelectAll group forced this plugin on.
     ForcedSelectAll = 102,
-    /// AtLeastOne group with one valid combo.
+    /// SelectAtLeastOne group left with exactly one usable plugin.
     ForcedAtLeastOne = 103,
-    /// SelectExactlyOne with one valid combo.
+    /// SelectExactlyOne group left with exactly one usable plugin.
     ForcedExactlyOne = 104,
 
-    // File-evidence rules (Rule F).
+    // File evidence (propagator rule 2).
     /// Plugin uniquely produces a target file; detail lists files.
     UniqueFileEvidence = 200,
-    /// All plugin files absent from target; eliminated.
+    /// Every destination this plugin uniquely produces inside its group is
+    /// absent from the target, so the plugin is eliminated. Only
+    /// non-always-install, non-install-if-usable and non-excluded destinations
+    /// count, and only those no other still-usable plugin of the same group
+    /// produces. A plugin with no group-unique destination is never eliminated
+    /// by this rule, however many of its files are absent.
+    ///
+    /// The message on the wire reads "All declared files absent from target",
+    /// which is broader than the rule it describes. It is emitted text that the
+    /// dashboard shows, so rewording it changes the document.
     NoFileEvidence = 201,
-    /// Deselected: nothing in target uniquely maps here.
+    /// Deselected because nothing in the target maps uniquely here. Reserved:
+    /// nothing records this code.
     NoUniqueEvidence = 202,
 
-    // Cardinality rules (Rule C).
-    /// Group narrowed to a single combo by group type.
+    // Cardinality. Reserved: rule 3 records the three FORCED_* codes above
+    // instead.
+    /// Group narrowed to a single combination by its group type. Reserved: the
+    /// cardinality rule records `ForcedSelectAll`, `ForcedExactlyOne` or
+    /// `ForcedAtLeastOne` on the kept plugins instead.
     CardinalityForced = 300,
 
     // CSP solver phases.
     /// Picked by the greedy phase.
     CspPhaseGreedy = 400,
-    /// Improved/picked by local search.
+    /// Picked or improved by local search.
     CspPhaseLocalSearch = 401,
     /// Picked by systematic backtracking.
     CspPhaseBacktrack = 402,
@@ -101,12 +216,16 @@ pub enum ReasonCode {
     /// Picked by the global-fallback phase.
     CspPhaseFallback = 405,
 
-    // Condition / step visibility overrides.
-    /// compute_overrides forced a conditional pattern true.
+    // Condition and step-visibility overrides. `compute_overrides` decides
+    // ForceTrue / ForceFalse / Unknown for conditional patterns, and the
+    // forward simulator and the solver consume those decisions, but none of
+    // them becomes a reason. Only its step-visibility half reaches the builder,
+    // through the three STEP_* codes below.
+    /// A conditional pattern was forced true. Reserved: no producer.
     ConditionForcedTrue = 500,
-    /// compute_overrides forced it false.
+    /// A conditional pattern was forced false. Reserved: no producer.
     ConditionForcedFalse = 501,
-    /// Could not determine; the simulator guessed.
+    /// A conditional pattern could not be decided. Reserved: no producer.
     ConditionUnknown = 502,
     /// Step visibility condition forced true.
     StepVisibilityForced = 510,
@@ -115,8 +234,10 @@ pub enum ReasonCode {
     /// Step skipped entirely because not visible.
     StepNotVisible = 512,
 
-    // Penalties / scoring.
-    /// Selection produces a file not in target (penalty).
+    // Penalties and scoring.
+    /// The selection produces a file the target does not have. Reserved: no
+    /// producer. `evidence_component` still scores it at 0.3, but nothing puts
+    /// the code on a reason chain, so that arm is dead.
     ExtraFileProduced = 600,
 
     // Cache / shortcut.
@@ -124,14 +245,12 @@ pub enum ReasonCode {
     FomodPlusCache = 700,
 }
 
-/// Convert a [`ReasonCode`] to its stable string name (e.g. `"FORCED_REQUIRED"`).
-/// Mirror of `mo2core::reason_code_to_string`.
+/// Wire name of a [`ReasonCode`], for example `"FORCED_REQUIRED"`. The same
+/// text appears in the JSON document and in log lines.
 ///
-/// The returned string is the C++ enum-identifier text (SCREAMING_SNAKE),
-/// suitable for the JSON wire format and for grepping logs. The C++ function
-/// returns `"UNKNOWN"` for an unrecognized enumerator; under Rust's exhaustive
-/// match over a closed enum that miss-branch is unreachable, so it is encoded
-/// as the absence of any wildcard arm rather than a live `"UNKNOWN"` return.
+/// The match is exhaustive and carries no wildcard arm, so there is no fallback
+/// name. That is deliberate: a new variant without a name here fails the build
+/// instead of reaching a consumer as an unnamed code.
 pub fn reason_code_to_string(code: ReasonCode) -> &'static str {
     match code {
         ReasonCode::ImplicitDefault => "IMPLICIT_DEFAULT",
@@ -161,101 +280,140 @@ pub fn reason_code_to_string(code: ReasonCode) -> &'static str {
     }
 }
 
-/// Typed structured payload accompanying a plugin reason. Rust replacement for
-/// the C++ `nlohmann::json` `detail` field carried on each plugin reason.
+/// Structured payload carried beside a plugin reason.
 ///
-/// The constraint propagator emits [`ReasonDetail::UniqueFileEvidence`] (the
-/// target files a plugin uniquely produces); the diagnostics assembler's
+/// The constraint propagator emits [`ReasonDetail::UniqueFileEvidence`], the
+/// target files a plugin uniquely produces.
 /// [`InferenceDiagnosticsBuilder::absorb_solver`] emits
-/// [`ReasonDetail::CspPhase`] (which solver phase fixed a selection and the node
-/// count at that point). Task 10 maps each variant to its schema-v2 JSON shape.
-/// A missing detail is represented as `None` at the storage site rather than an
-/// empty variant here, mirroring the C++ null-json sentinel.
+/// [`ReasonDetail::CspPhase`], the solver phase that fixed a selection.
+/// `serialize_reason_detail` maps each variant to its schema-v2 shape.
+///
+/// A reason with no payload stores `None` rather than an empty variant, and
+/// [`serialize_reason`] then omits the `detail` key entirely.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReasonDetail {
     /// Positive file evidence: the plugin uniquely produces at least one target
-    /// file. `files` lists up to the first four example destinations (sorted
-    /// byte-ascending in the port for determinism); `count` is the full number
-    /// of unique target hits, which may exceed `files.len()`.
+    /// file. `files` holds up to four examples, sorted byte-ascending so the
+    /// document is deterministic; `count` is the full number of unique target
+    /// hits and may exceed `files.len()`.
     UniqueFileEvidence {
-        /// Up to four example destination paths (byte-ascending).
+        /// Up to four example destination paths, byte-ascending.
         files: Vec<String>,
-        /// Total count of unique target hits (may exceed `files.len()`).
+        /// Total unique target hits, which may exceed `files.len()`.
         count: i32,
     },
-    /// CSP-phase attribution: the plugin was selected by a solver phase. Emitted
-    /// by [`InferenceDiagnosticsBuilder::absorb_solver`] onto every selected
-    /// plugin of a group whose `phase_per_group` entry is non-empty. Mirror of
-    /// the C++ `detail["phase"] = phase_id; detail["nodes"] = nodes_explored`
-    /// object (`src/InferenceDiagnostics.cpp:612-614`); its schema-v2 keys sort
-    /// to `nodes` then `phase`.
+    /// CSP-phase attribution: a solver phase selected the plugin. Emitted by
+    /// [`InferenceDiagnosticsBuilder::absorb_solver`] only when all four
+    /// conditions hold:
+    ///
+    /// 1. The group's `SolverResult::phase_per_group` entry is not empty.
+    /// 2. `csp_phase_to_reason` recognises that entry. The recognised ids are
+    ///    exactly `"csp.greedy"`, `"csp.local_search"`, `"csp.backtrack"`,
+    ///    `"csp.repair"`, `"csp.focused"` and `"csp.fallback"`. Any other
+    ///    non-empty id skips the whole group: no reason and no detail are
+    ///    produced, although the group's `resolved_by` was already set to that
+    ///    id.
+    /// 3. The group is inside the `SolverResult::selections` grid.
+    /// 4. The plugin index is below the plugin count the builder was sized to
+    ///    from the installer.
+    ///
+    /// Within that, only a plugin whose `selections[step][group][plugin]` is
+    /// `true` gets the reason. A consumer must therefore treat an absent
+    /// `detail` as normal and not as a defect. The serialized keys sort to
+    /// `nodes` then `phase`.
     CspPhase {
-        /// The CSP search-tree node count at the point of the pick
-        /// (`SolverResult::nodes_explored`, a run-level total).
+        /// `SolverResult::nodes_explored`, the run-level search-tree node
+        /// total. The same value is stamped on every plugin of every group, so
+        /// it is not a per-pick count.
         nodes: i32,
-        /// Stable phase identifier (e.g. `"csp.greedy"`, `"csp.fallback"`).
+        /// Stable phase identifier, for example `"csp.greedy"` or
+        /// `"csp.fallback"`.
         phase: String,
     },
 }
 
-// ---------------------------------------------------------------------------
-// Confidence formula constants (mirror of the anonymous-namespace `constexpr`
-// block in `src/InferenceDiagnostics.cpp:18-30`).
-// ---------------------------------------------------------------------------
-
-/// Weight of the evidence component in the per-plugin composite (0.40).
+/// Weight of the evidence axis in every composite score.
 const WEIGHT_EVIDENCE: f64 = 0.40;
-/// Weight of the propagation component (0.30).
+/// Weight of the propagation axis.
 const WEIGHT_PROPAGATION: f64 = 0.30;
-/// Weight of the repro component (0.20).
+/// Weight of the repro axis.
 const WEIGHT_REPRO: f64 = 0.20;
-/// Weight of the ambiguity component (0.10).
+/// Weight of the ambiguity axis.
 const WEIGHT_AMBIGUITY: f64 = 0.10;
 
-/// Composite score at/above which the band is `"high"` (0.85).
+/// Lowest composite that bands as `"high"`, inclusive.
 const BAND_HIGH_THRESHOLD: f64 = 0.85;
-/// Composite score at/above which the band is `"medium"` (0.50).
+/// Lowest composite that bands as `"medium"`, inclusive.
 const BAND_MEDIUM_THRESHOLD: f64 = 0.50;
 
-/// Run-level composite penalty per extra (unexpected) file (0.05).
+/// Run composite penalty per unexpected file produced.
 const RUN_EXTRA_PENALTY_PER_FILE: f64 = 0.05;
-/// Cap on the number of extra files penalized at the run level (5).
+/// Largest number of extra files the run penalty counts.
 const RUN_EXTRA_PENALTY_CAP: i32 = 5;
-/// Run-level composite penalty when the solver reached the global fallback
-/// (0.10).
+/// Run composite penalty when the solver reached the global-fallback phase.
 const RUN_FALLBACK_PENALTY: f64 = 0.10;
 
-// ---------------------------------------------------------------------------
-// Diagnostic data model (mirror of the structs in `InferenceDiagnostics.hpp`).
-// ---------------------------------------------------------------------------
-
-/// A single justification attached to a plugin/group/step decision. Mirror of
-/// `mo2core::Reason`.
-///
-/// The C++ carries `detail` as a `nlohmann::json` (null when absent); the port
-/// uses `Option<ReasonDetail>`. `None` reproduces the C++ null-json sentinel and
-/// is skipped by [`serialize_reason`].
+/// One justification attached to a plugin, group or step decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reason {
     /// Stable machine-readable reason code.
     pub code: ReasonCode,
     /// Human-readable explanation.
     pub message: String,
-    /// Optional structured payload; `None` when self-explanatory.
+    /// Structured payload; `None` when the code speaks for itself, in which
+    /// case [`serialize_reason`] omits the key.
     pub detail: Option<ReasonDetail>,
 }
 
-/// Per-axis confidence breakdown, each component in `[0.0, 1.0]`. Mirror of
-/// `mo2core::ConfidenceComponents`. Every field defaults to 1.0.
+/// Per-axis confidence breakdown, each component in `[0.0, 1.0]` and defaulting
+/// to 1.0.
+///
+/// The field docs below describe a plugin value. A group, step or run carries
+/// the same four fields, but each one there is a weighted mean of the level
+/// under it and not an independent measurement. The module doc holds the whole
+/// formula, including the weights.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConfidenceComponents {
-    /// Fraction of plugin files that uniquely match the target.
+    /// Discrete score read off the plugin's reason chain by
+    /// `evidence_component`: 1.0 when the chain holds a propagation-forcing
+    /// code; otherwise the first matching reason in chain order wins, with
+    /// `UniqueFileEvidence` giving 1.0, `NoUniqueEvidence` 0.5 and
+    /// `ExtraFileProduced` 0.3; with no such reason, a selected plugin scores
+    /// 0.5 and a deselected plugin 0.7.
+    ///
+    /// This is never a ratio, and the plugin's declared file count is never a
+    /// numerator.
     pub evidence: f64,
-    /// 1.0 if forced by propagation, 0.0 if CSP-decided.
+    /// 1.0 when the plugin's reason chain holds a propagation-forcing code,
+    /// 0.0 otherwise. `plugin_was_propagation_forced` defines the set:
+    /// `ForcedRequired`, `ForcedNotUsable`, `ForcedSelectAll`,
+    /// `ForcedAtLeastOne`, `ForcedExactlyOne`, `UniqueFileEvidence`,
+    /// `NoFileEvidence`, `CardinalityForced` and `FomodPlusCache`.
+    ///
+    /// 0.0 means no such code is present, which covers both a plugin with no
+    /// reasons at all and a plugin carrying only `CspPhase*` codes. It is not a
+    /// positive statement that the CSP made the choice. A Tier-1 cache hit
+    /// pushes `FomodPlusCache` onto every plugin, so this axis reads 1.0 for a
+    /// whole cache-hit run even though the propagator never ran.
     pub propagation: f64,
-    /// 1 - (group-local mismatches / group-local targets).
+    /// Run-level reproduction quality, not a group-local ratio. It is 1.0 for a
+    /// deselected plugin and for a selected plugin in an exact-match run;
+    /// otherwise `0.85 * repro_ratio`, where `repro_ratio` is computed once per
+    /// run as `clamp01(1 - (missing + 0.5 * (size_mismatch + hash_mismatch)) /
+    /// target_file_count)` and defaults to 1.0 when `target_file_count` is 0.
+    ///
+    /// A selected plugin in a non-exact run therefore never exceeds 0.85 on
+    /// this axis, and scores exactly 0.85 when `target_file_count` is 0. Do not
+    /// try to reconcile the value against per-group data: the counters behind
+    /// it are run-level.
     pub repro: f64,
-    /// 1 - (close-evidence alternatives / total alternatives).
+    /// Group ambiguity, looked up as
+    /// `SolverResult::alternatives_per_group[step][group]`: 0 alternatives give
+    /// 1.0, 1 gives 0.6, 2 gives 0.4, and 3 or more give 0.2. There is no
+    /// division and no total-alternatives denominator, and every plugin of the
+    /// group receives the same value. `solve_fomod_csp` fills
+    /// `alternatives_per_group` with zeros and never computes a real count, so
+    /// this axis reads 1.0 on every run today.
     pub ambiguity: f64,
 }
 
@@ -270,11 +428,25 @@ impl Default for ConfidenceComponents {
     }
 }
 
-/// Composite confidence score with a derived band. Mirror of
-/// `mo2core::ConfidenceScore`. Defaults to composite 1.0, band `"high"`.
+/// Composite confidence score with a derived band. Defaults to composite 1.0,
+/// band `"high"`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfidenceScore {
-    /// Linear combination of `components`.
+    /// Weighted combination of `components`, computed by `composite_from` as
+    /// `clamp01(0.40*evidence + 0.30*propagation + 0.20*repro +
+    /// 0.10*ambiguity)`. Two exceptions.
+    ///
+    /// A group in which every plugin is propagation-forced gets all four
+    /// components and this composite set to 1.0 directly, without the
+    /// combination.
+    ///
+    /// At run level the combination runs first, then two penalties are
+    /// subtracted before a final clamp: `RUN_EXTRA_PENALTY_PER_FILE` times
+    /// `min(SolverResult::extra, RUN_EXTRA_PENALTY_CAP)`, so at most -0.25,
+    /// plus `RUN_FALLBACK_PENALTY` when `phase_reached` is `"csp.fallback"`.
+    /// A run composite is therefore not recoverable from the four published run
+    /// components. The unit test `run_level_extra_and_fallback_penalties` pins
+    /// both penalties.
     pub composite: f64,
     /// Categorical bucket: `"high"` / `"medium"` / `"low"`.
     pub band: String,
@@ -292,11 +464,11 @@ impl Default for ConfidenceScore {
     }
 }
 
-/// Diagnostics for one plugin in one group. Mirror of
-/// `mo2core::PluginDiagnostics`.
+/// Diagnostics for one plugin in one group.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PluginDiagnostics {
-    /// Mirrors the boolean stored in `SolverResult::selections` for this slot.
+    /// The `SolverResult::selections` value for this slot, copied in by
+    /// [`InferenceDiagnosticsBuilder::absorb_solver`].
     pub selected: bool,
     /// Confidence score for this plugin decision.
     pub confidence: ConfidenceScore,
@@ -304,13 +476,34 @@ pub struct PluginDiagnostics {
     pub reasons: Vec<Reason>,
 }
 
-/// Diagnostics for one group in one step. Mirror of `mo2core::GroupDiagnostics`.
+/// Diagnostics for one group in one step.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GroupDiagnostics {
     /// Confidence score aggregated over this group's plugins.
     pub confidence: ConfidenceScore,
-    /// Rule or solver phase that fixed the last unresolved plugin (empty ==
-    /// unknown).
+    /// Identifier of the rule or CSP phase that resolved the group as a whole;
+    /// empty when the group was not attributed. It carries no per-plugin
+    /// information, which lives in `PluginDiagnostics::reasons`.
+    ///
+    /// The value space is:
+    ///
+    /// - `"propagation.select_all"`, `"propagation.unique_evidence"` or
+    ///   `"propagation.cardinality"`, copied from `PropagationResult` by
+    ///   [`InferenceDiagnosticsBuilder::absorb_propagation`].
+    /// - A `"csp.*"` phase id, written by
+    ///   [`InferenceDiagnosticsBuilder::absorb_solver`], but only if the field
+    ///   is still empty.
+    /// - `"cache.fomod_plus"`, written for every group by
+    ///   [`InferenceDiagnosticsBuilder::set_cache_hit`].
+    /// - Any string a caller passes to
+    ///   [`InferenceDiagnosticsBuilder::set_group_resolved_by`].
+    ///
+    /// `absorb_solver` classifies the run-level group counters by string
+    /// prefix: a `"propagation"` prefix or the exact string
+    /// `"cache.fomod_plus"` counts as resolved by propagation, a `"csp."`
+    /// prefix counts as resolved by the CSP, and anything else counts as
+    /// neither. A new value must keep one of those prefixes or the run counters
+    /// will silently miss it.
     pub resolved_by: String,
     /// Group-level reason chain.
     pub reasons: Vec<Reason>,
@@ -318,8 +511,7 @@ pub struct GroupDiagnostics {
     pub plugins: Vec<PluginDiagnostics>,
 }
 
-/// Diagnostics for one installation step. Mirror of `mo2core::StepDiagnostics`.
-/// `visible` defaults to `true`.
+/// Diagnostics for one installation step. `visible` defaults to `true`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StepDiagnostics {
     /// Confidence score aggregated over this step's groups.
@@ -343,7 +535,11 @@ impl Default for StepDiagnostics {
     }
 }
 
-/// Per-pipeline timings in milliseconds. Mirror of `mo2core::DiagnosticTimings`.
+/// Pipeline timings in milliseconds.
+///
+/// These field names are not the wire keys. [`serialize_run_diagnostics`] drops
+/// the `_ms` suffix and nests the four values under the wire key `timings_ms`,
+/// so `list_ms` reaches a consumer as `timings_ms.list`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DiagnosticTimings {
     /// Archive-listing time.
@@ -356,7 +552,8 @@ pub struct DiagnosticTimings {
     pub total_ms: i64,
 }
 
-/// Group-resolution counters. Mirror of `mo2core::DiagnosticGroupCounts`.
+/// Group-resolution counters, tallied once by
+/// [`InferenceDiagnosticsBuilder::absorb_solver`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DiagnosticGroupCounts {
     /// Total groups across all steps.
@@ -367,7 +564,7 @@ pub struct DiagnosticGroupCounts {
     pub resolved_by_csp: i32,
 }
 
-/// Cache-hit context. Mirror of `mo2core::DiagnosticCacheInfo`.
+/// Cache-hit context.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiagnosticCacheInfo {
     /// True when inference short-circuited via the Tier-1 meta.ini cache.
@@ -376,7 +573,7 @@ pub struct DiagnosticCacheInfo {
     pub source: String,
 }
 
-/// Run-level diagnostic summary. Mirror of `mo2core::RunDiagnostics`.
+/// Run-level diagnostic summary.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunDiagnostics {
     /// Whole-run composite confidence.
@@ -397,8 +594,8 @@ pub struct RunDiagnostics {
     pub cache: DiagnosticCacheInfo,
 }
 
-/// Top-level diagnostics tree mirroring the FOMOD installer hierarchy. Mirror
-/// of `mo2core::InferenceDiagnostics`. `schema_version` defaults to 2.
+/// Top-level diagnostics tree, shaped like the FOMOD installer hierarchy.
+/// `schema_version` defaults to 2.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InferenceDiagnostics {
     /// Wire-format schema version (2 for this struct).
@@ -419,12 +616,8 @@ impl Default for InferenceDiagnostics {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Confidence-formula helpers (mirror of the file-scoped helpers in
-// `src/InferenceDiagnostics.cpp:38-230`).
-// ---------------------------------------------------------------------------
-
-/// Band for a composite score. Mirror of `band_for`.
+/// Band label for a composite score. Both thresholds are inclusive lower
+/// bounds, which `band_for_thresholds` pins.
 fn band_for(composite: f64) -> &'static str {
     if composite >= BAND_HIGH_THRESHOLD {
         "high"
@@ -435,27 +628,26 @@ fn band_for(composite: f64) -> &'static str {
     }
 }
 
-/// Clamp to `[0.0, 1.0]`. Mirror of `clamp01`.
-///
-/// `f64::clamp(0.0, 1.0)` is behaviorally identical to the C++ branch form for
-/// every value the confidence formula produces: below-range -> 0.0,
-/// above-range -> 1.0, in-range -> unchanged, and (never occurring here) NaN ->
-/// NaN. The bounds are finite constants, so `clamp` cannot panic.
+/// Clamp to `[0.0, 1.0]`. The bounds are finite constants, so this cannot
+/// panic. A NaN would pass through, and the confidence formula never produces
+/// one.
 fn clamp01(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
 }
 
-/// Weighted mean with a `weight <= 0 -> 1.0` guard. Mirror of `weighted_mean`.
+/// Weighted mean, returning 1.0 when the weight is not positive. Every
+/// aggregation level leans on that guard for an empty level.
 fn weighted_mean(sum: f64, weight: f64) -> f64 {
     if weight <= 0.0 { 1.0 } else { sum / weight }
 }
 
-/// Combine the four components into a composite. Mirror of `composite_from`.
+/// Combine the four components into a composite.
 ///
-/// The multiply-add expression order is preserved EXACTLY so the IEEE-754 bits
-/// match the C++ (e.g. all-ones yields `0.9999999999999999`, not `1.0`). No FMA
-/// contraction happens in either language for `a * b + c` unless requested, so
-/// the two produce identical doubles.
+/// The order of the multiply-add expression is load-bearing: it fixes the
+/// IEEE-754 result bit for bit, so all-ones yields `0.9999999999999999` rather
+/// than `1.0`, and that is the number the emitted document carries.
+/// Reassociating the sum changes the JSON. `composite_from_all_ones_bits` pins
+/// it.
 fn composite_from(c: &ConfidenceComponents) -> f64 {
     clamp01(
         WEIGHT_EVIDENCE * c.evidence
@@ -465,8 +657,9 @@ fn composite_from(c: &ConfidenceComponents) -> f64 {
     )
 }
 
-/// True if any reason in the chain is a propagation-forcing code. Mirror of
-/// `plugin_was_propagation_forced`.
+/// True when the chain holds any propagation-forcing code. The set is fixed and
+/// includes `FomodPlusCache`, so a Tier-1 cache hit reads as propagation-forced
+/// throughout the run.
 fn plugin_was_propagation_forced(reasons: &[Reason]) -> bool {
     reasons.iter().any(|r| {
         matches!(
@@ -484,7 +677,9 @@ fn plugin_was_propagation_forced(reasons: &[Reason]) -> bool {
     })
 }
 
-/// Map a CSP phase id to its reason code. Mirror of `csp_phase_to_reason`.
+/// Reason code for a CSP phase id. An unrecognised id maps to
+/// `ImplicitDefault`, which `absorb_solver` reads as "record nothing for this
+/// group".
 fn csp_phase_to_reason(phase_id: &str) -> ReasonCode {
     match phase_id {
         "csp.greedy" => ReasonCode::CspPhaseGreedy,
@@ -497,7 +692,7 @@ fn csp_phase_to_reason(phase_id: &str) -> ReasonCode {
     }
 }
 
-/// Map a CSP phase id to its human message. Mirror of `csp_phase_message`.
+/// Human message for a CSP phase id; empty for an unrecognised id.
 fn csp_phase_message(phase_id: &str) -> &'static str {
     match phase_id {
         "csp.greedy" => "Resolved in greedy phase",
@@ -510,8 +705,8 @@ fn csp_phase_message(phase_id: &str) -> &'static str {
     }
 }
 
-/// Declared file count for a plugin (bounds-checked). Mirror of
-/// `plugin_file_count`.
+/// Declared file count of one plugin. Any out-of-range index, negative
+/// included, gives 0, which the aggregation weights then turn into 1.
 fn plugin_file_count(installer: &FomodInstaller, s: i32, g: i32, p: i32) -> i32 {
     if s < 0 || s as usize >= installer.steps.len() {
         return 0;
@@ -527,10 +722,10 @@ fn plugin_file_count(installer: &FomodInstaller, s: i32, g: i32, p: i32) -> i32 
     group.plugins[p as usize].files.len() as i32
 }
 
-/// Per-plugin evidence component. Mirror of `evidence_component`: forced plugins
-/// score 1.0; otherwise the first evidence reason wins
-/// (`UniqueFileEvidence`->1.0, `NoUniqueEvidence`->0.5, `ExtraFileProduced`
-/// ->0.3); with no evidence reason, selected plugins score 0.5, deselected 0.7.
+/// Per-plugin evidence axis: a forced plugin scores 1.0; otherwise the first
+/// evidence reason in chain order wins (`UniqueFileEvidence` 1.0,
+/// `NoUniqueEvidence` 0.5, `ExtraFileProduced` 0.3); with no evidence reason, a
+/// selected plugin scores 0.5 and a deselected one 0.7.
 fn evidence_component(plugin: &PluginDiagnostics, propagation_forced: bool) -> f64 {
     if propagation_forced {
         return 1.0;
@@ -546,13 +741,13 @@ fn evidence_component(plugin: &PluginDiagnostics, propagation_forced: bool) -> f
     if plugin.selected { 0.5 } else { 0.7 }
 }
 
-/// Per-plugin propagation component. Mirror of `propagation_component`.
+/// Per-plugin propagation axis.
 fn propagation_component(forced: bool) -> f64 {
     if forced { 1.0 } else { 0.0 }
 }
 
-/// Per-group ambiguity component. Mirror of `ambiguity_component`: 0 alts ->
-/// 1.0, 1 -> 0.6, 2 -> 0.4, 3+ -> 0.2.
+/// Per-group ambiguity axis: 0 or fewer alternatives give 1.0, 1 gives 0.6, 2
+/// gives 0.4, and 3 or more give 0.2.
 fn ambiguity_component(alternatives_in_group: i32) -> f64 {
     if alternatives_in_group <= 0 {
         1.0
@@ -565,18 +760,52 @@ fn ambiguity_component(alternatives_in_group: i32) -> f64 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// InferenceDiagnosticsBuilder (mirror of the C++ accumulator).
-// ---------------------------------------------------------------------------
-
-/// Builder that accumulates per-decision reasons during inference and finalizes
-/// the confidence formula. Mirror of `mo2core::InferenceDiagnosticsBuilder`.
+/// Accumulates per-decision reasons during inference, then computes the
+/// confidence formula.
 ///
 /// Construction sizes the nested `steps`/`groups`/`plugins` vectors to the
-/// installer hierarchy so `add_plugin_reason` can index directly. Reason
-/// emission and metadata setters are write-once-or-append; [`finalize`] must run
-/// last (subsequent setters are silently dropped, exactly as the C++
-/// `finalized_` guard does).
+/// installer hierarchy so `add_plugin_reason` can index directly.
+///
+/// The call order is part of the contract, not a convention:
+///
+/// ```text
+///   new(installer)              sizes steps/groups/plugins, sets run.groups.total
+///         |
+///         v
+///   add_plugin_reason / add_group_reason / set_group_resolved_by
+///   set_step_visibility / set_run_timings
+///         |                     any order, repeatable
+///         v
+///   absorb_propagation(prop)    both must precede absorb_solver
+///   set_cache_hit(source)
+///         |
+///         v
+///   absorb_solver(result)       snapshot: run.groups.resolved_by_propagation
+///         |                     and .resolved_by_csp are tallied here, once
+///         v
+///   set_target_file_count(n)    read only by finalize, so its position is free
+///         |
+///         v
+///   finalize(result, _propagation, installer)
+///         |                     sets the finalized flag and logs one line
+///         v
+///   diagnostics() -> &InferenceDiagnostics
+/// ```
+///
+/// Two of those orderings are load-bearing, and violating either corrupts the
+/// output silently:
+///
+/// 1. `absorb_solver` writes a group's `resolved_by` only while it is still
+///    empty. `absorb_propagation` and `set_cache_hit` must therefore run first,
+///    or the propagation or cache attribution is replaced by the CSP phase id.
+/// 2. The run-level group counters are tallied once, at the end of
+///    `absorb_solver`, by scanning every group's `resolved_by`. Anything that
+///    changes a `resolved_by` after that point leaves the counters stale.
+///
+/// Reason chains append. `set_run_timings`, `set_target_file_count` and
+/// `set_group_resolved_by` overwrite on every call, and `set_cache_hit` appends
+/// one more `FomodPlusCache` reason each time. [`finalize`] must run last: it
+/// latches a flag, and every setter after it is dropped in silence.
 ///
 /// [`finalize`]: InferenceDiagnosticsBuilder::finalize
 #[derive(Debug, Clone)]
@@ -587,10 +816,9 @@ pub struct InferenceDiagnosticsBuilder {
 }
 
 impl InferenceDiagnosticsBuilder {
-    /// Construct with the hierarchy sized to match `installer`. Mirror of the
-    /// C++ constructor: every step/group/plugin slot is reachable and carries a
-    /// default-initialized [`PluginDiagnostics`]; `run.groups.total` is the sum
-    /// of group counts.
+    /// Size the hierarchy to `installer`: every step, group and plugin slot
+    /// exists and holds a default [`PluginDiagnostics`]. `run.groups.total` is
+    /// the group count across all steps.
     pub fn new(installer: &FomodInstaller) -> Self {
         let steps = installer
             .steps
@@ -621,9 +849,9 @@ impl InferenceDiagnosticsBuilder {
         }
     }
 
-    /// Append a reason to a plugin's reason chain. Mirror of
-    /// `add_plugin_reason`. Out-of-range indices (including negatives) are
-    /// ignored; calls after [`finalize`](Self::finalize) are dropped.
+    /// Append a reason to one plugin's chain. Any out-of-range index, negative
+    /// included, is ignored; calls after [`finalize`](Self::finalize) are
+    /// dropped.
     pub fn add_plugin_reason(
         &mut self,
         step: i32,
@@ -657,7 +885,8 @@ impl InferenceDiagnosticsBuilder {
             });
     }
 
-    /// Append a reason to a group's reason chain. Mirror of `add_group_reason`.
+    /// Append a reason to one group's chain, under the same index and
+    /// post-finalize rules as [`add_plugin_reason`](Self::add_plugin_reason).
     pub fn add_group_reason(
         &mut self,
         step: i32,
@@ -684,8 +913,9 @@ impl InferenceDiagnosticsBuilder {
         });
     }
 
-    /// Set the rule or solver phase that resolved a group. Mirror of
-    /// `set_group_resolved_by`.
+    /// Overwrite the rule or solver phase credited with resolving a group. See
+    /// [`GroupDiagnostics::resolved_by`] for the value space and the prefix
+    /// rule the run counters depend on.
     pub fn set_group_resolved_by(&mut self, step: i32, group: i32, resolved_by: impl Into<String>) {
         if self.finalized {
             return;
@@ -701,8 +931,15 @@ impl InferenceDiagnosticsBuilder {
         self.diag.steps[s].groups[g].resolved_by = resolved_by.into();
     }
 
-    /// Record a step's visibility decision and its origin. Mirror of
-    /// `set_step_visibility`.
+    /// Set a step's `visible` flag and append one reason carrying `code` and a
+    /// message picked from it. Index and post-finalize rules match
+    /// [`add_plugin_reason`](Self::add_plugin_reason).
+    ///
+    /// The message table holds one defensive arm: `StepVisibilityForced` with
+    /// `visible == false` gives "Visibility condition evaluated false". The
+    /// only caller in the tree pairs `StepVisibilityForced` with
+    /// `visible == true` and uses `StepNotVisible` for the false case, so that
+    /// arm is never taken today.
     pub fn set_step_visibility(&mut self, step: i32, visible: bool, code: ReasonCode) {
         if self.finalized {
             return;
@@ -731,7 +968,7 @@ impl InferenceDiagnosticsBuilder {
         });
     }
 
-    /// Record pipeline timings (milliseconds). Mirror of `set_run_timings`.
+    /// Overwrite the four pipeline timings, in milliseconds.
     pub fn set_run_timings(&mut self, list_ms: i64, scan_ms: i64, solve_ms: i64, total_ms: i64) {
         if self.finalized {
             return;
@@ -742,10 +979,24 @@ impl InferenceDiagnosticsBuilder {
         self.diag.run.timings.total_ms = total_ms;
     }
 
-    /// Mark this run as a Tier-1 cache hit. Mirror of `set_cache_hit`: sets
-    /// `phase_reached = "tier1_cache"`, every group's `resolved_by` to
-    /// `"cache.fomod_plus"`, and pushes a `FOMOD_PLUS_CACHE` reason on every
-    /// plugin.
+    /// Mark this run as a Tier-1 cache hit. Four effects, all unconditional:
+    ///
+    /// - `run.cache.hit` becomes `true` and `run.cache.source` becomes
+    ///   `source`, written verbatim. The only value used in the tree is
+    ///   `"fomod-plus"`.
+    /// - `run.phase_reached` becomes `"tier1_cache"`.
+    /// - Every group's `resolved_by` is overwritten with `"cache.fomod_plus"`,
+    ///   including a group that already carries a propagation attribution.
+    /// - Every plugin gains a `FomodPlusCache` reason with the message "Cached
+    ///   selection from meta.ini".
+    ///
+    /// The reason append is not de-duplicated, so a second call leaves two
+    /// identical reasons on every plugin. Like every setter, the call is a
+    /// no-op once [`finalize`](Self::finalize) has run.
+    ///
+    /// The Tier-1 path in `fomod_inference_service` emits its own schema-v2
+    /// document through `build_tier1_json` and does not call this method, which
+    /// is here for callers that drive the builder end to end.
     pub fn set_cache_hit(&mut self, source: impl Into<String>) {
         if self.finalized {
             return;
@@ -767,8 +1018,9 @@ impl InferenceDiagnosticsBuilder {
         }
     }
 
-    /// Record the target tree's file count for repro scoring. Mirror of
-    /// `set_target_file_count`.
+    /// Record the target tree's file count, the denominator of `repro_ratio`.
+    /// Only [`finalize`](Self::finalize) reads it, so any position before that
+    /// call works.
     pub fn set_target_file_count(&mut self, count: i32) {
         if self.finalized {
             return;
@@ -776,8 +1028,14 @@ impl InferenceDiagnosticsBuilder {
         self.target_file_count = count;
     }
 
-    /// Absorb propagation results into per-plugin and per-group reasons. Mirror
-    /// of `absorb_propagation`.
+    /// Copy the propagation result into per-group `resolved_by` values and
+    /// per-plugin reason chains, giving each code its human message.
+    ///
+    /// An empty `resolved_by` from the propagator leaves the current value
+    /// alone, and an `ImplicitDefault` plugin code records no reason at all.
+    /// Every nested loop runs to the smaller of the two dimensions, so a
+    /// propagation result shaped differently from the installer truncates
+    /// rather than panicking.
     pub fn absorb_propagation(&mut self, propagation: &PropagationResult) {
         if self.finalized {
             return;
@@ -843,8 +1101,17 @@ impl InferenceDiagnosticsBuilder {
         }
     }
 
-    /// Absorb solver results into per-group phase reasons, selection state, and
-    /// group counts. Mirror of `absorb_solver`.
+    /// Copy the solver result in: the run repro counters, a per-group phase
+    /// reason on each selected plugin, the per-plugin `selected` flags, and the
+    /// run-level group counters.
+    ///
+    /// A group's `resolved_by` is written only while it is still empty, so
+    /// [`absorb_propagation`](Self::absorb_propagation) and
+    /// [`set_cache_hit`](Self::set_cache_hit) must run before this call or
+    /// their attribution is replaced by the CSP phase id. The group counters
+    /// are tallied at the end of this call and never recomputed, so any later
+    /// change to a `resolved_by` leaves them stale. The type doc holds the full
+    /// call-order contract.
     pub fn absorb_solver(&mut self, result: &SolverResult) {
         if self.finalized {
             return;
@@ -903,7 +1170,7 @@ impl InferenceDiagnosticsBuilder {
             }
         }
 
-        // Mirror selection state into PluginDiagnostics.selected.
+        // Copy selection state into PluginDiagnostics.selected.
         let sel_steps = result.selections.len().min(self.diag.steps.len());
         for s in 0..sel_steps {
             let sel_groups = result.selections[s]
@@ -936,9 +1203,53 @@ impl InferenceDiagnosticsBuilder {
         self.diag.run.groups.resolved_by_csp = csp;
     }
 
-    /// Compute confidence components and bands top-down, then apply run-level
-    /// penalties and backfill `reproduced`. Mirror of `finalize`. Must be called
-    /// last.
+    /// Compute the confidence components and bands, apply the run-level
+    /// penalties, and backfill `reproduced`. Must run last: it latches the
+    /// `finalized` flag, so every later setter is dropped in silence and a
+    /// second call returns at once.
+    ///
+    /// The module doc holds the whole formula in one block. The parts that are
+    /// easiest to get wrong:
+    ///
+    /// - `repro_ratio` is computed once per run. It is 1.0 when
+    ///   `result.exact_match` holds or `target_file_count` is 0, and otherwise
+    ///   `clamp01(1 - (missing + 0.5 * (size_mismatch + hash_mismatch)) /
+    ///   target_file_count)`. A size or hash mismatch counts as half a miss,
+    ///   because the file exists at the right destination and only its content
+    ///   or size differs.
+    /// - A plugin's `repro` is 1.0 when the plugin is deselected or the run
+    ///   matched exactly, and otherwise `0.85 * repro_ratio`. The 0.85 is a
+    ///   deliberate ceiling: a selected plugin in a non-exact run never scores
+    ///   above 0.85 on that axis, even when nothing is missing.
+    /// - The aggregation weights are `plugin_file_count + 1` for plugin into
+    ///   group, `plugins.len() + 1` for group into step, and `groups.len() + 1`
+    ///   for step into run. The `+ 1` stops a zero-file plugin, an empty group
+    ///   or an empty step from carrying zero weight.
+    /// - A group whose plugins are all propagation-forced skips the mean: all
+    ///   four components and the group composite become exactly 1.0.
+    /// - The run composite subtracts `RUN_EXTRA_PENALTY_PER_FILE` per extra
+    ///   file, capped at `RUN_EXTRA_PENALTY_CAP` files, and
+    ///   `RUN_FALLBACK_PENALTY` when `phase_reached` is `"csp.fallback"`, then
+    ///   clamps again.
+    ///
+    /// `_propagation` is never read. Everything the confidence math needs was
+    /// already folded in by [`absorb_propagation`](Self::absorb_propagation),
+    /// so passing `PropagationResult::default()` changes nothing and the
+    /// in-crate tests do exactly that. See `PARITY-NOTES.md`.
+    ///
+    /// Side effect: on the call that actually finalizes, this writes exactly
+    /// one line through the global `Logger`, after setting the flag:
+    ///
+    /// ```text
+    /// [infer] Diagnostics: confidence=<composite, 2 decimals> (<band>),
+    ///   phase=<phase_reached>, repro=miss:<missing>/extra:<extra>/
+    ///   sm:<size_mismatch>/hm:<hash_mismatch>
+    /// ```
+    ///
+    /// The real line is not wrapped, and `phase` reads "n/a" when
+    /// `phase_reached` is empty. There is no quiet mode: a host suppresses or
+    /// redirects the line by registering a log callback through
+    /// `setLogCallback`.
     pub fn finalize(
         &mut self,
         result: &SolverResult,
@@ -949,7 +1260,10 @@ impl InferenceDiagnosticsBuilder {
             return;
         }
 
-        // Fraction of the target tree the chosen selections reproduce.
+        // Fraction of the target tree the chosen selections reproduce, computed
+        // once for the whole run. The 0.5 gives a size or hash mismatch half the
+        // weight of a miss: the file exists at the right destination and only
+        // its content or size is wrong.
         let mut repro_ratio = 1.0_f64;
         if !result.exact_match && self.target_file_count > 0 {
             let effective_miss =
@@ -976,6 +1290,9 @@ impl InferenceDiagnosticsBuilder {
                         prop_forced,
                     ));
                     let propagation = clamp01(propagation_component(prop_forced));
+                    // The 0.85 is a deliberate ceiling, not a scale factor: a
+                    // selected plugin in a non-exact run never scores above
+                    // 0.85 on the repro axis, even when nothing is missing.
                     let repro = if selected {
                         if result.exact_match {
                             1.0
@@ -1086,7 +1403,13 @@ impl InferenceDiagnosticsBuilder {
         let run_composite = self.diag.run.confidence.composite;
         self.diag.run.confidence.band = band_for(run_composite).to_string();
 
-        // Backfill `reproduced` if not already populated.
+        // Backfill `reproduced`. The zero test is defensive: no path writes
+        // `run.repro.reproduced` before this point and `finalize` cannot run
+        // twice, so the condition is always true today. The two branches
+        // produce very different numbers. With a target count, `reproduced` is
+        // the target size minus the misses and the mismatches. Without one it
+        // is a proxy: the declared file count of the selected plugins, minus
+        // the misses. Both clamp at 0.
         if self.diag.run.repro.reproduced == 0 {
             if self.target_file_count > 0 {
                 self.diag.run.repro.reproduced = (self.target_file_count
@@ -1112,9 +1435,8 @@ impl InferenceDiagnosticsBuilder {
 
         self.finalized = true;
 
-        // One-line run summary. The C++ `{:.2f}` becomes `{:.2}`; both round the
-        // exact binary value half-to-even, and this is a log line rather than
-        // part of the JSON schema, so it is not a byte-parity surface.
+        // One-line run summary. This is a log line and not part of the emitted
+        // JSON, so its rounding is not a wire contract.
         let run = &self.diag.run;
         Logger::instance().log(&format!(
             "[infer] Diagnostics: confidence={:.2} ({}), phase={}, repro=miss:{}/extra:{}/sm:{}/hm:{}",
@@ -1132,19 +1454,20 @@ impl InferenceDiagnosticsBuilder {
         ));
     }
 
-    /// Access the accumulated diagnostics. Mirror of `diagnostics()`.
+    /// Borrow the accumulated diagnostics.
     pub fn diagnostics(&self) -> &InferenceDiagnostics {
         &self.diag
     }
 }
 
 // ---------------------------------------------------------------------------
-// Serialization to the byte-faithful JSON model (mirror of `serialize_*`).
+// Serialization to the schema-v2 JSON model. Insertion order does not decide
+// the output: `Value::dump` emits object keys sorted, so the orders named below
+// are what a consumer reads.
 // ---------------------------------------------------------------------------
 
-/// Serialize a [`ReasonDetail`] to its schema-v2 JSON object. The keys sort to
-/// `count` then `files` (unique-file evidence) or `nodes` then `phase` (CSP
-/// phase), matching the C++ `nlohmann::json` insert-then-sorted-emit behavior.
+/// Serialize a [`ReasonDetail`] to its schema-v2 object. Keys emit as `count`
+/// then `files` for unique-file evidence, `nodes` then `phase` for a CSP phase.
 fn serialize_reason_detail(detail: &ReasonDetail) -> Value {
     let mut j = Value::object();
     match detail {
@@ -1164,9 +1487,9 @@ fn serialize_reason_detail(detail: &ReasonDetail) -> Value {
     j
 }
 
-/// Serialize a single [`ConfidenceScore`]. Mirror of `serialize_confidence`.
-/// Emitted keys sort to `band`, `components`, `composite`; the components object
-/// sorts to `ambiguity`, `evidence`, `propagation`, `repro`.
+/// Serialize one [`ConfidenceScore`]. Keys emit as `band`, `components`,
+/// `composite`, and the components object as `ambiguity`, `evidence`,
+/// `propagation`, `repro`.
 pub fn serialize_confidence(score: &ConfidenceScore) -> Value {
     let mut j = Value::object();
     j.insert("composite", Value::Double(score.composite));
@@ -1180,9 +1503,8 @@ pub fn serialize_confidence(score: &ConfidenceScore) -> Value {
     j
 }
 
-/// Serialize a single [`Reason`]. Mirror of `serialize_reason`. Always emits
-/// `code` and `message`; emits `detail` only when present (mirroring the C++
-/// non-null-and-non-empty guard). Emitted keys sort to `code`, `detail`,
+/// Serialize one [`Reason`]. `code` and `message` are always present; `detail`
+/// appears only when the reason carries one. Keys emit as `code`, `detail`,
 /// `message`.
 pub fn serialize_reason(reason: &Reason) -> Value {
     let mut j = Value::object();
@@ -1194,8 +1516,35 @@ pub fn serialize_reason(reason: &Reason) -> Value {
     j
 }
 
-/// Serialize the [`RunDiagnostics`] summary. Mirror of
-/// `serialize_run_diagnostics`.
+/// Serialize the [`RunDiagnostics`] summary. This is the only serializer here
+/// that renames fields on the way to the wire.
+///
+/// ```text
+/// {                                  keys emit in sorted order on dump
+///   "cache":          { "hit": bool, "source": str }
+///   "confidence":     serialize_confidence(run.confidence)
+///   "exact_match":    bool
+///   "groups":         { "resolved_by_csp", "resolved_by_propagation", "total" }
+///   "nodes_explored": int
+///   "phase_reached":  str
+///   "repro":          { "extra", "hash_mismatch", "missing", "reproduced",
+///                       "size_mismatch" }
+///   "timings_ms":     { "list"  <- list_ms,   "scan"  <- scan_ms,
+///                       "solve" <- solve_ms,  "total" <- total_ms }
+/// }
+/// ```
+///
+/// Only the timings are renamed: the [`DiagnosticTimings`] fields lose their
+/// `_ms` suffix and move under the `timings_ms` object, so a consumer looking
+/// for `list_ms` will not find it.
+///
+/// Every confidence number is a `Value::Double` and every counter a
+/// `Value::Int`. The split decides the emitted text, because the same zero
+/// dumps as `0.0` on one side and `0` on the other.
+///
+/// [`crate::fomod_inference_atoms::assemble_json`] and the Tier-1 emitter in
+/// `fomod_inference_service` nest the whole object under the top-level key
+/// `diagnostics`.
 pub fn serialize_run_diagnostics(run: &RunDiagnostics) -> Value {
     let mut j = Value::object();
     j.insert("confidence", serialize_confidence(&run.confidence));
@@ -1242,11 +1591,11 @@ pub fn serialize_run_diagnostics(run: &RunDiagnostics) -> Value {
 mod tests {
     use super::*;
 
-    // --- integer values must match the C++ enum EXACTLY --------------------
+    // --- integer values are wire format and must not drift -----------------
 
     #[test]
     fn reason_code_int_values_match_cpp() {
-        // Every value is pinned to src/InferenceDiagnostics.hpp lines 43-84.
+        // Renumbering any of these silently remaps every stored diagnostic.
         let cases: &[(ReasonCode, i32)] = &[
             (ReasonCode::ImplicitDefault, 0),
             (ReasonCode::ForcedRequired, 100),
@@ -1284,7 +1633,7 @@ mod tests {
         assert_eq!(ReasonCode::default() as i32, 0);
     }
 
-    // --- string names must match the C++ enum-identifier text --------------
+    // --- string names are wire format too ----------------------------------
 
     #[test]
     fn reason_code_to_string_matches_cpp() {
@@ -1330,7 +1679,7 @@ mod tests {
         match detail {
             ReasonDetail::UniqueFileEvidence { files, count } => {
                 assert_eq!(files, vec!["a.dds".to_string(), "b.dds".to_string()]);
-                // count is the FULL number of hits, independent of files.len().
+                // count is the full number of hits, independent of files.len().
                 assert_eq!(count, 5);
             }
             other => panic!("unexpected variant {other:?}"),
@@ -1473,10 +1822,14 @@ mod tests {
 
     #[test]
     fn mu_joint_fix_worked_example_group_composite() {
-        // Two equal-weight plugins: SE_AE selected (non-forced -> evidence 0.5),
-        // VR deselected (evidence 0.7); exact match so repro is 1.0. The group's
-        // evidence averages to 0.6 and its composite to 0.54 (band "medium"),
-        // matching `a SelectExactlyOne ZIP fixture/expected.json`.
+        // The test name matches no fixture in the tree; this pins arithmetic
+        // only. Two equal-weight plugins in one SelectExactlyOne group, neither
+        // propagation-forced: the selected plugin scores evidence 0.5 and the
+        // deselected one 0.7 (the fallthrough branch of `evidence_component`),
+        // the run matched exactly so repro is 1.0, and zero alternatives make
+        // ambiguity 1.0. The group's file-count-weighted evidence mean is 0.6
+        // and its composite is 0.40*0.6 + 0.30*0.0 + 0.20*1.0 + 0.10*1.0 = 0.54,
+        // band "medium" (>= BAND_MEDIUM_THRESHOLD, < BAND_HIGH_THRESHOLD).
         let installer = one_group_installer(vec![
             plugin_with_files("SE_AE", 1),
             plugin_with_files("VR", 1),
