@@ -4,7 +4,7 @@ use_directory_urls: false
 validation:
   links:
     not_found: info
-site_description: C++ mod installer with FOMOD support
+site_description: C++ FOMOD installer, processor, and inference engine
 site_author: lextpf
 
 theme:
