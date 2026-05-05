@@ -12,7 +12,7 @@ namespace mo2core
 
 /**
  * @class FomodService
- * @brief Core FOMOD installation logic and plugin flag evaluation.
+ * @brief Core FOMOD processing, install replay, and plugin flag evaluation.
  * @author Alex (https://github.com/lextpf)
  * @ingroup FomodService
  *
