@@ -175,12 +175,11 @@ extern "C"
      *
      * Extracts the archive into a temporary directory, detects whether
      * a FOMOD installer is present, and runs the appropriate FOMOD replay
-     * or fallback copy path.
-     *
-     * For FOMOD archives without a JSON config, only required files and
-     * conditional patterns are installed - optional steps are skipped
-     * because no selections exist. For full FOMOD installs with
-     * pre-scanned selections use installWithConfig() instead.
+     * or fallback copy
+     * path.
+     * For FOMOD archives without a JSON config, only required files and conditional
+     * patterns are installed - optional steps are skipped because no selections exist. For full
+     * FOMOD installs with pre-scanned selections use installWithConfig() instead.
      *
      * @param archivePath Null-terminated UTF-8 path to the archive. Must not be `nullptr`.
      * @param modPath Null-terminated UTF-8 path to the output mod directory. Must not be `nullptr`.

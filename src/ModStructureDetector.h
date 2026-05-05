@@ -9,7 +9,8 @@ namespace mo2core
 /**
  * @class ModStructureDetector
  * @brief Detects candidate content roots inside archives.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex
+ * (https://github.com/lextpf)
  * @ingroup ModStructureDetector
  *
  * Static utility used by InstallationService to identify which
