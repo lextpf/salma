@@ -8,13 +8,13 @@
  *      #+#    #+# #+#     #+# #+#        #+#       #+# #+#     #+#    *⠀⣠⣾⣿⣿⠃ ⠀⠈⢿⣿⣿⣦⡀
  *       ########  ###     ### ########## ###       ### ###     ###    ⠀⠈⠉⠹⡿⠁⠀⠀⠀⠀⠈⢻⡇⠉⠉
  *
- *                                 << M O D   I N S T A L L E R >>
+ *                              << F O M O D   E N G I N E >>
  *
  *  ============================================================================================  *
  *
  *      A Crow HTTP server that hosts the React frontend and exposes
- *      REST endpoints for wizardless FOMOD-aware mod installation and
- *      FOMOD inference, backed by libarchive, bit7z, and pugixml.
+ *      REST endpoints for wizardless FOMOD processing, install replay,
+ *      and inference, backed by libarchive, bit7z, and pugixml.
  *
  *    ----------------------------------------------------------------------
  *
