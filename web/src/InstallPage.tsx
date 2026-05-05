@@ -94,7 +94,7 @@ export default function InstallPage() {
           >
             01.
           </span>
-          <span>Sec. Upload and install mod archives</span>
+          <span>Sec. Upload and process FOMOD archives</span>
         </p>
 
         <div className="flex items-end reveal reveal-delay-2" style={{ gap: 18, flexWrap: 'wrap' }}>
@@ -137,7 +137,7 @@ export default function InstallPage() {
             lineHeight: 1.55,
           }}
         >
-          Drop an archive - salma will extract, parse the FOMOD, and infer selections against your mod tree.
+          Drop a FOMOD archive - salma will extract it, parse the installer, and infer selections against your mod tree.
         </p>
       </header>
 
