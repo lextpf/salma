@@ -2,7 +2,7 @@
 # https://doxide.org
 
 title: salma
-description: C++ mod installer with FOMOD support
+description: C++ FOMOD installer, processor, and inference engine
 
 output: docs
 
@@ -29,15 +29,15 @@ groups:
         description: Queued file copy/move operations with priority sorting.
       - name: ModStructureDetector
         title: ModStructureDetector
-        description: Detects mod folder structure inside archives.
+        description: Detects candidate content roots inside archives.
 
   - name: FOMOD
     title: ":material-package-variant: FOMOD"
-    description: FOMOD installer, dependency evaluation, and selection inference.
+    description: FOMOD processing, dependency evaluation, and selection inference.
     groups:
       - name: FomodService
         title: FomodService
-        description: Core FOMOD installation logic and plugin flag evaluation.
+        description: Core FOMOD processing and plugin flag evaluation.
       - name: FomodDependencyEvaluator
         title: FomodDependencyEvaluator
         description: Evaluates FOMOD dependency conditions.
@@ -51,7 +51,7 @@ groups:
     groups:
       - name: InstallationService
         title: InstallationService
-        description: Main installation orchestrator for FOMOD and non-FOMOD mods.
+        description: FOMOD install/replay orchestrator with a simple non-FOMOD copy fallback.
       - name: CApi
         title: CApi
         description: C-linkage API for external consumers (DLL exports).
