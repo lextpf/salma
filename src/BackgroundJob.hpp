@@ -22,29 +22,43 @@ namespace mo2server
  * @author Alex (https://github.com/lextpf)
  * @ingroup Core
  *
- * Encapsulates the recurring pattern of: atomic running flag, mutex-guarded
- * result, and a joinable background thread. Callers provide a work function
- * that returns a `TResult`; the template handles start gating, thread join,
- * exception capture, and result access.
+ * Wraps the recurring pattern of an atomic running flag, a mutex-guarded
+ * result, and a joinable background thread. Callers supply a work function
+ * returning a `TResult`; the template handles start gating, thread join,
+ * exception capture and result access.
  *
- * @tparam TResult The result type stored on completion.
+ * Header-only, and declared in namespace `mo2server` although it knows nothing
+ * about Crow or HTTP. It is grouped with the shared support types for that
+ * reason, even though the REST controllers are its only consumers.
+ *
+ * @tparam TResult Result type stored on completion. Must be move-constructible
+ *         (a `static_assert` in the class body rejects anything else) and a
+ *         complete object type, because the result is held in a
+ *         `std::optional<TResult>`.
  *
  * ## Cooperative Cancellation
  *
- * BackgroundJob exposes a cancellation token (`cancel_token()`) that work
- * functions can poll via `is_cancel_requested()`. The destructor sets the
- * token, waits up to the grace period for the work function to exit, and
- * then **detaches** the thread (so a non-cooperative worker does not
- * indefinitely block process shutdown). Detach is safe because all state
- * accessed by the worker lives in a heap-allocated `State` struct held by
- * a `shared_ptr` that the worker captures by value - the state outlives
- * `*this` if the worker is still running at destruction time.
+ * Work functions poll `cancel_token()` or `is_cancel_requested()`. The
+ * destructor sets the token and waits up to the grace period. A worker that
+ * exits inside the grace period is joined and nothing leaks; the thread is
+ * detached only when the grace period expires with the worker still running, so
+ * a non-cooperative worker cannot block process shutdown forever.
  *
- * Work functions that perform long-running loops should still check the
- * token periodically; detach leaks the thread and any resources it holds
- * until the work eventually returns.
+ * Detach is safe because every piece of state the worker touches lives in a
+ * heap-allocated `State` held by a `shared_ptr` that the worker captures by
+ * value, so the state outlives `*this`. What detach does leak is the thread
+ * itself and whatever the work holds, until the work returns. Long-running
+ * loops must poll the token.
  *
  * ## Lifecycle
+ *
+ * `State.result` and `State.last_error` below are members of the private
+ * `State` struct, reached as `state_->result` and `state_->last_error`. There
+ * are no `result_` or `last_error_` members.
+ *
+ * `cancelling` is conceptual, not stored. `request_cancel()` sets
+ * `state_->cancel_requested` while `state_->running` stays true, so the job
+ * reports itself running until the worker observes the flag and returns.
  *
  * ```mermaid
  * ---
@@ -56,24 +70,21 @@ namespace mo2server
  *     [*] --> idle
  *     idle --> running: try_start() returns true
  *     idle --> idle: try_start() returns false (already running)
- *     running --> idle: work() returns - result_ set
- *     running --> idle: work() throws - last_error_ set
- *     running --> cancelling: request_cancel()
- *     cancelling --> idle: work() observes token & exits
+ *     running --> idle: work() returns, State.result set
+ *     running --> idle: work() throws, State.last_error set
+ *     running --> cancelling: request_cancel() - still running, flag set
+ *     cancelling --> idle: work() observes the token and exits
  * ```
  *
  * ## Shutdown timing
  *
- * The destructor (and explicit `shutdown()`) bound the wait at the
- * grace period:
+ * The destructor, and an explicit `shutdown()`, bound the wait at the grace
+ * period:
  *
- * \f[
- *   t_{\mathit{shutdown}} \le \texttt{kShutdownGrace} = 10\,\text{s}
- * \f]
+ * $$t_{shutdown} \le \texttt{kShutdownGrace} = 10\,\text{s}$$
  *
- * If the worker exits within the grace, the thread is joined; if
- * not, the thread is detached and the worker continues running
- * with the heap-allocated `State` it captured by `shared_ptr`.
+ * Within the grace the thread is joined. Past it the thread is detached and the
+ * worker keeps running against the `State` it captured by `shared_ptr`.
  */
 template <typename TResult>
 class BackgroundJob
@@ -81,10 +92,9 @@ class BackgroundJob
     static_assert(std::is_move_constructible_v<TResult>,
                   "BackgroundJob requires TResult to be move-constructible");
 
-    // All worker-visible state lives in a heap-allocated struct held by a
-    // shared_ptr. The worker captures the shared_ptr by value, which keeps
-    // the state alive even after the BackgroundJob owner has been destroyed.
-    // This is what makes detach-on-shutdown safe.
+    // Every piece of state the worker touches. Held by shared_ptr and captured
+    // by value in the worker, so it survives the owning BackgroundJob. That is
+    // what makes detach-on-shutdown safe.
     struct State
     {
         std::atomic<bool> running{false};
@@ -114,20 +124,19 @@ public:
      * @brief Cooperatively shut down the running job and reap the thread.
      *
      * Sets the cancellation flag, waits up to @p grace for the worker to
-     * observe it and exit, then either joins (if exited cleanly) or
-     * detaches (if still running). Detaching is safe because the worker
-     * captures `state_` by value, so the State outlives `*this`.
+     * observe it and exit, then joins if it exited and detaches if it did not.
+     * Detaching is safe because the worker captures `state_` by value, so the
+     * State outlives `*this`.
      *
-     * Idempotent across **sequential** calls - subsequent invocations
-     * see `thread_.joinable() == false` and return immediately. The
-     * destructor calls this automatically.
+     * Idempotent across sequential calls: later invocations see
+     * `thread_.joinable() == false` and return at once. The destructor calls
+     * this automatically.
      *
-     * @warning Not safe to call concurrently from multiple threads on
-     *          the same BackgroundJob. The `state_->mutex` protects the
-     *          State, but `thread_` itself is not guarded; concurrent
-     *          shutdowns can race on `thread_.join()` /
-     *          `thread_.detach()`. Owners that need parallel shutdown
-     *          must serialize externally.
+     * @warning Not safe to call concurrently on the same BackgroundJob.
+     *          `state_->mutex` protects the State, but `thread_` is unguarded,
+     *          so concurrent shutdowns race on `thread_.join()` and
+     *          `thread_.detach()`. Owners that need parallel shutdown must
+     *          serialize externally.
      */
     void shutdown(std::chrono::milliseconds grace =
                       std::chrono::duration_cast<std::chrono::milliseconds>(kShutdownGrace))
@@ -147,15 +156,15 @@ public:
                 lock.unlock();
                 if (!finished)
                 {
-                    // The worker did not observe cancellation in time. Detach
-                    // and warn loudly. The State stays alive for as long as the
-                    // worker holds its shared_ptr; we just leak the std::thread
-                    // handle and any resources the work captures.
+                    // The worker missed the cancellation flag. Detach and warn.
+                    // The State stays alive while the worker holds its
+                    // shared_ptr; what leaks is the std::thread handle and
+                    // whatever the work captured.
                     //
                     // Route through Logger so a host that registered a callback
-                    // (e.g. the MO2 Python plugin) actually sees the warning.
-                    // Fall back to stderr if Logger throws - shutdown() must
-                    // not propagate exceptions from the destructor.
+                    // sees the warning. Fall back to stderr if Logger throws:
+                    // shutdown() runs from the destructor and must not
+                    // propagate.
                     try
                     {
                         mo2core::Logger::instance().log_warning(
@@ -186,22 +195,31 @@ public:
     /**
      * @brief Attempt to launch a background job.
      *
-     * Returns `false` if a job is already running (concurrent start rejected).
-     * The work function is called on a new thread; its return value is stored
-     * as the result. Exceptions are caught and stored as an error string.
-     * Work is invoked exactly once per `try_start`; the thread exits when
-     * `work` returns or throws.
+     * @p work runs once on a new thread; its return value becomes the result,
+     * and an exception from it becomes the stored error string. The thread
+     * exits when @p work returns or throws.
+     *
+     * A successful start first clears the previous result, error and
+     * cancellation flag, so the stored state always belongs to the newest run.
+     *
+     * **Blocking:** when a previous run has finished but its thread has not
+     * been reaped, this joins that thread before starting the new one. The wait
+     * is short, because the worker has already returned, but it is not zero.
      *
      * @param work Callable returning `TResult`. Invoked on the background thread.
      * @return `true` if the job was started, `false` if one is already running.
+     * @throw std::system_error when the OS cannot create the thread. The
+     *        running flag is reset to false before the exception propagates, so
+     *        a later try_start() can still succeed. Callers that treat this as
+     *        a plain bool need a catch.
      */
     bool try_start(std::function<TResult()> work)
     {
         std::unique_lock<std::mutex> lock(state_->mutex);
 
-        // Check-and-set under the same mutex that the thread lambda uses to
-        // clear running_.  This closes the race window where a previous
-        // thread's store(false) + notify could interleave with exchange(true).
+        // Check-and-set under the same mutex the worker lambda uses to clear
+        // state_->running. That closes the window where a previous worker's
+        // store(false) plus notify could interleave with an exchange(true).
         if (state_->running.load())
             return false;
         state_->running.store(true);
@@ -212,8 +230,8 @@ public:
 
         if (thread_.joinable())
         {
-            // Previous thread already completed (running was false to reach here).
-            // Unlock before join to avoid deadlock with the lambda.
+            // The previous worker has already returned; running was false to
+            // reach here. Unlock before join, or the lambda deadlocks on it.
             lock.unlock();
             thread_.join();
             lock.lock();
@@ -221,8 +239,8 @@ public:
 
         try
         {
-            // Capture state_ by value so the worker keeps the State alive
-            // even if `*this` is destroyed before the work completes.
+            // Capture state_ by value so the State survives if `*this` is
+            // destroyed before the work completes.
             thread_ = std::thread(
                 [state = state_, work = std::move(work)]()
                 {
@@ -260,16 +278,15 @@ public:
         return true;
     }
 
-    /** Check if the job is currently running (lock-free). */
+    /// Check if the job is currently running (lock-free, never blocks).
     [[nodiscard]] bool is_running() const { return state_->running.load(); }
 
     /**
      * @brief Request cooperative cancellation of the running job.
      *
-     * Sets the cancellation flag that work functions can poll via
-     * is_cancel_requested() or cancel_token(). This is a non-blocking,
-     * lock-free operation. The work function must check the flag
-     * periodically and exit voluntarily.
+     * Sets the flag that work functions poll via is_cancel_requested() or
+     * cancel_token(). Lock-free and non-blocking. Cancellation only takes
+     * effect if the work function checks the flag and returns.
      */
     void request_cancel() { state_->cancel_requested.store(true); }
 
@@ -281,30 +298,27 @@ public:
     [[nodiscard]] bool is_cancel_requested() const { return state_->cancel_requested.load(); }
 
     /**
-     * @brief Return a reference to the cancellation token for passing to work functions.
+     * @brief Return the cancellation token, for passing into a work function.
      *
-     * The returned reference is valid for the lifetime of the underlying
-     * shared State, which outlives `*this` if a worker is still running.
-     * Callers should not retain the reference past the BackgroundJob's
-     * lifetime; in practice only the worker itself uses this token.
+     * The reference stays valid for the lifetime of the shared State, which
+     * outlives `*this` when a worker is still running. Do not retain it beyond
+     * the BackgroundJob; in practice only the worker reads this token.
      */
     [[nodiscard]] const std::atomic<bool>& cancel_token() const { return state_->cancel_requested; }
 
     /**
      * @brief Read the job result under the mutex.
      *
-     * The callback receives `(has_result, result, error)` while the mutex
-     * is held, so the caller can safely inspect all fields. Returns
-     * whatever the callback returns.
+     * @p fn sees a consistent `(has_result, result, error)` triple because the
+     * mutex is held across the call. Returns whatever @p fn returns.
      *
      * @param fn Callable with signature `auto(bool has_result, const TResult* result, const
      * std::string& error)`. The pointer is null when `has_result` is false.
-     * @note The callback runs while the internal mutex is held. Do not call
-     *       any operation on this BackgroundJob that also takes the mutex
-     *       (`try_start`, `shutdown`, another `read_result`) - that would
-     *       deadlock. Lock-free operations (`request_cancel`,
-     *       `is_cancel_requested`, `is_running`, `cancel_token`) are safe to
-     *       call from inside the callback because they only touch atomics.
+     * @note @p fn runs with the internal mutex held, so it must not call
+     *       `try_start`, `shutdown` or another `read_result` on this
+     *       BackgroundJob: those take the same mutex and deadlock. The
+     *       atomic-only operations (`request_cancel`, `is_cancel_requested`,
+     *       `is_running`, `cancel_token`) are safe from inside it.
      */
     template <typename Fn>
     auto read_result(Fn&& fn) const
