@@ -1,3 +1,31 @@
+// Utils - the server half of salma's shared string, path and path-safety
+// helpers. The engine keeps its own copy in src/utils.rs; this file holds only
+// what mo2-server and salma-support use. Where the two screen the same value
+// they have to agree (see is_safe_mod_name below).
+//
+// Two path vocabularies live here. Do not mix them:
+//
+//   normalize_path / is_safe_destination / normalize_destination_for_join
+//     take mod-root-relative FOMOD destinations: lowercase strings with '/'
+//     separators. They never touch the filesystem. normalize_path is the single
+//     place where lowercasing, separator conversion, prefix and suffix
+//     stripping, slash collapsing and "." / ".." removal happen, in that order.
+//     Everything else here assumes it already ran.
+//
+//   is_inside / executable_directory / module_directory
+//     take real filesystem paths, touch the filesystem (weakly_canonical,
+//     GetModuleFileNameW) and preserve case.
+//
+// Case convention: normalize_path lowercases, which is right on Windows and is
+// what the FOMOD comparison layer expects. is_inside compares weakly_canonical
+// results without lowercasing, because the Windows filesystem is already
+// case-insensitive.
+//
+// Failure convention: nothing here throws to reject input. The path-safety
+// predicates return false when they cannot prove the input safe, and the
+// directory lookups fall back to the current working directory when the
+// platform call fails. Allocation failure still propagates.
+
 #include "Utils.hpp"
 
 #include <algorithm>
@@ -17,9 +45,18 @@ namespace mo2core
 namespace
 {
 
-// Resolve the parent directory of the file backing @p hMod. Pass nullptr
-// to query the host executable. Returns an empty path on lookup failure;
-// callers fall back to cwd.
+// Resolve the parent directory of the file backing `hMod`. Pass nullptr to
+// query the host executable. Returns an empty path on lookup failure, and
+// callers then fall back to the working directory.
+//
+// GetModuleFileNameW does not report the size it needs: on truncation it
+// returns the buffer length it just filled. The buffer therefore starts at
+// MAX_PATH and doubles while the API keeps filling it exactly, capped at 5
+// retries (260 * 32 = 8320 wide chars) so the loop is bounded.
+//
+// The success test is `retries < kMaxRetries`, so a path that first fits on the
+// fifth doubling is discarded along with one that never fits. Both return an
+// empty path.
 std::filesystem::path module_path_for(HMODULE hMod)
 {
     std::wstring buf(MAX_PATH, L'\0');
@@ -107,7 +144,17 @@ std::string normalize_path(const std::string& p)
 std::string random_hex_string(size_t length)
 {
     static const char hex[] = "0123456789abcdef";
-    // thread_local avoids contention when multiple threads extract concurrently
+    // Two callers in this binary: MultipartHandler::save_uploaded_file, for the
+    // upload temp filename, and SecurityContext, for the 64-hex-char CSRF
+    // token. Uploads run on Crow worker threads and can overlap, so one shared
+    // engine would need a lock and would serialize them. thread_local gives
+    // each worker its own engine, seeded once per thread from std::random_device.
+    //
+    // mt19937 is a general-purpose generator, not a cryptographic one: given
+    // enough consecutive output an observer can recover its state and predict
+    // the rest. Neither caller hands a remote party a sequence of values, so
+    // nothing here depends on unpredictability. Do not reuse this function for
+    // a secret an attacker can sample repeatedly.
     thread_local std::mt19937 rng{std::random_device{}()};
     std::uniform_int_distribution<int> dist(0, 15);
 
@@ -171,11 +218,19 @@ bool is_safe_destination(const std::string& dest)
     if (dest.empty())
         return true;
     auto norm = normalize_path(dest);
-    // normalize_path strips every "." and ".." segment, so path-traversal
-    // sequences cannot survive into `norm`. A non-empty input that consists
-    // solely of those segments normalizes to empty, which is also safe (it
-    // resolves to the mod root). The remaining guard rejects absolute paths
-    // ("/etc/passwd") and Windows drive letters ("C:/...").
+    // normalize_path strips every "." and ".." segment, so no traversal
+    // sequence survives into `norm`. An input made only of those segments
+    // normalizes to empty, which is safe: it resolves to the mod root.
+    //
+    // Only the drive-letter test is live. normalize_path also strips every
+    // leading '/', so `norm.front() == '/'` is never true and an absolute POSIX
+    // path is re-anchored under the mod root rather than rejected:
+    // is_safe_destination("/etc/passwd") returns true, having seen
+    // "etc/passwd". That is intended. FOMOD destinations are mod-root-relative,
+    // and normalize_destination_for_join strips leading separators again before
+    // any join, so a re-anchored path cannot escape the mod directory. The '/'
+    // disjunct stays as a guard in case normalize_path ever stops stripping the
+    // prefix.
     if (norm.empty())
         return true;
     if (norm.front() == '/' || (norm.size() >= 2 && norm[1] == ':'))
@@ -211,9 +266,15 @@ bool is_safe_mod_name(const std::string& name)
     if (name.back() == '.')
         return false;
 
-    // Reject Windows reserved device names. Compare against the lowercase
-    // stem (everything before the final '.') so "CON", "con", and "CON.txt"
-    // are all rejected. Mirrors the list in InstallationService.cpp.
+    // Reject Windows reserved device names. Compare against the lowercase stem
+    // (everything before the final '.'), so "CON", "con" and "CON.txt" are all
+    // rejected.
+    //
+    // Keep this list identical to `RESERVED_NAMES` in
+    // src/installation_service.rs (22 entries), which the engine applies to
+    // moduleName. The server screens modName first and the engine re-validates,
+    // so a name missing here is still rejected, but as an engine error instead
+    // of the 400 the dashboard expects.
     static const std::unordered_set<std::string> kReservedNames = {
         "con",  "prn",  "aux",  "nul",  "com1", "com2", "com3", "com4", "com5", "com6", "com7",
         "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
