@@ -4,6 +4,24 @@
 
 #include <algorithm>
 
+// Unit tests for the CORS and CSRF policy primitives in src/SecurityContext.cpp.
+//
+// SecurityMiddleware makes the decisions, but the predicates behind them live in
+// salma-support so they can be tested without linking Crow. The rules pinned
+// here are the ones the middleware depends on:
+//   - the allowlist match is byte-exact, so scheme, host case and port all have
+//     to agree, and an empty Origin never matches;
+//   - only POST, PUT, DELETE and PATCH count as state-changing, so an unknown
+//     method is treated as safe and skips the CSRF check;
+//   - constant_time_equals is binary-safe and, on two inputs of equal length,
+//     compares every byte with no early exit, so a token comparison cannot leak
+//     which byte differed. It does return early on a length mismatch, which
+//     reveals the length and nothing else.
+//
+// The singleton tests have to tolerate SALMA_ALLOWED_ORIGINS being set in the
+// environment: it is read once at construction and replaces the defaults, and
+// the singleton cannot be reset. No test may assume the defaults are in force.
+
 // --- default_allowed_origins ---
 
 TEST(DefaultAllowedOrigins, IncludesProductionAndViteOrigins)
@@ -64,8 +82,8 @@ TEST(OriginInAllowlist, MatchesExact)
 
 TEST(OriginInAllowlist, RejectsCaseMismatch)
 {
-    // Browsers send Origin lowercase per spec. Allowlist comparison is exact;
-    // a mixed-case Origin must not match a lowercase allowlist entry.
+    // Browsers send Origin lowercase, and the comparison is byte-exact, so a
+    // mixed-case Origin must not match a lowercase allowlist entry.
     std::vector<std::string> allow{"http://localhost:5000"};
     EXPECT_FALSE(mo2core::origin_in_allowlist(allow, "http://LocalHost:5000"));
 }
@@ -171,8 +189,8 @@ TEST(SecurityContextSingleton, TokenIs64HexChars)
 TEST(SecurityContextSingleton, IsOriginAllowedDelegates)
 {
     auto& ctx = mo2core::SecurityContext::instance();
-    // The default singleton has the four default origins (assuming
-    // SALMA_ALLOWED_ORIGINS is not set in the test environment).
+    // With SALMA_ALLOWED_ORIGINS unset, the singleton carries the four
+    // defaults and the exact expectations below hold.
     if (ctx.allowed_origins() == mo2core::default_allowed_origins())
     {
         EXPECT_TRUE(ctx.is_origin_allowed("http://localhost:5000"));
@@ -181,8 +199,8 @@ TEST(SecurityContextSingleton, IsOriginAllowedDelegates)
     }
     else
     {
-        // SALMA_ALLOWED_ORIGINS overrode defaults; just verify the
-        // delegation path against whatever is loaded.
+        // The environment replaced the defaults, so check only that the
+        // delegation works against whatever was loaded.
         for (const auto& origin : ctx.allowed_origins())
         {
             EXPECT_TRUE(ctx.is_origin_allowed(origin));
