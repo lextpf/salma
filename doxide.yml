@@ -2,8 +2,17 @@
 # https://doxide.org
 
 title: salma
-description: C++ FOMOD installer, processor, and inference engine
+description: Crow HTTP server and support library behind the salma dashboard
 
+# This config covers the C++ ONLY: the Crow server and the salma-support static
+# library. The engine is Rust and documents itself through rustdoc, which
+# build.bat step 7 renders into site/rust/. Do not add engine groups here; there
+# is no C++ engine left to attach them to.
+#
+# Every group below MUST have at least one `@ingroup <Name>` in src/*.{hpp,cpp}.
+# Twelve groups describing the deleted C++ engine were removed for exactly that
+# reason: they had outlived their code and doxide silently generated nothing for
+# them, while mkdocs.yml's nav went on pointing at the pages that never appeared.
 output: docs
 
 defines:
@@ -16,45 +25,17 @@ files:
 groups:
   - name: Core
     title: ":material-cube: Core"
-    description: Foundation types, logging, archive extraction, and file operations.
+    description: Logging and shared support types linked into the server.
     groups:
       - name: Logger
         title: Logger
         description: Thread-safe logging with external callback support.
-      - name: ArchiveService
-        title: ArchiveService
-        description: Archive extraction via libarchive and bit7z.
-      - name: FileOperations
-        title: FileOperations
-        description: Queued file copy/move operations with priority sorting.
-      - name: ModStructureDetector
-        title: ModStructureDetector
-        description: Detects candidate content roots inside archives.
-
-  - name: FOMOD
-    title: ":material-package-variant: FOMOD"
-    description: FOMOD processing, dependency evaluation, and selection inference.
-    groups:
-      - name: FomodService
-        title: FomodService
-        description: Core FOMOD processing and plugin flag evaluation.
-      - name: FomodDependencyEvaluator
-        title: FomodDependencyEvaluator
-        description: Evaluates FOMOD dependency conditions.
-      - name: FomodInferenceService
-        title: FomodInferenceService
-        description: Infers FOMOD selections from previously installed files.
-
-  - name: Installation
-    title: ":material-download: Installation"
-    description: Top-level installation orchestration and C API.
-    groups:
-      - name: InstallationService
-        title: InstallationService
-        description: FOMOD install/replay orchestrator with a simple non-FOMOD copy fallback.
-      - name: CApi
-        title: CApi
-        description: C-linkage API for external consumers (DLL exports).
+      - name: Utils
+        title: Utils
+        description: Shared string, path, hashing, and path-safety helpers.
+      - name: SecurityContext
+        title: SecurityContext
+        description: Per-process CSRF token and the Origin allowlist.
 
   - name: Server
     title: ":material-server: Server"
@@ -75,3 +56,9 @@ groups:
       - name: Mo2Controller
         title: Mo2Controller
         description: REST endpoints for MO2 integration dashboard.
+      - name: SecurityMiddleware
+        title: SecurityMiddleware
+        description: Crow middleware enforcing the Origin allowlist and CSRF header.
+      - name: Mo2Helpers
+        title: Mo2Helpers
+        description: Shared response, decoding, and path helpers for the MO2 controllers.
