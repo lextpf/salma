@@ -6,6 +6,11 @@
 #include <filesystem>
 #include <format>
 
+// Mo2Helpers - the two plugin-path helpers that need a translation unit.
+// json_response and url_decode are inline in the header, which also carries the
+// full contracts, including the resolution order and worked example for
+// resolve_deploy_path. Neither function here creates or validates a directory.
+
 namespace mo2server
 {
 
