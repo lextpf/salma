@@ -1,9 +1,9 @@
 #pragma once
 
-#include "Export.h"
-#include "FomodAtom.h"
-#include "FomodIR.h"
-#include "Types.h"
+#include "Export.hpp"
+#include "FomodAtom.hpp"
+#include "FomodIR.hpp"
+#include "Types.hpp"
 
 #include <string>
 #include <unordered_map>
