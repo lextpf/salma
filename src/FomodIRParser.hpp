@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Export.h"
-#include "FomodIR.h"
+#include "Export.hpp"
+#include "FomodIR.hpp"
 
 #include <pugixml.hpp>
 #include <string>
@@ -54,7 +54,7 @@ public:
      * @throw Does not throw. Malformed or unknown XML elements are logged and skipped.
      *        Excessively deep condition trees are truncated to prevent stack overflow;
      *        the truncation depth matches `FomodDependencyEvaluator::MAX_DEPENDENCY_DEPTH = 32`.
-     * @see mo2core::MAX_DEPENDENCY_DEPTH (declared in `FomodDependencyEvaluator.h`).
+     * @see mo2core::MAX_DEPENDENCY_DEPTH (declared in `FomodDependencyEvaluator.hpp`).
      */
     static MO2_API FomodInstaller parse(const pugi::xml_document& doc,
                                         const std::string& archive_prefix);

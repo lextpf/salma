@@ -1,7 +1,7 @@
-#include "FomodIRParser.h"
-#include "FomodDependencyEvaluator.h"
-#include "Logger.h"
-#include "Utils.h"
+#include "FomodIRParser.hpp"
+#include "FomodDependencyEvaluator.hpp"
+#include "Logger.hpp"
+#include "Utils.hpp"
 
 #include <concepts>
 #include <format>
