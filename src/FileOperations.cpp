@@ -1,9 +1,9 @@
-#include "FileOperations.h"
+#include "FileOperations.hpp"
 #include <algorithm>
 #include <atomic>
 #include <format>
 #include <system_error>
-#include "Logger.h"
+#include "Logger.hpp"
 
 namespace fs = std::filesystem;
 

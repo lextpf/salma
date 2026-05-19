@@ -2,7 +2,7 @@
 
 #include <filesystem>
 #include <vector>
-#include "Types.h"
+#include "Types.hpp"
 
 namespace mo2core
 {
