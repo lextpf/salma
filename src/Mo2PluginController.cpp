@@ -1,9 +1,9 @@
-#include "Mo2Controller.h"
-#include "Mo2Helpers.h"
+#include "Mo2Controller.hpp"
+#include "Mo2Helpers.hpp"
 
-#include "ConfigService.h"
-#include "Logger.h"
-#include "Utils.h"
+#include "ConfigService.hpp"
+#include "Logger.hpp"
+#include "Utils.hpp"
 
 #include <cstdlib>
 #include <cstring>
