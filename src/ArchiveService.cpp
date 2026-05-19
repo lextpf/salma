@@ -1,6 +1,6 @@
-#include "ArchiveService.h"
-#include "Logger.h"
-#include "Utils.h"
+#include "ArchiveService.hpp"
+#include "Logger.hpp"
+#include "Utils.hpp"
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -99,8 +99,15 @@ static void validate_bit7z_extraction(const fs::path& destination, mo2core::Logg
             to_remove.push_back(entry.path());
         }
     }
-    // Sort by descending path length so deepest entries are removed first,
-    // preventing remove_all on a parent from invalidating child entries.
+    // Sort by descending path length so deepest entries are removed first.
+    // If a parent and one of its children both appear in to_remove, removing
+    // the parent first invalidates the child path: a subsequent remove_all on
+    // the child silently no-ops on Windows but produces an error_code on
+    // POSIX. Length-descending sort guarantees the child is gone before the
+    // parent is touched. Note: this is a heuristic ordering, not a full
+    // ancestor sort - it relies on the fact that any ancestor of P is a
+    // strict prefix of P, so it is shorter, so it is sorted later.
+    // @Codex
     std::sort(to_remove.begin(),
               to_remove.end(),
               [](const fs::path& a, const fs::path& b)
@@ -281,7 +288,18 @@ void ArchiveService::extract_with_libarchive(const std::string& archive_path,
         // Rewrite entry path to place output under destination directory
         fs::path full_output = fs::path(destination_path) / archive_entry_pathname(entry);
 
-        // Path traversal guard: reject entries that escape the destination directory
+        // Path-traversal guard. Two failure modes are rejected together:
+        //   1. lexically_relative() returns an empty path when no relation can
+        //      be expressed (e.g. different roots: dest is C:\... but the entry
+        //      resolved to D:\... via an absolute path inside the archive).
+        //   2. A relative path starting with ".." means the resolved entry sits
+        //      OUTSIDE canonical_dest after symlink/`..` collapsing. This catches
+        //      both classic "../../etc/passwd" patterns AND the sibling-prefix
+        //      trick where dest is "extract/" and the entry resolves into
+        //      "extract-bad/payload" - lexically_relative gives "../extract-bad/...".
+        // weakly_canonical is used (not canonical) so the guard works for paths
+        // whose final segment does not yet exist on disk.
+        // @Codex
         auto canonical_output = fs::weakly_canonical(full_output);
         auto rel = canonical_output.lexically_relative(canonical_dest);
         if (rel.empty() || rel.string().starts_with(".."))
