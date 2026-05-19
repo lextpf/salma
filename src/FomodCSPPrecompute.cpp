@@ -1,6 +1,6 @@
-#include "FomodCSPPrecompute.h"
+#include "FomodCSPPrecompute.hpp"
 
-#include "FomodDependencyEvaluator.h"
+#include "FomodDependencyEvaluator.hpp"
 
 #include <algorithm>
 #include <queue>
