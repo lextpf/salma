@@ -1,14 +1,14 @@
 #include <gtest/gtest.h>
 #include <pugixml.hpp>
 
-#include "FomodAtom.h"
-#include "FomodCSPSolver.h"
-#include "FomodDependencyEvaluator.h"
-#include "FomodForwardSimulator.h"
-#include "FomodIR.h"
-#include "FomodInferenceService.h"
-#include "FomodIRParser.h"
-#include "FomodPropagator.h"
+#include "FomodAtom.hpp"
+#include "FomodCSPSolver.hpp"
+#include "FomodDependencyEvaluator.hpp"
+#include "FomodForwardSimulator.hpp"
+#include "FomodInferenceService.hpp"
+#include "FomodIR.hpp"
+#include "FomodIRParser.hpp"
+#include "FomodPropagator.hpp"
 
 using namespace mo2core;
 
@@ -380,13 +380,13 @@ TEST(FomodInference, DomainWidening_RespectsEvidence)
     ASSERT_TRUE(result.fully_resolved);
 
     const auto& domain = result.narrowed_domains[0][0];
-    EXPECT_TRUE(domain[0]);    // Usable
-    EXPECT_FALSE(domain[1]);   // NotUsable1
-    EXPECT_FALSE(domain[2]);   // NotUsable2
+    EXPECT_TRUE(domain[0]);   // Usable
+    EXPECT_FALSE(domain[1]);  // NotUsable1
+    EXPECT_FALSE(domain[2]);  // NotUsable2
 
     // CSP solver should also respect this: with ForceTrue, it should not widen.
-    auto solver_result = solve_fomod_csp(installer, atoms, atom_index, target, excluded,
-                                          &overrides, &result);
+    auto solver_result =
+        solve_fomod_csp(installer, atoms, atom_index, target, excluded, &overrides, &result);
     // Only the usable plugin should be selected.
     ASSERT_EQ(solver_result.selections.size(), 1u);
     ASSERT_EQ(solver_result.selections[0].size(), 1u);
@@ -673,7 +673,8 @@ TEST(FomodInference, Overrides_DuplicateNameStepsLeaveUnknown)
     // Two atoms per step, all sharing the same dest set.
     ExpandedAtoms atoms;
     atoms.per_plugin.resize(2);
-    auto make_atom = [](const std::string& src, const std::string& dst, int doc) {
+    auto make_atom = [](const std::string& src, const std::string& dst, int doc)
+    {
         FomodAtom a;
         a.source_path = src;
         a.dest_path = dst;
