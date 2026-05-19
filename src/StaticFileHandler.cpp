@@ -1,6 +1,6 @@
-#include "StaticFileHandler.h"
+#include "StaticFileHandler.hpp"
 #include <filesystem>
-#include "Utils.h"
+#include "Utils.hpp"
 
 namespace fs = std::filesystem;
 
