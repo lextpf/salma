@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Types.h"
-#include "Utils.h"
+#include "Types.hpp"
+#include "Utils.hpp"
 
 #include <optional>
 #include <string>
