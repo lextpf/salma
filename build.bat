@@ -1,14 +1,14 @@
 @echo off
-REM ============================================================================
+REM ===========================================================================================
 REM build.bat - Complete build pipeline for salma
-REM ============================================================================
+REM ===========================================================================================
 REM This script:
-REM   1. Runs clang-format on source files
-REM   2. Configures the project using CMake with the default preset
-REM   3. Builds the Release configuration
-REM   4. Generates documentation with doxide (if available)
-REM   5. Builds the documentation site with mkdocs (if available)
-REM ============================================================================
+REM   1. clang-format - in-place formatting of src/*.cpp / src/*.hpp / tests/*.cpp
+REM   2. cmake        - CMake configure with vcpkg manifest install and VS 17 2022 generator
+REM   3. clang-tidy   - static analysis (sequential; fails the build on any reported issue)
+REM   4. build        - release build of the Release configuration via cmake --build
+REM   5. doxide       - API documentation generation via doxide + mkdocs build
+REM ===========================================================================================
 
 setlocal enabledelayedexpansion
 
@@ -27,7 +27,7 @@ where clang-format >nul 2>&1
 if errorlevel 1 (
     echo SKIP: clang-format not found in PATH
 ) else (
-    for %%f in (src\*.cpp src\*.h src\*.hpp src\*.c) do (
+    for %%f in (src\*.cpp src\*.hpp tests\*.cpp) do (
         if exist "%%f" clang-format -i "%%f"
     )
     echo Formatting complete.
@@ -47,9 +47,42 @@ if %ERRORLEVEL% neq 0 (
 echo.
 
 REM ============================================================================
-REM STEP 3: Build Release
+REM STEP 3: Run clang-tidy
 REM ============================================================================
-echo [3/5] Building Release...
+echo [3/5] Running clang-tidy...
+echo ----------------------------------------------------------------------------
+
+where clang-tidy >nul 2>&1
+if errorlevel 1 (
+    echo SKIP: clang-tidy not found in PATH
+) else (
+    if not exist "build-cdb\compile_commands.json" (
+        echo   Generating compile_commands.json via Ninja sidecar...
+        cmake --preset compile-db >nul
+        if !ERRORLEVEL! neq 0 (
+            echo ERROR: compile-db configure failed
+            exit /b 1
+        )
+    )
+
+    for %%f in (src\*.cpp tests\*.cpp) do (
+        if exist "%%f" (
+            echo   tidy: %%f
+            clang-tidy --quiet --header-filter="[/\\]%%~nf\.hpp$" -p build-cdb "%%f"
+            if !ERRORLEVEL! neq 0 (
+                echo ERROR: clang-tidy reported issues in %%f
+                exit /b 1
+            )
+        )
+    )
+    echo clang-tidy complete.
+)
+echo.
+
+REM ============================================================================
+REM STEP 4: Build Release
+REM ============================================================================
+echo [4/5] Building Release...
 echo ----------------------------------------------------------------------------
 cmake --build build --config Release
 if %ERRORLEVEL% neq 0 (
@@ -59,37 +92,39 @@ if %ERRORLEVEL% neq 0 (
 echo.
 
 REM ============================================================================
-REM STEP 4: Generate API Documentation (doxide)
+REM STEP 5: Generate Documentation (doxide + mkdocs)
 REM ============================================================================
-echo [4/5] Generating API documentation...
+echo [5/5] Generating documentation...
 echo ----------------------------------------------------------------------------
 where doxide >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo SKIP: doxide not found in PATH
 ) else (
     doxide build
-    if %ERRORLEVEL% neq 0 (
-        echo ERROR: Doxide failed
-        exit /b %ERRORLEVEL%
+    if !ERRORLEVEL! neq 0 (
+        echo ERROR: doxide build failed [exit code !ERRORLEVEL!]
+        exit /b 1
     )
     python scripts/_promote_subgroups.py
+    if !ERRORLEVEL! neq 0 (
+        echo ERROR: _promote_subgroups.py failed [exit code !ERRORLEVEL!]
+        exit /b 1
+    )
     python scripts/_clean_docs.py
+    if !ERRORLEVEL! neq 0 (
+        echo ERROR: _clean_docs.py failed [exit code !ERRORLEVEL!]
+        exit /b 1
+    )
 )
-echo.
 
-REM ============================================================================
-REM STEP 5: Build Documentation Site (mkdocs)
-REM ============================================================================
-echo [5/5] Building documentation site...
-echo ----------------------------------------------------------------------------
 where mkdocs >nul 2>&1
 if %ERRORLEVEL% neq 0 (
     echo SKIP: mkdocs not found in PATH
 ) else (
     mkdocs build
-    if %ERRORLEVEL% neq 0 (
-        echo ERROR: MkDocs failed
-        exit /b %ERRORLEVEL%
+    if !ERRORLEVEL! neq 0 (
+        echo ERROR: mkdocs build failed [exit code !ERRORLEVEL!]
+        exit /b 1
     )
 )
 echo.
