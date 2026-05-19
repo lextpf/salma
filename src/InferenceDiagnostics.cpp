@@ -1,6 +1,6 @@
-#include "InferenceDiagnostics.h"
+#include "InferenceDiagnostics.hpp"
 
-#include "Logger.h"
+#include "Logger.hpp"
 
 #include <algorithm>
 #include <format>
