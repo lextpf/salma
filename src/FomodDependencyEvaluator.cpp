@@ -1,11 +1,11 @@
-#include "FomodDependencyEvaluator.h"
+#include "FomodDependencyEvaluator.hpp"
 #include <algorithm>
 #include <concepts>
 #include <filesystem>
 #include <format>
 #include <sstream>
-#include "Logger.h"
-#include "Utils.h"
+#include "Logger.hpp"
+#include "Utils.hpp"
 
 using namespace std::string_view_literals;
 
@@ -16,6 +16,12 @@ namespace fs = std::filesystem;
 // and the FomodDependencyEvaluator class methods).
 // ---------------------------------------------------------------------------
 
+// Lex-order comparison of two integer version vectors with shorter-pads-zero
+// semantics: "1.2" compares EQUAL to "1.2.0", and "1.2" compares LESS than
+// "1.2.1". The pad-zero convention is what the FOMOD spec implies but never
+// states - this matches the behaviour of the reference NMM/Vortex parsers
+// for the gameDependency / fommDependency checks.
+// @Codex
 static int compare_version_parts(const std::vector<int>& x, const std::vector<int>& y)
 {
     for (size_t i = 0; i < std::max(x.size(), y.size()); ++i)
@@ -30,6 +36,16 @@ static int compare_version_parts(const std::vector<int>& x, const std::vector<in
     return 0;
 }
 
+// Parse a FOMOD version string into an integer vector. The grammar in the
+// wild is dirty - we routinely see "v1.2.3", "1.2.3-beta", "1.2.3b", and
+// build-numbered strings like "1.2.3.99 (custom)". The strip-then-split
+// approach below keeps the digits/dots, drops everything else, and tail-pads
+// to length 3 so compare_version_parts above never operates on a 1- or
+// 2-component vector. A token that survives the strip but still fails
+// std::stoi (e.g. consecutive dots producing "") is logged once and treated
+// as zero rather than aborting evaluation - dependency checks are advisory
+// hints, not hard contracts, and the dashboard prefers a soft mismatch over
+// a refused install.
 static std::vector<int> parse_version_parts(const std::string& version_string)
 {
     std::vector<int> parts;
