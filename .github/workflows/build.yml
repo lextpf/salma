@@ -18,11 +18,12 @@ jobs:
 
       - name: Check formatting (clang-format)
         run: |
-          foreach ($ext in @("*.cpp", "*.h", "*.hpp", "*.c")) {
-            Get-ChildItem -Path src -Filter $ext -ErrorAction SilentlyContinue | ForEach-Object {
-              Write-Host "Formatting $($_.FullName)"
-              clang-format -i $_.FullName
-            }
+          $targets = @()
+          $targets += Get-ChildItem -Path src   -Include *.cpp,*.hpp -Recurse -File -ErrorAction SilentlyContinue
+          $targets += Get-ChildItem -Path tests -Include *.cpp,*.hpp -Recurse -File -ErrorAction SilentlyContinue
+          foreach ($f in $targets) {
+            Write-Host "Formatting $($f.FullName)"
+            clang-format -i $f.FullName
           }
           $diff = git diff --name-only
           if ($diff) {
@@ -65,11 +66,11 @@ jobs:
         shell: pwsh
 
       - name: Configure
-        run: cmake --preset default -DSALMA_7Z_DLL="$env:SALMA_7Z_DLL"
+        run: cmake --preset ci-release -DSALMA_7Z_DLL="$env:SALMA_7Z_DLL"
         shell: pwsh
 
       - name: Build
-        run: cmake --build build --config Release
+        run: cmake --build --preset ci-release
 
       - name: Package
         run: |
@@ -78,8 +79,39 @@ jobs:
           cpack -G ZIP -C Release
         shell: pwsh
 
-      - name: Upload build artifacts
+      # Surface the produced binaries directly so reviewers can grab the DLL
+      # or server EXE without unpacking the release zip. Uses absolute paths
+      # so the artifact archive is flat (one file per entry, no nested
+      # build/bin/Release/ directory).
+      - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
-          name: salma-mo2
+          name: salma-mo2-binaries
+          path: |
+            build/bin/Release/mo2-salma.dll
+            build/bin/Release/mo2-server.exe
+            build/bin/Release/salma_tests.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      # Debug symbols are nice to have for crash-dump triage but get expensive
+      # to retain long-term. Keep them, but with a shorter retention.
+      - name: Upload debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: salma-mo2-pdb
+          path: |
+            build/bin/Release/mo2-salma.pdb
+            build/bin/Release/mo2-server.pdb
+          if-no-files-found: warn
+          retention-days: 7
+
+      # The release bundle is the packaging output (cpack ZIP). Kept separate
+      # from the raw binaries so consumers can pick whichever they need.
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: salma-mo2-release-bundle
           path: build/salma-mo2-*.zip
+          if-no-files-found: error
+          retention-days: 30
