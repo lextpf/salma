@@ -1,11 +1,11 @@
 #pragma once
 
-#include "ArchiveService.h"
-#include "Export.h"
-#include "FomodAtom.h"
-#include "FomodCSPSolver.h"
-#include "FomodIR.h"
-#include "FomodPropagator.h"
+#include "ArchiveService.hpp"
+#include "Export.hpp"
+#include "FomodAtom.hpp"
+#include "FomodCSPSolver.hpp"
+#include "FomodIR.hpp"
+#include "FomodPropagator.hpp"
 
 #include <cstdint>
 #include <filesystem>

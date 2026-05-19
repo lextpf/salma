@@ -1,15 +1,15 @@
-#include "FomodInferenceService.h"
-#include "ArchiveService.h"
-#include "FomodAtom.h"
-#include "FomodCSPSolver.h"
-#include "FomodForwardSimulator.h"
-#include "FomodInferenceAtoms.h"
-#include "FomodIR.h"
-#include "FomodIRParser.h"
-#include "FomodPropagator.h"
-#include "InferenceDiagnostics.h"
-#include "Logger.h"
-#include "Utils.h"
+#include "FomodInferenceService.hpp"
+#include "ArchiveService.hpp"
+#include "FomodAtom.hpp"
+#include "FomodCSPSolver.hpp"
+#include "FomodForwardSimulator.hpp"
+#include "FomodInferenceAtoms.hpp"
+#include "FomodIR.hpp"
+#include "FomodIRParser.hpp"
+#include "FomodPropagator.hpp"
+#include "InferenceDiagnostics.hpp"
+#include "Logger.hpp"
+#include "Utils.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -403,9 +403,28 @@ void FomodInferenceService::hash_contested_files(TargetTree& target,
 {
     auto& logger = Logger::instance();
 
-    // Prevent unbounded memory growth in long-running server processes.
-    // Both the size check and clear are under the same lock to avoid
-    // a race where two threads both pass the check and both clear.
+    // Bounded hash cache: prevent unbounded memory growth in long-running
+    // server processes (mo2-server.exe runs for as long as the dashboard
+    // is open and can field thousands of inference calls).
+    //
+    // Why clear-all instead of LRU? Three reasons:
+    //   1. Archive entries are keyed by archive signature + entry path, so
+    //      reuse is dominated by repeated inference against the SAME archive
+    //      (e.g. user toggles options in the dashboard). An LRU would evict
+    //      cold entries, but the working set during a single dashboard
+    //      session is usually small enough that the cap is never hit unless
+    //      the user actually rotates through many archives - at which point
+    //      the old entries truly are useless.
+    //   2. LRU bookkeeping costs an extra list + hash, doubling the per-entry
+    //      footprint we are trying to bound.
+    //   3. Clear-all is O(N) and amortizes to O(1) per cached hash, with no
+    //      per-lookup overhead. The cache is a soft accelerator, not a
+    //      correctness invariant - cold restarts simply re-extract entries.
+    //
+    // Both the size check and clear are under the same lock so two threads
+    // cannot both pass the check and then both clear, doubling the work and
+    // losing entries that were inserted between the check and the lock.
+    // @Claude
     {
         std::lock_guard<std::mutex> guard(cache_mutex_);
         if (archive_entry_hash_cache_.size() > kMaxCacheEntries)
