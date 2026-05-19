@@ -1,7 +1,7 @@
-#include "FomodPropagator.h"
-#include "FomodDependencyEvaluator.h"
-#include "InferenceDiagnostics.h"
-#include "Logger.h"
+#include "FomodPropagator.hpp"
+#include "FomodDependencyEvaluator.hpp"
+#include "InferenceDiagnostics.hpp"
+#include "Logger.hpp"
 
 #include <algorithm>
 #include <cassert>
