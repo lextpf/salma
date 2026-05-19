@@ -1,6 +1,6 @@
-#include "ModStructureDetector.h"
+#include "ModStructureDetector.hpp"
 #include <format>
-#include "Logger.h"
+#include "Logger.hpp"
 
 namespace fs = std::filesystem;
 
