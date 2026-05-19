@@ -5,7 +5,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
-#include "Export.h"
+#include "Export.hpp"
 
 namespace mo2core
 {

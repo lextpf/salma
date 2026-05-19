@@ -1,5 +1,5 @@
-#include "Logger.h"
-#include "Utils.h"
+#include "Logger.hpp"
+#include "Utils.hpp"
 
 #include <chrono>
 #include <filesystem>
@@ -304,7 +304,17 @@ void Logger::rotate_if_needed()
         }
     }
 
-    // Rotate current log to .1
+    // Rotate current log to .1.
+    //
+    // On Windows, fs::rename of an open file fails with ERROR_SHARING_VIOLATION;
+    // the caller already closed log_file_ above, but the file can still be
+    // pinned by an antivirus scanner, a tail-style log viewer, or a transient
+    // explorer.exe handle. When that happens we DO NOT clear bytes_written_ -
+    // the existing file is reopened in append mode and continues to grow past
+    // kMaxLogSize. That is preferable to losing log entries by skipping the
+    // write, and the next successful rotation will catch up. The rename error
+    // is reported to stderr so the operator can investigate.
+    // @Claude
     {
         std::error_code ec;
         fs::rename(log_dir / "salma.log", log_dir / "salma.log.1", ec);
