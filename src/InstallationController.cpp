@@ -1,9 +1,9 @@
-#include "InstallationController.h"
-#include "ConfigService.h"
-#include "InstallationService.h"
-#include "Logger.h"
-#include "MultipartHandler.h"
-#include "Utils.h"
+#include "InstallationController.hpp"
+#include "ConfigService.hpp"
+#include "InstallationService.hpp"
+#include "Logger.hpp"
+#include "MultipartHandler.hpp"
+#include "Utils.hpp"
 
 #include <algorithm>
 #include <filesystem>
