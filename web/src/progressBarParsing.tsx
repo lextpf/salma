@@ -1,21 +1,39 @@
 import React from 'react'
 import { highlightLog } from './logHighlight'
 
+/** A rendered tqdm bar anywhere in the line, such as ` 42%|===>......|`. */
 const PROGRESS_BAR_RE = /\d+%\|[=>.]+\|/
 
+/**
+ * True for a line whose content is a progress bar.
+ *
+ * The Logs stream drops these from the record list and the docked footer shows
+ * them as real bars instead, so a line counted here must not also be parsed as
+ * a log record.
+ */
 export function isProgressLine(line: string): boolean {
   return PROGRESS_BAR_RE.test(line)
 }
 
 export interface TqdmBar {
+  /** Producer: 'solver', 'scan' or 'test'. Rendered as the phase label. */
   tag: string
+  /** The solver's tqdm line, carried through unparsed. Absent for scan and test. */
   rawBar?: string
   current?: number
   total?: number
+  /** The item being worked on, for scan and test bars. */
   detail?: string
+  /** Seconds from the [1/N] line to the newest matched line. */
   elapsedS?: number
 }
 
+/**
+ * Seconds since midnight for a line's timestamp, or null when it has none.
+ *
+ * The date part is matched but discarded, so this is a time of day and not an
+ * instant: a run that crosses midnight produces a negative elapsed time.
+ */
 export function parseLineTimestamp(line: string): number | null {
   const m = line.match(/(?:\d{4}-\d{2}-\d{2}[\sT])?(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/)
   if (!m) return null
@@ -23,6 +41,7 @@ export function parseLineTimestamp(line: string): number | null {
     + (m[4] ? parseInt(m[4].padEnd(3, '0')) / 1000 : 0)
 }
 
+/** Whole seconds as MM:SS, or H:MM:SS from an hour up. */
 export function fmtDur(s: number): string {
   s = Math.floor(s)
   if (s < 60) return `00:${String(s).padStart(2, '0')}`
@@ -30,6 +49,7 @@ export function fmtDur(s: number): string {
   return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 }
 
+/** Compact rate: 1.2M, 40k, 238, 4.2, 0.05. Never wider than five characters. */
 export function fmtRate(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
   if (n >= 1e3) return `${Math.round(n / 1e3)}k`
@@ -38,6 +58,14 @@ export function fmtRate(n: number): string {
   return n.toFixed(2)
 }
 
+/**
+ * Draw a bar from counts, in the tqdm shape the log itself writes.
+ *
+ * `width` is in characters, not pixels. Returns null when `total` is zero or
+ * negative; the caller has to fall back to an indeterminate fill. The timing
+ * block appears only with a positive `elapsedS` and a positive `current`, and
+ * below one item per second the rate is inverted to seconds per mod.
+ */
 export function renderTqdmBar(current: number, total: number, detail?: string, elapsedS?: number, width = 20) {
   if (total <= 0) return null
   const ratio = Math.min(1, current / total)
@@ -52,7 +80,7 @@ export function renderTqdmBar(current: number, total: number, detail?: string, e
 
   return (
     <>
-      <span className="text-on-surface font-semibold">{String(pct).padStart(3)}%</span>
+      <span style={{ color: 'var(--ink-2)', fontWeight: 600 }}>{String(pct).padStart(3)}%</span>
       <span className="log-operator">|</span>
       <span className="log-operator">{barFilled}</span>
       <span className="log-operator">{barEmpty}|</span>
@@ -76,8 +104,13 @@ export function renderTqdmBar(current: number, total: number, detail?: string, e
   )
 }
 
+/**
+ * Colour a raw tqdm line from the log. Falls back to highlightLog when the line
+ * does not match the expected shape:
+ *
+ *   "  3%|>....................| 1.2k/40k [00:05<02:30, 238/s] | best: m=5 e=3"
+ */
 export function highlightRawBar(raw: string) {
-  // Format: "  3%|>....................| 1.2k/40k [00:05<02:30, 238/s] | best: m=5 e=3"
   const m = raw.match(/^(\s*\d+%)\|([^|]*)\|\s*(\S+)\/(\S+?)(?:\s+(\w+))?\s*\[([^<]*)<([^,]*),\s*([^/]*)\/s\](.*)$/)
   if (!m) {
     const parts = highlightLog(raw)
@@ -86,7 +119,7 @@ export function highlightRawBar(raw: string) {
   const [, pct, bar, cur, tot, unit, elapsed, remaining, rate, rest] = m
   return (
     <>
-      <span className="text-on-surface font-semibold">{pct}</span>
+      <span style={{ color: 'var(--ink-2)', fontWeight: 600 }}>{pct}</span>
       <span className="log-operator">|{bar}|</span>
       {' '}{cur.replace(/[kMGT]$/, '').length < cur.length
         ? <><span className="log-number">{cur.slice(0, -1)}</span>{cur.slice(-1)}</>
@@ -111,6 +144,24 @@ export function highlightRawBar(raw: string) {
 
 type LogSource = 'salma' | 'test'
 
+/**
+ * Recover the live progress bars from a window of log lines.
+ *
+ * Two producers write progress, in two shapes:
+ *   - the solver emits a ready-made tqdm bar under [solver], kept as `rawBar`
+ *   - the scan ([infer]) and the test harness emit "[N/M] name... <result>"
+ *     lines, from which `current`, `total` and `detail` are recovered
+ *
+ * The search runs backwards from the tail: 300 lines for the solver, 500 for
+ * the scan and the test bar. A scan or test bar is dropped once its completion
+ * marker is inside that window, so a finished run shows nothing.
+ *
+ * Two pieces of state have to outlive the window and are passed in as refs by
+ * the caller: the last matched scan bar, and the timestamp of the [1/N] line
+ * elapsed time is measured from. Without them the readout blanks out as soon as
+ * those lines scroll off. Both refs are written here, which is why this runs on
+ * arrival in applyLines and never inside a render.
+ */
 export function parseProgressBars(lines: string[], source: LogSource, cachedScanBar?: React.MutableRefObject<TqdmBar | null>, cachedStartTsRef?: React.MutableRefObject<number | null>): TqdmBar[] {
   const bars: TqdmBar[] = []
 
@@ -167,7 +218,7 @@ export function parseProgressBars(lines: string[], source: LogSource, cachedScan
       }
     }
 
-    // Cache start timestamp so it survives after [1/N] scrolls out of the line buffer
+    // Cached so elapsed time survives [1/N] scrolling out of the buffer.
     if (scanStartTs != null && cachedStartTsRef) {
       cachedStartTsRef.current = scanStartTs
     } else if (scanStartTs == null && cachedStartTsRef?.current != null) {
@@ -179,7 +230,8 @@ export function parseProgressBars(lines: string[], source: LogSource, cachedScan
       if (cachedScanBar) cachedScanBar.current = scanBar
       bars.push(scanBar)
     } else if (!scanBar && !scanDone && cachedScanBar?.current) {
-      // Sticky: show cached bar while scan is in progress but no match in current window
+      // The scan is still running but no [N/M] line is in the window; keep
+      // showing the last one rather than blanking the footer.
       bars.push(cachedScanBar.current)
     } else if (scanDone && cachedScanBar) {
       cachedScanBar.current = null
@@ -212,7 +264,7 @@ export function parseProgressBars(lines: string[], source: LogSource, cachedScan
       if (testBar && startTs != null) break
     }
 
-    // If the [1/N] line fell outside the backwards window, scan forward
+    // The [1/N] line fell outside the backwards window; look from the front.
     if (testBar && !testDone && startTs == null) {
       for (let j = 0; j < lines.length && j < 200; j++) {
         if (/\[1\/\d+\]/.test(lines[j])) {
@@ -222,7 +274,7 @@ export function parseProgressBars(lines: string[], source: LogSource, cachedScan
       }
     }
 
-    // Cache start timestamp so it survives after [1/N] scrolls out of the line buffer
+    // Cached so elapsed time survives [1/N] scrolling out of the buffer.
     if (startTs != null && cachedStartTsRef) {
       cachedStartTsRef.current = startTs
     } else if (startTs == null && cachedStartTsRef?.current != null) {
