@@ -8,35 +8,46 @@ interface ConfidencePillProps {
   size?: 'sm' | 'md'
 }
 
-// The v5 four-tier confidence chip: EXACT filled ink, HIGH ink outline, PARTIAL
-// ochre, LOW red. Renders nothing when there is no confidence data (rather than
-// a misleading LOW). Tier + colors come from the shared confidence helper.
+/**
+ * The four-tier confidence chip.
+ *
+ * Every tier is a tinted outline, never a solid fill and never lit: the tier
+ * hue is the text, the dot and the border, over a flat wash of itself at about
+ * 10%. A filled `EXACT` chip would need its own contrast ink and would read
+ * louder than the dial beside it. The chip takes --radius-chip like every other
+ * micro-tag; only the status dot is round. With no confidence data it renders
+ * nothing, rather than a misleading `LOW`.
+ */
 export default function ConfidencePill({ confidence, exactMatch, size = 'md' }: ConfidencePillProps) {
   const info = tierFor({ confidence, exactMatch })
   if (!info.hasData) {
     return null
   }
 
-  const fontSize = 'var(--fs-micro)'
-  const padding = size === 'sm' ? '2px 7px' : '3px 9px'
-
   return (
     <span
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        padding,
-        borderRadius: 5,
+        gap: 6,
+        flexShrink: 0,
+        padding: size === 'sm' ? '2px 8px' : '3px 9px',
+        borderRadius: 'var(--radius-chip)',
         border: `1px solid ${info.pill.bd}`,
         background: info.pill.bg,
         color: info.pill.fg,
         fontFamily: 'var(--font-mono)',
-        fontSize,
-        fontWeight: 600,
-        letterSpacing: '0.05em',
+        fontSize: 'var(--fs-micro)',
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: 'var(--tr-chip)',
         whiteSpace: 'nowrap',
       }}
     >
+      <span
+        aria-hidden="true"
+        style={{ width: 4, height: 4, borderRadius: 'var(--radius-full)', background: info.pill.fg }}
+      />
       {info.label}
     </span>
   )
