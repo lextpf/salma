@@ -1,11 +1,11 @@
 import type { ConfidenceScore, FomodGroup, FomodReason, FomodStep } from './types'
 
-// Defensive normalization of the schema-v2 step/group/plugin shapes into a
-// stable view model. The inferred JSON has drifted across schema versions
-// (plugins may be strings, numbers, or objects; groups live under
-// `optionalFileGroups` or `groups`; selection lives in `selected`/`isSelected`),
-// so every consumer reads through these helpers. Extracted from the old
-// FomodStepCard so the Library StepsTab and any future surface share one parser.
+// Normalizes the schema-v2 step, group and plugin shapes into a stable view
+// model. Cached records span several schema versions, so the same field arrives
+// in several shapes: a plugin may be a string, a number or an object; groups sit
+// under `optionalFileGroups` or under `groups`; selection is `selected` or
+// `isSelected`. Every consumer reads through these helpers rather than touching
+// the raw JSON, so one parser covers all of it.
 
 export interface NormalizedPlugin {
   name: string

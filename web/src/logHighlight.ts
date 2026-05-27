@@ -1,10 +1,24 @@
+// Token-level syntax colouring for a single log line, used by LogStreamRow.
+// Returns segments tagged with the .log-* CSS classes declared in index.css.
+//
+// A line is peeled in a fixed order: timestamp, then level, then quoted strings,
+// then TOKEN_REGEX over whatever is left. Quotes come out first so a path or a
+// number inside a quoted string is not tokenized again.
+//
+// The timestamp shapes and the level keywords here are duplicated in logParse.ts
+// and have to stay in step. This file has no subsystem concept and colours every
+// bracket group as a tag; the rule for what counts as a real subsystem lives only
+// in logParse.ts.
+
 export interface HighlightSegment {
   text: string
   cls: string
 }
 
-// Pre-pass: extract quoted strings so the main regex doesn't have to deal with them.
-// Handles apostrophes inside single-quoted strings (e.g. 'JK's Temple of Talos').
+// Split out quoted strings before the token regex runs, so it never has to deal
+// with them. A single quote closes a string only when the next character is not
+// alphanumeric, which is what keeps mod names like 'JK's Temple of Talos' in one
+// piece.
 export function extractQuoted(text: string): HighlightSegment[] {
   const out: HighlightSegment[] = []
   let i = 0
@@ -22,7 +36,8 @@ export function extractQuoted(text: string): HighlightSegment[] {
       out.push({ text: text.slice(i, end), cls: 'log-string' })
       i = end; plain = end
     } else if (text[i] === "'") {
-      // Closing ' must NOT be followed by an alphanumeric char (that would be an apostrophe)
+      // A closing ' cannot be followed by an alphanumeric character; that would
+      // make it an apostrophe.
       let end = i + 1
       let found = false
       while (end < text.length) {
@@ -81,7 +96,8 @@ export function highlightTokens(text: string, parts: HighlightSegment[], depth =
     if (tag) parts.push({ text: full, cls: 'log-tag' })
     else if (url) parts.push({ text: full, cls: 'log-url' })
     else if (path) {
-      // Trim trailing non-path text after a file extension (e.g. ".dds (priority: 0)")
+      // Trim trailing non-path text after a file extension, as in
+      // ".dds (priority: 0)".
       const cleaned = full.replace(/(\.\w{1,10})\s(?!.*[\\/]).*$/, '$1')
       if (cleaned.length < full.length) {
         parts.push({ text: cleaned, cls: 'log-path' })
@@ -125,15 +141,15 @@ export function highlightLog(line: string): HighlightSegment[] {
   const parts: HighlightSegment[] = []
   let remaining = line
 
-  // Match timestamp at start:
-  // 2024-01-15 12:34:56(.ms), [2024-01-15 12:34:56], or 3-01 18:37:31.708
+  // Long timestamp at line start: 2024-01-15 12:34:56(.ms),
+  // [2024-01-15 12:34:56], or 3-01 18:37:31.708
   const tsMatch = remaining.match(/^(\[?(?:\d{4}-\d{2}-\d{2}|\d{1,2}-\d{2})[\sT]\d{2}:\d{2}:\d{2}(?:\.\d+)?\]?\s*)/)
   if (tsMatch) {
     parts.push({ text: tsMatch[1], cls: 'log-timestamp' })
     remaining = remaining.slice(tsMatch[1].length)
   }
 
-  // Also match short timestamps like HH:MM:SS(.ms) (test.log format)
+  // Short timestamp, HH:MM:SS(.ms), which is what test.log writes.
   if (!tsMatch) {
     const shortTsMatch = remaining.match(/^(\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+)/)
     if (shortTsMatch) {
@@ -142,7 +158,7 @@ export function highlightLog(line: string): HighlightSegment[] {
     }
   }
 
-  // Match log level
+  // Log level, optionally wrapped in dashes.
   const levelMatch = remaining.match(/^(?:-\s*)?(ERROR|WARNING|WARN|INFO|DEBUG|TRACE|CRITICAL|FATAL)\b(?:\s*-(?!-)\s*)?/i)
   if (levelMatch) {
     const level = levelMatch[1].toUpperCase()
@@ -154,7 +170,7 @@ export function highlightLog(line: string): HighlightSegment[] {
     remaining = remaining.slice(levelMatch[0].length)
   }
 
-  // Pre-pass: extract quoted strings, then highlight unquoted segments with the token regex
+  // Quoted strings first, then the token regex over the unquoted remainder.
   if (remaining) {
     for (const seg of extractQuoted(remaining)) {
       if (seg.cls) parts.push(seg)
