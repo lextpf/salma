@@ -1,13 +1,21 @@
 import { useEffect, useRef } from 'react';
 
 /**
- * Polls a fetcher function at a fixed interval while enabled.
- * Automatically cleans up on unmount or when disabled.
- * Prevents overlapping requests via an inflight guard.
+ * Calls `fetcher` immediately when `enabled` turns true, then every
+ * `intervalMs` milliseconds while it stays true. Clears the interval on unmount
+ * and when `enabled` turns false.
  *
- * The fetcher is stored in a ref so callers do not need to memoize it --
- * changing the fetcher reference will NOT restart the interval.
- * An immediate first call is made when the hook becomes enabled.
+ * The fetcher is stored in a ref, so callers need not memoize it and a changed
+ * fetcher reference does not restart the interval. A fetcher closing over state
+ * therefore reads the latest values on the next tick, with the timing undisturbed.
+ *
+ * Calls never overlap: a tick that arrives while the previous call is still
+ * pending is dropped, not queued. A fetcher slower than `intervalMs` runs less
+ * often than the interval asks for, which is the intended trade.
+ *
+ * A rejected fetcher is caught and logged as a warning, never rethrown, so a
+ * failing poll cannot break the render tree. Report failure inside the fetcher
+ * if the UI has to show it.
  */
 export function usePolling(
   fetcher: () => Promise<void>,
