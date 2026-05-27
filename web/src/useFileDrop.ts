@@ -16,9 +16,9 @@ export interface FileDrop {
   onDrop: (e: React.DragEvent) => void
 }
 
-// Drag/drop + hidden-file-input wiring, extracted from the old FileUpload so the
-// v5 Dropzone (and any future surface) can share one implementation. The caller
-// owns the markup and renders <input ref={inputRef} onChange={onInputChange} />.
+// Drag-and-drop plus hidden-file-input wiring, in one place so every intake
+// surface behaves the same. The caller owns the markup and has to render
+// <input ref={inputRef} onChange={onInputChange} />.
 export function useFileDrop({ onFiles, disabled = false }: UseFileDropOptions): FileDrop {
   const inputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
