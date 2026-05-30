@@ -3,7 +3,14 @@ import type { CSSProperties } from 'react'
 interface MIconProps {
   /** Material Symbols ligature name, e.g. "search" or "expand_more". */
   name: string
-  /** Icon box in px; sets font-size and the opsz axis. Default 14. */
+  /**
+   * Icon box in CSS pixels. Sets font-size directly. Default 14.
+   *
+   * The opsz axis follows it, clamped to 20-48, which is the range the variable
+   * font supports. Every size below 20 therefore renders at opsz 20, the default
+   * of 14 included: moving `size` on a small icon changes its box, not its
+   * optical size.
+   */
   size?: number
   /** Filled glyph variant (FILL axis). */
   fill?: boolean
@@ -15,9 +22,9 @@ interface MIconProps {
   label?: string
 }
 
-// Material Symbols Outlined wrapper - the primary icon language of the UI.
-// Color inherits currentColor; hover/active color changes on parents apply
-// automatically (unlike FA duotone, which needs the --fa-* var plumbing).
+// Material Symbols Outlined wrapper, and the only icon language in the UI.
+// Colour inherits from currentColor, so a parent's hover and active colours
+// apply on their own with no per-icon plumbing.
 export default function MIcon({
   name,
   size = 14,
