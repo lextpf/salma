@@ -1,29 +1,52 @@
 import { useEffect, useRef, useState } from 'react'
 import { getConfig, isFetchUnavailableError, putConfig } from './api'
-import Kicker from './comps/Kicker'
-import MIcon from './comps/MIcon'
-import ConfigSheet from './comps/settings/ConfigSheet'
+import Button from './comps/Button'
+import ModuleHeader from './comps/ModuleHeader'
+import { VRule } from './comps/Rule'
+import ConfigSheet from './comps/ConfigSheet'
+import { getTailLogs, getTestArgs, setTailLogs, setTestArgs } from './prefs'
+import { useContentBreakpoints } from './useViewportNarrow'
 import type { AppConfig } from './types'
 
 const MONO = 'var(--font-mono)'
 const RETRY_DELAY_MS = 2000
 
-// Syntactic validity: a non-empty path with no characters Windows forbids in a
-// directory. Gates the Save button and drives the sheet's header validity dot.
+// A cheap syntactic screen, not a Windows path validator: non-empty, and free
+// of the wildcard and redirection characters * ? < > |. The colon and both
+// separators are allowed because a Windows path needs them, and the double
+// quote passes even though Windows forbids it in a path component. Gates the
+// Apply button and drives the sheet's validity badge.
+//
+// Whether the path exists is a separate, server-side question:
+// config.mo2ModsPathValid answers it after a save.
 function isPathValid(p: string): boolean {
   return p.trim().length > 0 && !/[*?<>|]/.test(p)
 }
 
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
 export default function SettingsPage() {
+  const { compactToolbar } = useContentBreakpoints()
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [modsPath, setModsPath] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [testArgs, setTestArgs] = useState(() => localStorage.getItem('salma_test_args') || '')
+  const [testArgs, setTestArgsState] = useState(getTestArgs)
+  const [savedTestArgs, setSavedTestArgs] = useState(getTestArgs)
+  const [tailLogs, setTailLogsState] = useState(getTailLogs)
+  const [savedTailLogs, setSavedTailLogs] = useState(getTailLogs)
+  const [savedAt, setSavedAt] = useState<Date | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const retryCountRef = useRef(0)
+
   const pathValid = isPathValid(modsPath)
+  // Real dirty tracking, so Apply and Revert are both inert on a clean sheet.
+  const dirty =
+    config != null &&
+    (modsPath !== config.mo2ModsPath || testArgs !== savedTestArgs || tailLogs !== savedTailLogs)
 
   const clearRetryTimer = () => {
     if (retryTimerRef.current) {
@@ -59,13 +82,26 @@ export default function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const handleRevert = () => {
+    if (!config) return
+    setModsPath(config.mo2ModsPath)
+    setTestArgsState(savedTestArgs)
+    setTailLogsState(savedTailLogs)
+    setMessage(null)
+  }
+
   const handleSave = async () => {
     setSaving(true)
     setMessage(null)
     try {
       const updated = await putConfig({ mo2ModsPath: modsPath })
       setConfig(updated)
-      localStorage.setItem('salma_test_args', testArgs)
+      setModsPath(updated.mo2ModsPath)
+      setTestArgs(testArgs)
+      setSavedTestArgs(testArgs)
+      setTailLogs(tailLogs)
+      setSavedTailLogs(tailLogs)
+      setSavedAt(new Date())
       setMessage({ type: 'success', text: 'Configuration saved successfully.' })
     } catch (e) {
       if (isFetchUnavailableError(e)) {
@@ -79,58 +115,77 @@ export default function SettingsPage() {
     }
   }
 
+  const savedLabel = savedAt
+    ? `saved ${pad2(savedAt.getHours())}:${pad2(savedAt.getMinutes())}`
+    : dirty ? 'unsaved changes' : 'no changes'
+
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* 46px section header */}
-      <div
-        style={{
-          height: 46,
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '0 18px',
-          borderBottom: '1px solid var(--rule-soft)',
-        }}
-      >
-        <Kicker num="04" label="Configuration" />
-      </div>
+      <ModuleHeader num="04" label="Settings">
+        <VRule height={18} />
+        <span
+          style={{
+            fontFamily: MONO,
+            fontSize: 'var(--fs-label)',
+            color: dirty ? 'var(--brass)' : 'var(--ink-5)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          salma.json &middot; {savedLabel}
+        </span>
 
-      {/* Scrolling body */}
+        <div style={{ flex: 1 }} />
+
+        <Button
+          icon="restart_alt"
+          label="Revert"
+          onClick={handleRevert}
+          disabled={!dirty || saving}
+          compact={compactToolbar}
+        />
+        <Button
+          icon="check"
+          label={saving ? 'Applying...' : 'Apply'}
+          variant="primary"
+          onClick={handleSave}
+          disabled={!dirty || !pathValid || saving}
+          running={saving}
+          compact={compactToolbar}
+        />
+      </ModuleHeader>
+
+      {/* Scrolling body. The sheet is capped at 840px and centred, so the gutter
+          beside it is deliberate margin rather than an unfilled pane. */}
       <div
         style={{
           flex: 1,
           minHeight: 0,
           overflowY: 'auto',
           overflowX: 'hidden',
-          padding: 18,
+          padding: '24px 28px 32px',
         }}
       >
-        <div style={{ width: '100%', maxWidth: 960 }}>
+        <div style={{ width: '100%', maxWidth: 840, background: 'var(--paper)' }}>
           {loadError ? (
+            // The third state of this one region, so it runs full-bleed like
+            // the table and the skeleton: a wash band, not a bordered card.
             <div
               style={{
-                border: '1px solid var(--rule)',
-                borderRadius: 11,
-                padding: '24px 24px',
-                background: 'var(--sheet)',
-                boxShadow: 'var(--shadow-elevation-1)',
+                padding: '16px 14px',
+                background: 'var(--danger-wash)',
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <span
-                  style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    background: 'var(--danger)',
-                  }}
+                  aria-hidden="true"
+                  style={{ width: 6, height: 6, borderRadius: 'var(--radius-full)', background: 'var(--danger)' }}
                 />
                 <span
                   style={{
                     fontFamily: MONO,
                     fontSize: 'var(--fs-micro)',
-                    letterSpacing: '0.14em',
+                    fontWeight: 600,
+                    letterSpacing: 'var(--tr-kicker)',
                     textTransform: 'uppercase',
                     color: 'var(--danger)',
                   }}
@@ -144,59 +199,34 @@ export default function SettingsPage() {
                   fontSize: 'var(--fs-title)',
                   lineHeight: 'var(--lh-body)',
                   color: 'var(--ink-2)',
+                  textWrap: 'pretty',
                 }}
               >
                 {loadError}
               </p>
-              <button
-                type="button"
-                className="tool-btn"
+              <Button
+                icon="sync"
+                label="Retry"
                 onClick={() => {
                   retryCountRef.current = 0
                   loadConfig()
                 }}
-              >
-                <MIcon name="sync" size={13} />
-                <span>Retry</span>
-              </button>
+              />
             </div>
           ) : !config ? (
+            // Stands in for the table, so it sits at the same width and padding.
             <div
               style={{
-                border: '1px solid var(--rule)',
-                borderRadius: 11,
-                overflow: 'hidden',
-                background: 'var(--sheet)',
-                boxShadow: 'var(--shadow-elevation-2)',
+                padding: '15px 14px',
               }}
             >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '10px 16px',
-                  background: 'var(--card)',
-                  borderBottom: '1px solid var(--rule-soft)',
-                }}
-              >
-                <span style={{ fontFamily: MONO, fontSize: 'var(--fs-label)', color: 'var(--ink-4)' }}>
-                  salma.json
-                </span>
+              {[58, 28, 50, 66, 18, 28, 56].map((w, i) => (
                 <div
+                  key={i}
                   className="skeleton-line"
-                  style={{ height: 22, width: 64, borderRadius: 7 }}
+                  style={{ height: 11, width: `${w}%`, margin: '10px 0' }}
                 />
-              </div>
-              <div style={{ padding: '15px 18px' }}>
-                {[58, 28, 50, 66, 18, 28, 56].map((w, i) => (
-                  <div
-                    key={i}
-                    className="skeleton-line"
-                    style={{ height: 11, width: `${w}%`, margin: '8px 0' }}
-                  />
-                ))}
-              </div>
+              ))}
             </div>
           ) : (
             <ConfigSheet
@@ -204,10 +234,10 @@ export default function SettingsPage() {
               modsPath={modsPath}
               onModsPathChange={setModsPath}
               testArgs={testArgs}
-              onTestArgsChange={setTestArgs}
+              onTestArgsChange={setTestArgsState}
+              tailLogs={tailLogs}
+              onTailLogsChange={setTailLogsState}
               valid={pathValid}
-              saving={saving}
-              onSave={handleSave}
               saveMessage={message}
             />
           )}
