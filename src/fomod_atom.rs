@@ -71,7 +71,7 @@ use std::collections::HashMap;
 /// | Plugin      | `<files>` inside a `<plugin>` | When the plugin is selected; or the atom sets `always_install`; |
 /// |             |                               | or it sets `install_if_usable` and the plugin's effective       |
 /// |             |                               | type is not `NotUsable`                                         |
-/// | Conditional | `<conditionalFileInstalls>`   | When the pattern condition is met                               | 
+/// | Conditional | `<conditionalFileInstalls>`   | When the pattern condition is met                               |
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Origin {
     /// From `<requiredInstallFiles>`. Always included.
