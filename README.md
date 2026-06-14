@@ -19,7 +19,6 @@
 [![Codacy Badge](https://app.codacy.com/project/badge/Grade/021d06d4d8de4b8185a4743065e04c4a)](https://app.codacy.com/gh/lextpf/salma/dashboard?utm_source=gh&utm_medium=referral&utm_content=&utm_campaign=Badge_grade)
 <br/>
 [![build](https://github.com/lextpf/salma/actions/workflows/build.yml/badge.svg)](https://github.com/lextpf/salma/actions/workflows/build.yml)
-[![lint](https://github.com/lextpf/salma/actions/workflows/lint.yaml/badge.svg)](https://github.com/lextpf/salma/actions/workflows/lint.yaml)
 [![tests](https://github.com/lextpf/salma/actions/workflows/test.yml/badge.svg)](https://github.com/lextpf/salma/actions/workflows/test.yml)
 [![eslint](https://github.com/lextpf/salma/actions/workflows/eslint.yaml/badge.svg)](https://github.com/lextpf/salma/actions/workflows/eslint.yaml)
 <br/>
@@ -35,7 +34,7 @@ Scope is deliberately narrow. salma reproduces FOMOD choices and prepares future
 <div align="center">
 <br>
 
-<img src="PREVIEW.png" alt="Preview" width="600"/>
+<img src="PREVIEW.png" alt="Preview" width="100%"/>
 
 </div>
 
