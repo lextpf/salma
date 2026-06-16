@@ -1,29 +1,13 @@
-"""Make doxide's markdown fit for MkDocs Material, between the two builds.
+"""
+@brief normalize generated doxide pages for MkDocs Material.
+@author Alex (https://github.com/lextpf)
 
-What it does to each page:
-- Removes @author attributions, both on their own line and mid-line inside a
-  summary-table cell, where doxide flattens a whole doc block onto one line
-- Strips @brief and @details tags
-- Fixes admonition indentation (1-space to 4-space)
-- Adds Material icons to page titles and section headers
-- Trims every summary table (Types, Functions, Variables, ...) to first-sentence
-  briefs
-- Flattens namespace definition lists into single-line bullets
-- Injects class listings under groups on the home page
-- Injects the shipping API version (MO2_SALMA_API_VERSION in src/capi.rs) into
-  the home page subtitle
-- Injects the cross-link to the rustdoc engine API on the home page
+the command edits only `.md` files with doxide frontmatter in the first 200
+characters. it rewrites files in place without backup; use generated output
+only.
 
-Walks the docs directory recursively for `*.md` and rewrites matching files in
-place, so point it at generated output only. A file matches only when its first
-200 characters carry 'generator: doxide' frontmatter; everything else, the
-tracked docs/main.html theme override included, is left alone.
-
-build.bat runs this between `doxide build` and `mkdocs build`.
-
-Usage:
-    python scripts/_clean_docs.py          # defaults to docs/
-    python scripts/_clean_docs.py path/    # custom docs directory
+it removes documentation tags, corrects Material syntax, shortens summary
+rows, and injects version, member, and rustdoc links on the home page.
 """
 
 import re
@@ -36,7 +20,6 @@ def is_doxide_generated(text: str) -> bool:
 
 
 def fix_admonition_indent(text: str) -> str:
-    """Fix doxide's 1-space admonition indent to 4-space for MkDocs Material."""
     lines = text.split("\n")
     result = []
     in_admonition = False
@@ -48,16 +31,13 @@ def fix_admonition_indent(text: str) -> str:
             continue
 
         if in_admonition:
-            # Body line with 1-space indent
             m = re.match(r"^ (\S.*)", line)
             if m:
                 result.append("    " + m.group(1))
                 continue
-            # Continuation with deeper indent
             if line.startswith("  "):
                 result.append("    " + line.lstrip())
                 continue
-            # Blank or unindented line ends the admonition
             in_admonition = False
 
         result.append(line)
@@ -89,26 +69,46 @@ SECTION_ICONS = {
 }
 
 
+def _add_heading_icons(text: str, level: int, icons: dict[str, str]) -> str:
+    lines = []
+    fence = ""
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence:
+            if (marker and marker[1][0] == fence[0]
+                    and len(marker[1]) >= len(fence) and not marker[2].strip()):
+                fence = ""
+        elif marker:
+            fence = marker[1]
+        else:
+            # generated headings start at column zero; indented examples stay literal.
+            heading = re.fullmatch(
+                rf"(#{{{level}}} )(.+?)((?:[ \t]+\{{[^}}\r\n]*\}})?[ \t]*)(\r?\n)?",
+                line,
+            )
+            if heading and (icon := icons.get(heading[2])):
+                line = f"{heading[1]}{icon} {heading[2]}{heading[3]}{heading[4] or ''}"
+        lines.append(line)
+    return "".join(lines)
+
+
 def add_page_title_icons(text: str) -> str:
-    """Prepend Material icons to doxide-generated H1 page titles."""
-    for title, icon in PAGE_TITLE_ICONS.items():
-        text = re.sub(rf"^# {re.escape(title)}$", f"# {icon} {title}", text, count=1, flags=re.MULTILINE)
-    return text
+    return _add_heading_icons(text, 1, PAGE_TITLE_ICONS)
 
 
 def add_section_icons(text: str) -> str:
-    """Prepend Material icons to doxide-generated section headers."""
-    for title, icon in SECTION_ICONS.items():
-        text = text.replace(f"## {title}", f"## {icon} {title}")
-    return text
+    """
+    @fn add_section_icons(text: str) -> str
+    @brief decorate complete generated section headings once.
+    @author Alex (https://github.com/lextpf)
+
+    authored Material headings keep their chosen icons. fenced and indented
+    code examples keep literal heading text.
+    """
+    return _add_heading_icons(text, 2, SECTION_ICONS)
 
 
-# Section headers that introduce a doxide summary table: a two-column
-# "| Name | Description |" listing whose rows link into the detail sections
-# further down the page. Both the plain and the icon-prefixed spellings must
-# match, because add_section_icons() has already run by the time the trimmer
-# does. "... Details" headers are deliberately absent: those sections hold the
-# full prose and must not be trimmed.
+# detail sections retain full prose; summary tables keep one sentence.
 SUMMARY_TABLE_SECTIONS = (
     "Types",
     "Functions",
@@ -120,7 +120,6 @@ SUMMARY_TABLE_SECTIONS = (
 
 
 def _is_summary_table_header(stripped: str) -> bool:
-    """True when a line is a summary-table section header, with or without icon."""
     for name in SUMMARY_TABLE_SECTIONS:
         if stripped == f"## {name}":
             return True
@@ -131,17 +130,13 @@ def _is_summary_table_header(stripped: str) -> bool:
 
 
 def trim_summary_table_descriptions(text: str) -> str:
-    """Keep only a brief first sentence in every doxide summary table row.
+    """
+    @fn trim_summary_table_descriptions(text: str) -> str
+    @brief keep one sentence in generated summary-table descriptions.
+    @author Alex (https://github.com/lextpf)
 
-    Doxide emits an entity's whole doc block into the description column of the
-    summary table that lists it, crushed onto one physical line. For a class
-    with sectioned prose that fills a table cell with the entire class
-    documentation, headings and all. Trimming each row to its first sentence
-    leaves the detail under the matching Details section, where it belongs.
-
-    Applies to every table in SUMMARY_TABLE_SECTIONS, not only Functions: the
-    Types table holds the worst offenders, because class-level blocks are the
-    longest in the codebase.
+    doxide flattens each declaration block into one physical row. detail
+    sections retain the full prose.
     """
     lines = text.split("\n")
     out = []
@@ -155,7 +150,6 @@ def trim_summary_table_descriptions(text: str) -> str:
             out.append(line)
             continue
 
-        # Any following section header ends the table context.
         if in_summary_table and stripped.startswith("## "):
             in_summary_table = _is_summary_table_header(stripped)
             out.append(line)
@@ -166,7 +160,6 @@ def trim_summary_table_descriptions(text: str) -> str:
             if len(parts) == 2:
                 name_col, desc_col = parts
                 desc_col = re.sub(r"\s+", " ", desc_col).strip()
-                # Keep only first sentence in summary table.
                 m = re.match(r"^(.*?\.)\s+.*$", desc_col)
                 brief = m.group(1) if m else desc_col
                 out.append(f"| {name_col} | {brief} |")
@@ -178,14 +171,6 @@ def trim_summary_table_descriptions(text: str) -> str:
 
 
 def flatten_namespace_lists(text: str) -> str:
-    """Flatten doxide namespace definition lists into single-line bullets.
-
-    Home page namespace entries are emitted as definition lists:
-        :material-package: [Name](...)
-        :    Description
-    which renders description on the next line. Convert these to:
-        - :material-package: [Name](...) - Description
-    """
     lines = text.split("\n")
     out = []
     i = 0
@@ -217,12 +202,48 @@ def flatten_namespace_lists(text: str) -> str:
     return "\n".join(out)
 
 
-def collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]:
-    """Extract types and functions from a group or subgroup index.md.
+def rewrite_sibling_entity_links(text: str, page_path: Path) -> str:
+    """
+    @fn rewrite_sibling_entity_links(text: str, page_path: Path) -> str
+    @brief repair doxide links when an entity is emitted as a directory.
+    @author Alex (https://github.com/lextpf)
 
-    Returns (name, relative_path, description) tuples with `prefix` prepended,
-    so every path is relative to the docs root rather than to the page it came
-    from. An anchor-only link is rewritten onto that page's index.md.
+    only relative sibling `X.md` targets are eligible. the rewrite requires
+    `X.md` to be absent and `X/index.md` to exist. query and fragment suffixes
+    are preserved.
+    """
+    def replace(match: re.Match) -> str:
+        target = match.group("target")
+        target_path = Path(target)
+        if target_path.parent != Path("."):
+            return match.group(0)
+
+        sibling_file = page_path.parent / target_path
+        sibling_index = page_path.parent / target_path.stem / "index.md"
+        if sibling_file.exists() or not sibling_index.is_file():
+            return match.group(0)
+
+        suffix = match.group("suffix") or ""
+        return f"{match.group('open')}{target[:-3]}/index.md{suffix})"
+
+    return re.sub(
+        r"(?P<open>(?<!\!)\[[^\]\n]+\]\()"
+        r"(?P<target>[^()\s?#]+\.md)"
+        r"(?P<suffix>[?#][^)\s]*)?\)",
+        replace,
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]:
+    """
+    @fn collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]
+    @brief make member links relative to the documentation root.
+    @author Alex (https://github.com/lextpf)
+
+    the result contains name, path, and description tuples. anchor-only links
+    target the source page.
     """
     if not index_path.exists():
         return []
@@ -237,9 +258,7 @@ def collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]
         name = m.group(1)
         rel_path = m.group(2).strip()
         desc = m.group(3).strip()
-        # Strip leftover @brief tag
         desc = re.sub(r"^@brief\s+", "", desc)
-        # Anchor links (#func) need the index.md path prepended
         if rel_path.startswith("#"):
             full_path = f"{prefix}index.md{rel_path}"
         else:
@@ -250,18 +269,20 @@ def collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]
 
 
 def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str, str]]:
-    """Collect the types of a group and of every subgroup beneath it.
+    """
+    @fn collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str, str]]
+    @brief collect members from one group and its subgroups.
+    @author Alex (https://github.com/lextpf)
 
-    Reads the group's own index.md first, then each subgroup's index.md.
+    nested subgroup content takes precedence. namespace groups can expose
+    content at the documentation root.
     """
     group_index = docs_dir / group_dir / "index.md"
     prefix = f"{group_dir}/"
     members = []
 
-    # Direct members in the group (types + functions)
     members.extend(collect_members(group_index, prefix))
 
-    # Find subgroup links: :material-format-section: [Name](SubDir/index.md)
     if group_index.exists():
         text = group_index.read_text(encoding="utf-8")
         for m in re.finditer(
@@ -270,19 +291,11 @@ def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str
         ):
             sub_name = m.group(1)
             sub_dir = m.group(2)
-            # Class-based subgroups have content in the nested stub; try there first.
             sub_index = docs_dir / group_dir / sub_dir / "index.md"
             sub_members = collect_members(sub_index, f"{group_dir}/{sub_dir}/")
             if sub_members:
                 members.extend(sub_members)
                 continue
-            # Fallback for a namespace-based subgroup: doxide writes an empty
-            # stub at the nested path (warning "namespace cannot have @ingroup,
-            # ignoring") and puts the real content in a top-level directory
-            # instead. Every subgroup in doxide.yml is a class, so this branch
-            # does not fire on a clean build. It is unsafe on a docs/ that was
-            # never wiped, because the top-level directory it reads may be a
-            # stale leftover.
             top_index = docs_dir / sub_dir / "index.md"
             members.extend(collect_members(top_index, f"{sub_dir}/"))
 
@@ -290,14 +303,15 @@ def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str
 
 
 def inject_group_members(text: str, docs_dir: Path) -> str:
-    """Append a flat class and function listing after the home page group list.
+    """
+    @fn inject_group_members(text: str, docs_dir: Path) -> str
+    @brief list group members on the home page.
+    @author Alex (https://github.com/lextpf)
 
-    Collects the types and functions from every group index.md and its subgroup
-    pages, then inserts them as one bullet list after the last group entry.
-    Idempotent: lines injected by an earlier run are stripped first.
+    the function removes injected member rows before it writes the current
+    list.
     """
     lines = text.split("\n")
-    # Strip previously-injected member lines (top-level and indented)
     lines = [l for l in lines if not re.match(r"^-?\s*- :material-package:", l)]
 
     out = []
@@ -332,15 +346,14 @@ def inject_group_members(text: str, docs_dir: Path) -> str:
 
 
 def parse_version(repo_root: Path) -> str:
-    """Read the shipping API version, the value the release artifacts carry.
+    """
+    @fn parse_version(repo_root: Path) -> str
+    @brief read the API version used by release artifacts.
+    @author Alex (https://github.com/lextpf)
 
-    The source of truth is `MO2_SALMA_API_VERSION` in `src/capi.rs`: the DLL
-    returns it from getApiVersion, and CMakeLists.txt parses the same constant
-    into SALMA_API_VERSION for the CPack archive name. `project(salma VERSION
-    ...)` in CMakeLists.txt is decorative and lags behind, so it serves only as
-    a fallback that keeps a version on the site when capi.rs is unreadable.
-
-    Returns "" when neither source yields a major.minor.patch number.
+    `MO2_SALMA_API_VERSION` is authoritative. the CMake project version is the
+    fallback. the result is empty when neither source contains three numeric
+    components.
     """
     capi = repo_root / "src" / "capi.rs"
     if capi.exists():
@@ -360,17 +373,16 @@ def parse_version(repo_root: Path) -> str:
 
 
 def inject_version(text: str, version: str) -> str:
-    """Prefix the home page subtitle line with the version badge.
+    """
+    @fn inject_version(text: str, version: str) -> str
+    @brief put one current version badge in the home-page subtitle.
+    @author Alex (https://github.com/lextpf)
 
-    Idempotent whatever the version: badges from an earlier run are stripped
-    before the current one is written. Without that strip a changed version
-    stacks a second badge on the same line, which is what a docs/ directory that
-    was never regenerated produces. Does nothing when `version` is empty or the
-    H1 plus subtitle pair is absent.
+    the function removes existing version badges first. it leaves the page
+    unchanged when `version` is empty or the subtitle is absent.
     """
     if not version:
         return text
-    # Drop any badge an earlier run left on the subtitle line.
     text = re.sub(
         r"^(# salma\n\n)(?:\*\*v\d+\.\d+\.\d+\*\*\s*\|\s*)+",
         r"\1",
@@ -387,35 +399,20 @@ def inject_version(text: str, version: str) -> str:
     )
 
 
-# Relative to the generated site root. build.bat step 7 copies target/doc there
-# after `mkdocs build`, because mkdocs clears site/ on every run. The link is
-# injected here rather than declared in mkdocs.yml's nav for the same reason:
-# at nav-validation time the directory does not exist yet.
+# mkdocs clears the site before rustdoc is copied, so inject this post-build link.
 RUST_DOCS_HREF = "rust/mo2_salma_rs/index.html"
 
 RUST_DOCS_BLOCK = f"""!!! abstract ":material-language-rust: Rust engine API"
 
-    All engine logic - archives, FOMOD parsing, the CSP solver, inference -
-    lives in the Rust crate and is documented by rustdoc, not by doxide.
+    rustdoc covers archives, FOMOD parsing, constraint solving, and inference.
 
-    [Browse the engine API]({RUST_DOCS_HREF})
-
-    The pages below cover the C++ that remains: the Crow HTTP server and the
-    salma-support static library.
+    [browse the engine API]({RUST_DOCS_HREF})
 """
 
 
 def inject_rust_link(text: str) -> str:
-    """Point the home page at the rustdoc output. Idempotent.
-
-    The block sits directly under the subtitle, not at the foot of the page: the
-    Rust crate is the large majority of src/, so a link buried below the C++
-    class listing would misrepresent where the code is.
-    """
     if RUST_DOCS_HREF in text:
         return text
-    # After the subtitle line (the one inject_version writes into), else after
-    # the H1.  Both anchors are stable doxide output.
     subtitle = re.search(r"^# salma\n\n.+\n", text, flags=re.MULTILINE)
     if not subtitle:
         return text
@@ -424,34 +421,18 @@ def inject_rust_link(text: str) -> str:
 
 
 def clean(text: str) -> str:
-    # Remove standalone @author lines
     text = re.sub(r"^\s*@author\b.*\n?", "", text, flags=re.MULTILINE)
 
-    # Doxide crushes a whole doc block onto one line inside a summary table, so
-    # the file/type @author lands mid-line where the rule above cannot see it
-    # and renders as page text. Strip the house form "@author Name (url)"
-    # wherever it appears. Only the parenthesised form is matched: a bare
-    # "@author Name" has no end marker, and consuming to end of line would eat
-    # the rest of the table row, including its closing pipe.
+    # match only the parenthesized house form; a bare author has no safe end marker.
     text = re.sub(r"[ \t]*@author\b[^\n(]*\([^)\n]*\)", "", text)
 
-    # Strip @brief and @details tags but keep the description text
     text = re.sub(r"@brief\s+", "", text)
     text = re.sub(r"@details\s*\n?", "", text)
 
-    # Fix admonition indentation (doxide outputs 1-space, MkDocs needs 4)
     text = fix_admonition_indent(text)
-
-    # Add icons to page titles
     text = add_page_title_icons(text)
-
-    # Add icons to section headers
     text = add_section_icons(text)
-
-    # Trim over-detailed summary table entries.
     text = trim_summary_table_descriptions(text)
-
-    # Keep namespace descriptions inline on Home/namespace listings.
     text = flatten_namespace_lists(text)
 
     return text
@@ -470,25 +451,25 @@ def main():
         print(f"  version: {version}")
 
     changed = 0
-    for md in docs_dir.rglob("*.md"):
+    # home aggregation reads cleaned group pages, so process the root index last.
+    pages = sorted(docs_dir.rglob("*.md"), key=lambda path: path == docs_dir / "index.md")
+    for md in pages:
         original = md.read_text(encoding="utf-8")
         if not is_doxide_generated(original):
             continue
 
         cleaned = clean(original)
+        cleaned = rewrite_sibling_entity_links(cleaned, md)
 
         is_home = md.name == "index.md" and md.parent == docs_dir
 
-        # Home page: inject version and group member listings
         if is_home:
             cleaned = inject_group_members(cleaned, docs_dir)
             if version:
                 cleaned = inject_version(cleaned, version)
-            # After inject_version, so the subtitle it edits is already final.
             cleaned = inject_rust_link(cleaned)
         else:
-            # Group index pages: swap the subgroup bullets to the package icon,
-            # in the header area only, before the first ## section.
+            # change subgroup icons only before the first section.
             parts = cleaned.split("\n## ", 1)
             parts[0] = re.sub(
                 r"^- :material-format-section:",
@@ -496,16 +477,10 @@ def main():
                 parts[0],
                 flags=re.MULTILINE,
             )
-            # Do not add a ../ rewrite to subgroup links here. doxide emits
-            # subgroup content nested under its parent, so the link it writes
-            # is already correct; prepending ../ turns Server/index.md's
-            # "MultipartHandler/index.md" into "../MultipartHandler/index.md",
-            # which resolves to nothing. Such a rewrite can look right on a
-            # docs/ that was never wiped, because stale top-level pages still
-            # sitting on disk satisfy it. Verified against a wiped docs/:
-            # mkdocs reports no missing links for the group index pages.
+            # keep nested links unchanged; a ../ prefix breaks their targets.
             cleaned = "\n## ".join(parts)
 
+        cleaned = cleaned.rstrip() + "\n"
         if cleaned != original:
             md.write_text(cleaned, encoding="utf-8")
             changed += 1
