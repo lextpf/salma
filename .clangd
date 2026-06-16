@@ -1,16 +1,7 @@
-# clangd configuration for salma.
+# @brief provide fallback C++ flags when no compilation database exists.
+# @author Alex (https://github.com/lextpf)
 #
-# Why this file exists
-# --------------------
-# CMakeLists.txt sets CMAKE_EXPORT_COMPILE_COMMANDS ON, but Visual Studio's
-# CMake generator silently ignores it - only the Ninja and Makefile
-# generators emit compile_commands.json. So if you configured with the
-# default `cmake -B build`, build/ has no compile DB, clangd has no per-file
-# flags, and most #includes look unresolved even though the project builds.
-#
-# `cmake --preset compile-db` is the Ninja sidecar that emits a real
-# compile_commands.json; once it is configured, that file supersedes the flags
-# below.
+# Visual Studio does not emit `compile_commands.json`. use the `compile-db` preset for exact flags.
 
 CompileFlags:
   Add:
