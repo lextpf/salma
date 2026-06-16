@@ -1,32 +1,6 @@
 # Contributing Guide
 
-The contribution standard for everyone who writes code here, human or AI agent.
-
-`.clang-format` decides whitespace, wrapping, brace placement and pointer alignment. Run the formatter rather than argue about layout.
-
----
-
-## Getting Started
-
-1. Fork the repository on GitHub.
-2. Clone your fork locally.
-3. Build the project with `.\build.bat`.
-4. Before submitting changes, format modified C++ files.
-
----
-
-## Language & Build
-
-|            Item | Standard                                                              |
-|-----------------|-----------------------------------------------------------------------|
-|   Engine        | Rust, edition 2024, toolchain 1.85 or later (`Cargo.toml`)            |
-|   Server        | C++23 (`CMAKE_CXX_STANDARD 23`)                                       |
-|        Compiler | MSVC 2022 (primary)                                                   |
-|    Build system | Cargo for the engine, CMake 3.20 or later for the server              |
-| Package manager | cargo (engine), vcpkg (server)                                        |
-|         Testing | `cargo test` for the engine, Google Test with CTest discovery for C++ |
-
-The style rules in this guide are the **C++** rules. Rust code follows whatever `cargo fmt` produces and must be clean under `cargo clippy --all-targets --release -- -D warnings`.
+This guide defines contribution standards for the project's human authors, co-authors, and AI agents acting as contributing entities.
 
 ---
 
@@ -43,63 +17,41 @@ Consistency matters more than personal preference.
 
 ---
 
-## What `clang-format` Already Covers
-
-The repository formatter already defines the mechanical style for C++ source, including:
-
-- indentation and tabs/spaces
-- brace layout
-- constructor initializer formatting
-- pointer/reference alignment
-- spacing around control statements
-- include sorting behavior
-- wrapping/alignment of arguments, parameters, and comments
-
-Do not restate or fight these rules in review. Run the formatter and move on.
-
----
-
 ## Naming Conventions
-
-Examples below are real identifiers from `src/`. When in doubt, match the file
-you are editing rather than this table.
 
 | Element                          | Style                                       | Examples                                                  |
 |----------------------------------|---------------------------------------------|-----------------------------------------------------------|
-| Files                            | PascalCase, paired `.hpp` / `.cpp`          | `Logger.hpp`, `SalmaEngine.cpp`                           |
-| Classes                          | PascalCase                                  | `Logger`, `SalmaEngine`, `Mo2Controller`                  |
-| Structs (plain data)             | PascalCase                                  | `FileOperation`, `UploadedFile`                           |
-| Enums                            | PascalCase                                  | `enum class FileOpType`, `enum class PluginType`          |
-| Enum values                      | PascalCase                                  | `PluginType::Required`, `FileOpType::Folder`              |
-| Functions / Methods              | snake_case                                  | `install_mod()`, `is_safe_destination()`                  |
-| Namespaces                       | lowercase, run together                     | `mo2core`, `mo2server`                                    |
-| Local variables                  | snake_case                                  | `exit_code`, `env_block`, `bind_addr`                     |
-| Parameters                       | snake_case                                  | `const std::filesystem::path& script_path`                |
-| Class member variables           | snake_case with a trailing `_`              | `scan_job_`, `cache_mutex_`, `static_dir_`                |
-| Struct fields (plain data)       | snake_case, no prefix and no suffix         | `temp_path`, `original_extension`, `document_order`       |
-| Constants                        | `k` + PascalCase                            | `kMaxUploadBytes`, `kScriptTimeoutMs`, `kMaxRotatedFiles` |
-| File-local constants             | `k` + PascalCase, `static constexpr`        | `static constexpr int kMaxRetries = 3;`                   |
-| Type aliases                     | PascalCase via `using`                      | `using FnInferSelections = const char*(__cdecl*)(...);`   |
-| Global mutable state             | avoided (no `g_` prefix in headers)         | file-scope statics in the `.cpp`; see **Scoping & Lifetime** |
+| Files                            | PascalCase                                  | `Logger.hpp`, `RingBuffer.cpp`                            |
+| Classes                          | PascalCase                                  | `Logger`, `Texture`, `ResourceManager`                    |
+| Structs                          | PascalCase                                  | `Color`, `Vec2`, `Particle`                               |
+| Enums                            | PascalCase                                  | `enum class LogLevel`, `enum class BlendMode`             |
+| Enum values                      | PascalCase                                  | `LogLevel::Warning`, `BlendMode::Additive`                |
+| Functions / Methods              | PascalCase                                  | `LoadTexture()`, `Logger::Write()`                        |
+| Namespaces                       | PascalCase                                  | `Rendering`, `MathUtils`                                  |
+| Local variables                  | camelCase                                   | `itemCount`, `deltaTime`, `isReady`                       |
+| Parameters                       | camelCase                                   | `int itemCount`, `const std::string& filePath`            |
+| Class member variables           | `m_` + PascalCase                           | `m_Buffer`, `m_Window`, `m_ItemCount`                     |
+| Struct fields                    | camelCase, no prefix                        | `position`, `velocity`, `lifetime`                        |
+| Macros / constants               | UPPER_SNAKE_CASE                            | `MAX_RETRIES`, `DEFAULT_TIMEOUT`                          |
+| File-local constants             | UPPER_SNAKE_CASE, in an anonymous namespace | `constexpr int MAX_CONNECTIONS = 64;`                     |
+| Compile-time constants           | `static constexpr`                          | `static constexpr int MAX_ITEMS = 256;`                   |
+| Type aliases                     | PascalCase via `using`                      | `using EntityId = std::uint32_t;`                         |
+| Global mutable state             | avoided (no `g_` prefix)                    | prefer file-local `constexpr`; see **Scoping & Lifetime** |
 
-The trailing-underscore member style and the `k` constant prefix are the two
-that trip up a contributor arriving from a `m_`-prefixed, `UPPER_SNAKE_CASE`
-codebase. There is no `m_` anywhere in `src/`.
+### Struct fields
 
-### Struct fields (plain data)
-
-Plain structs used as passive data holders (value types, POD aggregates) use **`snake_case`** fields with no prefix and no trailing underscore (no methods, no invariants):
+Plain structs used as passive data holders (value types, POD aggregates) use **unprefixed `camelCase`** fields (no `m_`, no methods, no invariants):
 
 ```cpp
-struct UploadedFile
+struct Particle
 {
-    std::string filename;            ///< Original name from `Content-Disposition`. Not sanitized.
-    std::string temp_path;           ///< Absolute temp-file path. Empty on any failure.
-    std::string original_extension;  ///< Sanitized extension with the dot, for example `.7z`.
+    Vec2 position{};       ///< Current world position.
+    Vec2 velocity{};       ///< Units moved per second.
+    float lifetime{1.0f};  ///< Seconds of life remaining.
 };
 ```
 
-The trailing `_` is reserved for the private members of behavior-bearing **classes**; plain-data structs never carry it. That suffix is the only mark separating the two, so adding it to a struct field, or dropping it from a class member, silently moves the reader into the wrong category.
+The `m_` prefix is reserved for the private members of behavior-bearing **classes**; plain-data structs never use it.
 
 ### Prefer named data over positional data
 
@@ -357,292 +309,574 @@ An assertion should mean: if this fails, the code is wrong.
 
 ## Comments & Documentation
 
-### How to write the prose
+### Universal documentation standard
 
-These four rules hold everywhere: C++ comments, Rust doc comments, Python docstrings, TypeScript and Markdown.
+All supported programming languages use the same documentation semantics,
+annotation names, annotation order, prose style, section titles, tables, Material
+icon shortcodes, and diagram conventions. Only the language-specific comment or
+docstring delimiters change.
 
-1. **What, why, how, in that order, and only as much as is needed.** What the thing does in one line. Why it works this way: the ordering that matters, the cap and the reason for it, the guarantee another module leans on. How, only when the mechanism is not visible in the code. Never restate the signature; a parameter's name and type already say what they say, so add the units, the range, whether null is allowed, or nothing at all.
-2. **No shouting.** Prose is lowercase. Capitals are for acronyms, identifiers copied from the code, and the Rust `// SAFETY:` marker. If a point needs emphasis, put it first in the sentence.
-3. **No archaeology.** The reader does not care where the code came from. Do not write who ported it, which task number carried it, or what an earlier implementation did. A deliberate oddity still has to be marked deliberate, but as a present-tense constraint: name the behavior, say what breaks if someone "fixes" it, and point at `PARITY-NOTES.md` when the long version lives there. This rule bans narrating where code came from; it does not oblige you to invent a forward-looking reason when none exists. If a construct exists only because it reproduces behavior recorded in `PARITY-NOTES.md`, say what it does, say what changing it would break in observable terms, and point at the note. A pointer is not archaeology. Inventing a rationale the code does not support is worse than a bare pointer, because the next maintainer will check it, find it false, and "fix" the construct.
-4. **Concise.** Short sentences, active voice, one idea each. One term per concept per file. A set of cases wants a table, a flow wants a diagram. Long is fine when every line carries a fact; long is not fine when it is one fact phrased three times.
+This is a repository house style for a **Doxygen-style documentation pipeline**.
+Do not translate it into language-native documentation dialects such as C# XML
+comments, Python `Args:` sections, Rust Markdown parameter headings, or JSDoc
+`@returns`. Keep the shared annotations defined below.
 
-Never delete an ASCII diagram, mermaid diagram, table or formula, and never flatten one back into prose. Never drop a contract: preconditions, failure values, who frees what, thread safety, ordering, units, ranges, caps, encodings.
+Keep every documentation line, including diagrams and tables, at or under 100
+columns after its comment prefix is added.
 
-### Rust documentation comments
+### Core rule: The declaration/implementation split
 
-`src/*.rs` is the larger half of the codebase and it does **not** follow the doxide rules below. It uses `//!` module docs and `///` item docs, rendered by `rustdoc`.
+Think in terms of the **canonical declaration** and the **implementation**, not in
+terms of a particular filename extension.
 
-Four constraints that do not transfer from the C++ side:
+| Target                                | Style              | Commands     | `@author`    |
+|---------------------------------------|--------------------|--------------|--------------|
+| Module/package/namespace/primary type | Structured block   | Yes          | Yes          |
+| Public/external declaration           | Structured block   | Yes          | Yes          |
+| Field/property/variant/enum           | Short member docs  | Usually none | Usually none |
+| Implementation detail                 | Plain line comment | No           | No           |
 
-| Constraint | Why it matters |
-|---|---|
-| No mermaid, no MathJax | `build.bat` runs a plain `cargo doc --no-deps --release --document-private-items`. Nothing injects `--html-in-header`, so a ```` ```mermaid ```` fence and a `$$ ... $$` block both render as literal text. Draw with ASCII inside a ```` ```text ```` fence; every `.rs` file in `src/` already does. |
-| Intra-doc links are denied on breakage | `Cargo.toml` sets `[lints.rustdoc]` with `broken_intra_doc_links = "deny"` and `redundant_explicit_links = "deny"`. Every ``[`Symbol`]`` you write must resolve, and the explicit ``[`X`](X)`` form is an error, not a warning. `cargo doc` is a build gate: `build.bat` step 7 treats a rustdoc lint failure as fatal, the same as clippy. |
-| Private items are published | `--document-private-items` means a `///` on a private fn ships to the page. Write it for a reader, not as a scratch note. |
-| Module names are load-bearing | Modules mirror the C++ translation units they were ported from, snake_cased (`FomodIRParser.cpp` -> `fomod_ir_parser.rs`). `PARITY-NOTES.md` cross-references resolve through those names, so renaming a module breaks the record. |
+The canonical declaration is the one authoritative location for generated API
+documentation. Do not duplicate the same contract on declarations, definitions,
+implementations, overrides, partial types, generated bindings, or wrapper files.
 
-Everything in **How to write the prose** above still applies: what/why/how, lowercase, no archaeology, concise, and never drop a contract. The `// SAFETY:` marker is the one place capitals are correct in Rust prose.
+Typical canonical locations are:
 
-### C++ documentation comments
+| Project shape           | Canonical documentation location                    |
+|-------------------------|-----------------------------------------------------|
+| C/C++ with headers      | Public header declaration                           |
+| Header-only C/C++       | Header declaration                                  |
+| Rust                    | Crate, module, trait, type, field, variant, or item |
+| Java/Kotlin/C#/Swift    | Type or member declaration                          |
+| JavaScript/TypeScript   | Exported declaration or canonical implementation    |
+| Python                  | Module, class, function, or method docstring        |
+| Go                      | Package, type, function, method, field, or value    |
+| Script or configuration | Top-of-file contract or declared function/task      |
 
-The rest of this section applies to the C++ server in `src/*.{hpp,cpp}` only.
-
-Documentation comments are written for **doxide 0.9.0**, which parses `@`-command Javadoc comments and emits Markdown. Headers and sources use deliberately different styles, and a de-sync is easy to introduce, so check the split table below before adding a block. `clang-format` does not reflow comment text, so keep every comment body inside the column limit yourself.
-
-### The generator is doxide, not Doxygen
-
-salma renders the C++ half of its API reference with `doxide build` -> `scripts/_clean_docs.py` -> `mkdocs build`. doxide understands a subset of the Doxygen command set, and anything outside that subset fails silently: doxide copies it into the generated Markdown as literal text, so the command name shows up on the published page.
-
-Several commands a Doxygen-trained author reaches for first are therefore banned here even though Doxygen accepts them. Write the Markdown equivalent, which doxide passes through untouched and MkDocs Material renders.
-
-| Doxygen habit | What doxide does with it | Write this instead |
-|-----------------------------------|------------------------------------------------------------------|------------------------------------------|
-| `@par Title`                      | prints the literal text `@par Title` on the page                  | `## Title` (file/type block) or `**Title**` (function block) |
-| `@f[ ... @f]`                     | prints verbatim; no math renders                                  | `$$ ... $$`                              |
-| `@f$ ... @f$`                     | prints verbatim; no math renders                                  | `$ ... $`                                |
-| `@name` with `@{` / `@}`          | prints verbatim, and corrupts the next member's description cell   | a `## Group name` heading in the type block that names the members |
-| `@code{.cpp}` / `@endcode`        | emits a fence tagged `{.cpp}`, which is not a valid lexer name    | a fenced ```` ```cpp ```` block          |
-| `@ref Target`                     | mangled: swallows the words after it as the link label            | `` `Target` ``                           |
-
-`@brief` and `@author` also leak onto the page, and are required anyway: `scripts/_clean_docs.py` strips both before MkDocs runs. Keep them in existing comments.
-
-These render correctly and may be used freely: `@ingroup`, `@param`, `@return`, `@tparam`, `@note`, `@warning`, `@see`, `@pre`, `@post`, `@p`, `@c`, `@a`, `@struct`, `@class`, `@enum`, `@verbatim` / `@endverbatim`, and trailing `///<` member docs. So do Markdown headings, Markdown tables, fenced code blocks, ```` ```mermaid ```` fences (`mkdocs.yml` registers the superfence), `$...$` and `$$...$$` math (`pymdownx.arithmatex` is wired), and `!!! note "Title"` admonitions.
-
-Placement follows from how doxide nests its output. A `## Heading` in a file or type block renders at page top level and is correct. A function block's body is nested inside a `!!! function` admonition, so use a bold lead-in such as `**Ordering**` there instead, and keep mermaid fences and `$$` blocks out of function blocks entirely.
-
-### The header/source split (the core rule)
-
-|                       | `.hpp`                                                  | `.cpp`                                            |
-|-----------------------|---------------------------------------------------------|---------------------------------------------------|
-| Doc-comment styles    | `/** ... */` blocks, `///` one-liners, `///<` trailing  | plain `//` only                                   |
-| Doxygen commands      | yes (`@brief`, `@param`, `@ingroup`, ...)               | none, with one exception: `@author`               |
-| `@author`             | file/type-level, `[NAME] (https://github.com/[USER])`   | optional `// @author <Name> (<url>)` line         |
+When a language has no header/source split, structured documentation goes directly
+on the declaration and plain comments inside the body remain implementation notes.
 
 ### General comment rule
 
-Comment the reason, the constraint, or the non-obvious behavior. Do not comment what the code already says. ASCII diagrams and worked-example traces in algorithm-heavy code stay: they are house style, not clutter.
+Comment the reason, invariant, constraint, ownership rule, failure behavior, unit,
+or other non-obvious behavior. Do not restate syntax that the code already expresses
+plainly.
 
 Bad:
 
-```cpp
-count++; // Increment count
+```text
+count += 1  // Increment count.
 ```
 
 Better:
 
-```cpp
-count++; // Includes the sentinel slot reserved during parsing.
+```text
+count += 1  // Includes the sentinel slot reserved during parsing.
 ```
 
-### Where documentation lives
-
-* Header files: documentation for the public-facing API (types, functions, members).
-* Source files: implementation notes for non-obvious logic.
+Preserve useful ASCII diagrams, Mermaid diagrams, state-transition descriptions,
+worked examples, formulas, and trace tables in algorithm-heavy code. They are part
+of the house style, not clutter.
 
 ---
 
-### Header (`.hpp`) documentation
+### Structured declaration documentation
 
-#### Block vs. one-line form
+#### Documentation carriers
 
-* A doc comment spanning more than one line is a Javadoc block: `/**` on its own line, a leading ` * ` on every continuation line, a bare ` *` for blank separator lines, and ` */` to close.
-* A doc comment that fits on one physical line uses `///`, for example a lone `/// @brief ...` above a simple declaration.
-* Headers use only these two styles. The `//!` and `/*! */` "bang" variants are not used.
+Use the carrier native to the language while preserving the same annotation lines
+and body layout.
+
+| Language family | Overview/declaration carrier                     | Implementation |
+|-----------------|--------------------------------------------------|----------------|
+| C/C++           | `/** ... */`; declarations may use `///`, `///<` | `//`           |
+| Javadoc-block   | `/** ... */`                                     | `//`           |
+| Rust            | `/*! ... */` overview; `/** ... */` item         | `//`           |
+| Python          | Module or member docstring                       | `#`            |
+| Go/slash-line   | Consecutive `//` lines                           | `//`           |
+| Hash-comment    | Consecutive `#` lines                            | `#`            |
+| SQL/Lua         | Consecutive `--` lines                           | `--`           |
+| HTML/XML        | `<!-- ... -->` where meaningful                  | Plain comment  |
+
+Javadoc-block languages include Java, Kotlin, C#, JavaScript, TypeScript, QML,
+and other languages whose configured parser accepts Javadoc-style blocks.
+Hash-comment languages include Shell, PowerShell, CMake, YAML, and TOML.
+
+A structured block uses one delimiter line, one content prefix per line, a bare
+content prefix for blank separators, and one closing delimiter line.
 
 ```cpp
-/// @brief Reset the buffer to its empty state.
-void clear();
-
 /**
- * @brief Resize the buffer, preserving existing contents.
- * @param new_size   Desired capacity, in elements.
- * @param zero_fill  Whether newly added slots are zero-initialized.
+ * @brief Reset the buffer to its empty state.
  */
-void resize(std::size_t new_size, bool zero_fill);
 ```
 
-#### File / type header block
+For languages without a ` * ` continuation prefix, keep the same logical blank lines
+and annotation order without adding decorative asterisks.
 
-The block documenting a header's primary type (or namespace) uses a **fixed tag order**:
+```python
+"""
+@brief Reset the buffer to its empty state.
+"""
+```
 
-1. **Kind tag** - `@struct Name`, `@class Name`, or `@enum Name`. Present when the header defines one primary type; **omit** it for namespace / free-function headers, which lead with `@brief`.
-2. `@brief` - a one-line summary ending in a period.
-3. `@author [NAME] (https://github.com/[USER])` - the same attribution string everywhere. **File / type-level only**; never repeated on a function, method, or member.
-4. `@ingroup <Module>` - one of the modules your project defines (see below).
-5. a blank ` *`, then prose.
+Do not force `///`, `/** */`, or trailing `///<` into a language whose documentation
+parser does not associate that form with the declaration. The carrier may change;
+the annotations and their meaning must not.
+
+##### C and C++ adapter
+
+For a split header/source API, structured public documentation lives in the header
+and implementation notes live in the source file.
+
+A documentation comment spanning more than one physical line uses a Javadoc block:
+`/**` on its own line, ` * ` on every content line, a bare ` *` for a blank line,
+and ` */` on its own line. A true one-line declaration comment uses `///`.
+
+Use trailing `///<` only for a short field or enumerator description. Do not use
+`/**< */`, `//!<`, or `/*!< */`. Do not use `//!` or `/*! ... */` in C or C++.
+
+##### Rust adapter
+
+Use `/*! ... */` for a crate or module overview and `/** ... */` for an item, field,
+or variant. Put each delimiter on its own line, start each content line with ` * `,
+and use a bare ` *` for a blank line. This also applies to a one-line summary.
+
+Do not use `///` or `//!` in Rust. Use plain `//` for implementation notes.
+
+##### Docstring and line-comment adapters
+
+Python uses the module, class, function, or method docstring that the runtime and
+documentation parser associate with the declaration. Do not add decorative `*`
+characters inside a docstring.
+
+Line-comment languages repeat their ordinary comment prefix on every documentation
+line. A blank documentation line contains only the prefix. Structured blocks are
+distinguished from implementation comments by their placement and annotations.
+
+#### Kind tags
+
+Use a kind tag only when it truthfully matches the declared entity:
+
+| Entity               | Annotation        |
+|----------------------|-------------------|
+| Class                | `@class Name`     |
+| Struct               | `@struct Name`    |
+| Union                | `@union Name`     |
+| Enum                 | `@enum Name`      |
+| Namespace            | `@namespace Name` |
+| Interface            | `@interface Name` |
+and more...
+
+Do not invent a replacement tag for traits, protocols, records, packages, crates, or modules.
+Let the declaration identify their language-specific kind and begin the block with `@brief`
+when none of the supported kind tags is an exact match use best fit or leave empty.
+
+Do **not** use `@file`! File identity remains implicit.
+
+#### Module or type block
+
+The block for a module, namespace, package, crate, or primary type uses this fixed
+order:
+
+1. Optional kind tag: `@class`, `@struct`, `@enum`, or `@namespace`...
+2. `@brief` with one plain-text sentence ending in a period.
+3. `@author [NAME] (https://github.com/[USER])`.
+4. Optional `@ingroup <Module>` when grouping is valid for the generated navigation.
+5. A blank documentation line.
+6. Explanatory prose, sections, tables, diagrams, invariants, and examples.
+   Use Material format for sections.
+7. Optional `@note`, `@warning`, and `@see` entries.
+
+`@author` should be repeated on a function, method,
+constructor, property, field, variant, or enum value.
+It is not top-level since multiple authors can contribute to one file.
 
 ```cpp
 /**
- * @struct Color
- * @brief 8-bit RGBA color.
+ * @class AppViewModel
+ * @brief QML-facing coordinator for application commands and non-secret UI state.
  * @author [NAME] (https://github.com/[USER])
- * @ingroup <Module>
+ * @ingroup ViewModel
  *
- * Plain data struct: a flat aggregate with no invariants, usable directly as
- * a value type. Blending helpers live in the free functions in ColorMath.hpp.
+ * Coordinates the application core and controller collaborators for the QML view
+ * layer. Command methods may accept secrets, but no observable property exposes one.
  *
- * @see ColorMath
+ * ### :material-shield-lock: security invariants
+ *
+ * | Invariant                                  | Enforcement                      |
+ * |--------------------------------------------|----------------------------------|
+ * | Secrets never become observable properties | Commands accept transient values |
+ * | Models expose non-secret state only        | Roles omit secret-bearing fields |
+ *
+ * @see CliPanelViewModel
  */
 ```
 
-A namespace / free-function header drops the kind tag and leads with `@brief`:
+A module or package whose language has no exact `@namespace` equivalent starts with
+`@brief` rather than using a misleading kind tag.
+
+```python
+"""
+@brief Authentication-domain services and immutable public result types.
+@author [NAME] (https://github.com/[USER])
+@ingroup Authentication
+
+The module owns orchestration only. Cryptographic primitives remain in the crypto
+package and persistence remains behind repository interfaces.
+
+### :material-notes: usage notes
+
+This function is designed strictly for [insert primary purpose]
+"""
+```
+
+#### Function, method, and callable documentation
+
+Use this order:
+
+1. `@fn` signature of the function.
+2. `@brief` with one plain-text sentence ending in a period.
+3. `@author [NAME] (https://github.com/[USER])`.
+4. A blank documentation line.
+5. Explanatory prose, sections, tables, diagrams, invariants, and examples.
+   Use Material format for sections.
+6. `@tparam` entries in declaration order.
+7. `@param` entries in declaration order.
+8. `@return` when the callable produces a meaningful result.
+9. Optional `@pre` and `@post` entries.
+10. Optional `@note`, `@warning`, and `@see` entries.
+
+Use `@return`, never `@returns`. Do not add `@return` to constructors, destructors,
+procedures, or callables whose language-level return is only an implementation
+artifact.
+
+Keep the brief line plain text. Do not put `@p`, `@c`, `@ref`, Markdown links, or
+square-bracket ranges in it. Put identifiers and ranges in the prose, `@param`, or
+`@return` text instead.
 
 ```cpp
 /**
- * @brief Pure, dependency-free 2D vector math helpers.
+ * @fn float Lerp(float a, float b, float t)
+ * @brief Linearly interpolate between two values.
  * @author [NAME] (https://github.com/[USER])
- * @ingroup <Module>
  *
- * Each function is a stateless free function operating on plain values, with
- * no global or GPU state.
- */
-```
-
-Do not use `@file`; file identity stays implicit.
-
-#### Modules (`@ingroup`)
-
-Every documented entity is grouped under a module with `@ingroup <Module>`. Groups are declared in **`doxide.yml`**, not in a header: `@defgroup` and `@addtogroup` are unsupported and must not appear in the sources. Adding a group therefore takes three edits, and all three are required:
-
-1. the `groups:` entry in `doxide.yml` (name, title, one-line description),
-2. at least one `@ingroup <Name>` in `src/*.hpp`,
-3. the matching `nav:` entry in `mkdocs.yml`.
-
-Step 2 says `.hpp` and means it. `doxide.yml`'s `files:` list also scans `src/*.cpp`, but the source rule below forbids every Doxygen command in a `.cpp` except `@author`, so a group tagged from a `.cpp` would satisfy doxide while breaking the header/source split. No `.cpp` in `src/` carries a command today; keep it that way.
-
-Skipping step 2 fails silently. doxide generates nothing for a group with no members, so the `mkdocs.yml` nav entry points at a page that never appears. Note also that a **namespace cannot carry `@ingroup`**: doxide warns and ignores it, so tag the individual types and free functions instead.
-
-Choose the module by **subsystem role, not filename**: a request helper belongs to the server module even when its filename names the feature it serves rather than the module.
-
-`docs/` is regenerated but never cleaned automatically. When you change groups or nav, wipe `docs/` first (keeping `docs/main.html`) and rebuild, or a stale page will satisfy a nav entry that a fresh clone cannot.
-
-#### Function / method documentation
-
-A `/** */` block: `@brief` first (it may reference a parameter with `@p param`, or another symbol as `` `Symbol` ``), a blank line, prose, then `@param` (name plus description, continuation lines aligned under the description) and `@return`. Functions carry no `@author`. The spelling is `@return`, never `@returns`.
-
-Function blocks carry the whole contract, not just the parameter list. State what the signature does not: preconditions, postconditions, what is thrown or returned on failure, whether a pointer may be null, who owns a returned resource and how long it lives, thread safety, whether the call blocks, what I/O it performs, and units, ranges, encodings and ordering guarantees. Spell units and ranges out ("bytes", "milliseconds", "in the range [0, 1]").
-
-```cpp
-/**
- * @brief Linearly interpolate between @p a and @p b by @p t.
+ * The factor @p t is clamped to [0, 1], so an out-of-range value saturates to
+ * the nearest endpoint.
  *
- * @p t is clamped to [0, 1], so values outside that range saturate to the
- * nearest endpoint.
+ * ### :material-lock-outline: thread safety
+ *
+ * calls share no mutable state. concurrent calls need no synchronization.
  *
  * @param a  Start value, returned when @p t is 0.
  * @param b  End value, returned when @p t is 1.
  * @param t  Blend factor in [0, 1].
  * @return   The interpolated value.
  */
-float lerp(float a, float b, float t);
+float Lerp(float a, float b, float t);
 ```
 
-#### Members and enum values
+The same annotations remain unchanged in a Python docstring:
 
-Document a struct field or enumerator with a trailing `///<` when the text fits on the member's line. `///<` is the only trailing style this guide uses; not `/**< */`, `//!<`, or `/*!< */`.
+```python
+def lerp(a: float, b: float, t: float) -> float:
+    """
+    @fn lerp(a: float, b: float, t: float) -> float
+    @brief Linearly interpolate between two values.
+    @author [NAME] (https://github.com/[USER])
 
-```cpp
-struct Color
-{
-    std::uint8_t r{0};    ///< Red channel.
-    std::uint8_t g{0};    ///< Green channel.
-    std::uint8_t b{0};    ///< Blue channel.
-    std::uint8_t a{255};  ///< Alpha channel (255 = opaque).
-};
+    The factor @p t is clamped to [0, 1], so an out-of-range value saturates to
+    the nearest endpoint.
 
-enum class LogLevel
-{
-    Debug,    ///< Verbose developer diagnostics.
-    Info,     ///< Normal operational messages.
-    Warning,  ///< Recoverable problems worth attention.
-    Error     ///< Failures that abort the current operation.
-};
+    ### :material-lock-outline: thread safety
+
+    calls share no mutable state. concurrent calls need no synchronization.
+
+    @param a  Start value, returned when @p t is 0.
+    @param b  End value, returned when @p t is 1.
+    @param t  Blend factor in [0, 1].
+    @return   The interpolated value.
+    """
 ```
 
-When a field description is too long for a trailing `///<`, put leading `///` lines above the member instead. This is the one place a `///` comment may span multiple lines. An individual field or enumerator never takes a `/** */` block.
+The same annotations also remain unchanged in a line-comment language:
 
-```cpp
-/// Master enable flag. When false the renderer skips the entire post-processing
-/// chain (blur, bloom, tone-mapping) and presents the raw scene texture
-/// unmodified. Toggled at runtime from the developer console.
-bool postProcessEnabled{true};
+```go
+// @fn Lerp(a, b, t float64) float64
+// @brief Linearly interpolate between two values.
+// @author [NAME] (https://github.com/[USER])
+//
+// The factor t is clamped to [0, 1], so an out-of-range value saturates to the
+// nearest endpoint.
+//
+// ### :material-lock-outline: thread safety
+//
+// calls share no mutable state. concurrent calls need no synchronization.
+//
+// @param a  Start value, returned when t is 0.
+// @param b  End value, returned when t is 1.
+// @param t  Blend factor in [0, 1].
+// @return   The interpolated value.
+func Lerp(a, b, t float64) float64 {
+    // Implementation omitted.
+    return 0
+}
 ```
 
-#### Grouping related members
+#### Fields, properties, variants, and enum values
 
-Never use `@name` with `@{` ... `@}`. doxide prints all three commands as literal text, and `@}` corrupts the description cell of the member that follows it in the generated member table.
+Keep declaration-level member documentation short and local.
 
-Describe the grouping in the type's own doc block instead, under a `## ` heading that names the members it covers. Each member keeps its own trailing `///<`.
+When the language and documentation parser support trailing documentation, use
+`///<` and no other trailing form.
 
 ```cpp
+std::uint8_t alpha{255};  ///< Alpha channel (255 = opaque).
+```
+
+When trailing documentation is unsupported, use the shortest leading declaration
+documentation form accepted by that language. Do not turn a simple field description
+into a large block. Put long explanations, cross-field invariants, and state-machine
+rules in the enclosing type documentation instead.
+
+```typescript
 /**
- * @class Window
- * @brief Owns the OS window and its client-area geometry.
- * @author [NAME] (https://github.com/[USER])
- * @ingroup <Module>
- *
- * ## Window state
- *
- * `window_`, `width_`, `height_` and `initialized_` move as one unit: they are
- * all set by a successful `create()` and all reset by `destroy()`.
- * `initialized_` gates teardown, so it must stay false until the handle is
- * valid.
+ * @brief Master switch for the post-processing pipeline.
  */
-class Window
-{
-    Window* window_ = nullptr;  ///< Owned OS window handle.
-    int width_ = 1280;          ///< Client-area width, in pixels.
-    int height_ = 720;          ///< Client-area height, in pixels.
-    bool initialized_ = false;  ///< Whether creation succeeded (for safe teardown).
-};
+postProcessEnabled: boolean;
 ```
 
-Icon-prefixed headings are house style for these sections, for example `## :material-help: Thread Safety`. Reuse an icon the repository already uses for the same concept rather than inventing one.
+For languages that cannot reliably attach field comments, document the fields in a
+Markdown table in the enclosing type block.
 
-#### Command vocabulary
+#### Grouping related declarations
 
-Documentation commands to use where useful:
+Use an ordinary section comment to group related members. Do not use documentation
+member-group commands.
 
-`@brief`, `@author`, `@ingroup`, `@struct` / `@class` / `@enum`, `@param`, `@return`, `@tparam`, `@pre` / `@post`, `@note` / `@warning`, `@throw`, `@p` / `@c` / `@a` / `@see`, and `@verbatim` / `@endverbatim` for ASCII diagrams.
-
-Everything else is Markdown: `## Title` headings, tables, fenced ```` ```cpp ```` and ```` ```text ```` blocks, ```` ```mermaid ```` diagrams, and `$ ... $` / `$$ ... $$` math.
-
-Never use, because doxide leaks them onto the page: `@par`, `@f[` / `@f]`, `@f$`, `@name`, `@{` / `@}`, `@code` / `@endcode` (in any form), `@ref`.
-
-Never use, because they are unsupported or wrong for this project: `@file`, `@returns` (use `@return`), `@throws` (use `@throw`), `@union`, `@short`, `@defgroup`, `@def`, `@fn`, `@var`, `@internal`, `@namespace`.
+```cpp
+// Window state
+Window* m_Window = nullptr;  ///< Owned OS window handle.
+int m_Width = 1280;          ///< Client-area width, in pixels.
+int m_Height = 720;          ///< Client-area height, in pixels.
+```
 
 ---
 
-### Source (`.cpp`) documentation
+### Sections, tables, icons, code, math, and diagrams
 
-* `//` line comments only. No `/** */` blocks, no `///` (not even trailing `///<`), and no Doxygen commands (`@brief`, `@param`, `@return`, `@ingroup`, `@par`, `@note`, ...).
-* The one exception is an authorship line, written as a plain `// @author <Name> (<url>)`, for example `// @author [NAME] (https://github.com/[USER])`. Keep existing attributions as they stand.
-* When moving header prose into a `.cpp`, strip the Doxygen markup: `@p name` -> `name` (or backtick-quote it: `` `name` ``), `@c Buffer{}` -> plain `Buffer{}`, `@ref Foo` -> `Foo`. Backtick-quoting an identifier is the house substitute for `@c` / `@p` inside `//` comments.
-* A file-header contract block is optional. Complex files (algorithms, pipelines) carry a top-of-file `//` summary, often with an ASCII diagram or worked example; simpler files go straight from includes to code. Either way, put a one-line `//` intent comment above any function whose purpose is not self-evident.
+Section titles and visual documentation are language-independent body content. Keep
+them when moving documentation between languages.
+
+Use `### :material-icon-name: section title` for named prose sections in every
+language. Use lowercase prose in section titles and a valid Material for MkDocs
+icon shortcode. Keep a blank documentation line before and after each heading.
+
+Add sections when distinct contracts or a longer explanation need navigation.
+Useful subjects include ownership, thread safety, security invariants, failure
+handling, and data flow. Keep short, single-topic comments as plain prose. Add only
+the context needed to explain the contract; do not add text just to fill a section.
+
+The documentation scripts preserve authored section icons and add icons only to
+complete generated headings. Icon insertion leaves code examples unchanged.
+MkDocs renders C++ icons; the Rust HTML postprocessor uses the same installed
+Material SVG assets. Check icon names against that set and verify the generated HTML.
+
+````cpp
+/**
+ * @brief Coordinate authenticated browser-fill requests.
+ *
+ * ### :material-transit-connection-variant: data flow
+ *
+ * ```mermaid
+ * flowchart LR
+ *     Browser --> Host
+ *     Host --> Bridge
+ *     Bridge --> Core
+ * ```
+ */
+````
+
+#### Strict table source formatting
+
+Every Markdown table must be aligned in the source, not merely valid after rendering.
+Apply the rule to ordinary Markdown and to tables inside every documentation carrier.
+
+* Put one space between each cell boundary and its content.
+* Pad every non-separator cell so the vertical pipes align in every row.
+* Fill each separator cell with hyphens across the complete padded column width.
+* Preserve the language comment prefix before every row, such as ` * `, `// `, or `# `.
+* Keep table rows within the 100-column limit, including the comment prefix. Shorten
+  wording or split a wide table instead of wrapping one logical row.
+* Never emit compact or ragged forms such as `|---|---|` or rows with drifting pipes.
+
+Use this form:
 
 ```cpp
-// RingBuffer - fixed-capacity FIFO used by the audio mixer.
-//
-// @author [NAME] (https://github.com/[USER])
-// Reads and writes advance independent cursors modulo the capacity. The
-// buffer is treated as full when the write cursor sits one slot behind the
-// read cursor, so exactly one slot is always reserved to tell full from empty.
+/**
+ * @brief Describe how entries become active.
+ *
+ * | Value         | Inclusion rule                        |
+ * |---------------|---------------------------------------|
+ * | `Required`    | Always.                               |
+ * | `Plugin`      | Plugin selection or file-entry flags. |
+ * | `Conditional` | Matching conditional pattern.         |
+ */
 ```
 
+The same alignment rule applies after another carrier prefix:
+
+```go
+// | Value         | Inclusion rule                        |
+// |---------------|---------------------------------------|
+// | `Required`    | Always.                               |
+// | `Plugin`      | Plugin selection or file-entry flags. |
+// | `Conditional` | Matching conditional pattern.         |
+```
+
+Use:
+
+| Content         | House form                                   |
+|-----------------|----------------------------------------------|
+| Section title   | `### :material-icon-name: section title`     |
+| Table           | Source-aligned Markdown table                |
+| Mermaid diagram | Fenced `mermaid` block                       |
+| ASCII diagram   | `@verbatim` and `@endverbatim`               |
+| Code sample     | `@code{.language}` and `@endcode`            |
+| Display math    | `$$ ... $$`                                  |
+
+Do not remove a useful diagram merely because the implementation language changes.
+Adapt identifiers and syntax, but preserve the documented relationship or flow.
+
+---
+
+### Shared annotation vocabulary
+
+Use these annotations where useful in every supported language:
+
+`@brief`, `@author`, `@ingroup`, `@struct`, `@class`, `@enum`, `@namespace`,
+`@param`, `@return`, `@tparam`, `@pre`, `@post`, `@note`, `@warning`, `@p`,
+`@c`, `@see`, `@code`, `@endcode`, `@verbatim`, and `@endverbatim`.
+
+Do not translate them to language-native alternatives. In particular:
+
+| Avoid                            | Use                    |
+|----------------------------------|------------------------|
+| `@returns`                       | `@return`              |
+| Python `Args:` or `Returns:`     | `@param` and `@return` |
+| C# `<summary>` / `<param>`       | `@brief` and `@param`  |
+| Rust `# Arguments` / `# Returns` | `@param` and `@return` |
+| JSDoc `@returns`                 | `@return`              |
+
+Do **not** use: `@file`, `@returns`, `@short`, `@defgroup`,
+`@addtogroup`, `@def`, `@var`, `@internal`, `@{`, `@}`, or the LaTeX forms `@f[ ... @f]` and `@f$ ... @f$`.
+
+For a language-specific entity that has no supported kind tag, omit the kind tag.
+Do not use an inaccurate tag merely to force uniformity.
+
+### Documentation-backend compatibility
+
+The following rules apply to every language.
+They are backend constraints, not C++ rules.
+
+#### Brief-line restrictions
+
+The `@brief` line, or the first prose line when `@brief` is omitted, must contain
+plain text only. Do not place `@p`, `@c`, `@ref`, or square brackets on that line,
+prose following the `@brief` line may use `@p`, `@c`, `@ref`, or square brackets.
+
+#### Identifier commands and punctuation
+
+`@p` and `@c` consume the next whitespace-delimited token, including punctuation.
+Use them only when whitespace follows the identifier.
+
+Write:
+
+```text
+the caller owns `roll`.
+```
+
+Do not write:
+
+```text
+the caller owns @p roll.
+```
+
+Use backticks whenever `.`, `,`, `;`, `:`, or `)` immediately follows the
+identifier.
+
+#### Member grouping
+
+Do not use `@name`, `@{`, or `@}` member groups.
+Do not use ordinary section comments either.
+
+Comments of this style are not allowed:
+
+```text
+// ==============================
+// Section
+// ==============================
+```
+
+```text
+// -- Section ------------------
+```
+
+#### Section headings
+
+Use `### :material-icon-name: section title` for named prose sections so the same
+heading, icon, table, and diagram markup works in all languages.
+
+Rust unsafe API contracts use `### :material-shield-lock: **Safety**`. Clippy requires
+the exact `Safety` text as a separate Markdown text event. The emphasis keeps that
+text separate from the icon while preserving the shared section format. Keep the
+safety lint enabled; use lowercase prose for other section titles.
+
+---
+
+### Implementation documentation
+
+Implementation comments use the language's ordinary line-comment syntax only.
+Do not use structured documentation delimiters or documentation commands inside a
+function body or implementation-only region.
+
+When moving declaration prose into an implementation comment, strip annotation
+markup:
+
+| Declaration documentation | Implementation comment         |
+|---------------------------|--------------------------------|
+| `@p name`                 | `name` or `` `name` ``         |
+| `@c Buffer{}`             | `Buffer{}` or `` `Buffer{}` `` |
+| `@see Parser`             | `Parser`                       |
+
+A complex implementation file may begin with a plain contract summary, worked trace,
+or ASCII diagram. A simple file may begin directly with imports/includes and code.
+
 ```cpp
-// Clamp the requested gain to [0, 1] before applying the fade curve.
+// RingBuffer is the fixed-capacity FIFO used by the audio mixer.
+// Reads and writes advance independent cursors modulo the capacity. One slot is
+// reserved so equal cursors unambiguously mean empty rather than full.
+```
+
+Add a short intent comment above non-obvious local algorithms or implementation-only
+helpers.
+
+```cpp
+// Clamp the requested gain before evaluating the non-linear fade curve.
 void SetGain(Channel& channel, float gain)
 ```
 
 ### TODO comments
 
-Use `TODO` only for real follow-up work, not vague reminders.
-
-Make them specific and actionable:
+Use `TODO` only for real follow-up work. State the required change and, when useful,
+the condition that makes it necessary.
 
 ```cpp
-// TODO: Replace with a spatial hash once the element count exceeds 10k.
+// TODO: Replace the linear scan with a spatial hash above 10,000 elements.
 ```
+
+Do not use vague reminders such as `TODO: improve`, `TODO: clean up`, or
+`TODO: revisit later`.
 
 ---
 
