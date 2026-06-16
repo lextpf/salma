@@ -2,24 +2,22 @@
 
 ## Rules
 
-Ask when unclear. If intent, architecture, or requirements are ambiguous, ask before coding.
-
-Flag uncertainty. If an approach, dependency, or technical detail is uncertain, say so before proceeding.
-
-Challenge bad direction. If my request conflicts with settled practice or likely long-term maintainability, point it out and suggest a better path.
-
-End with omissions. After each task, state what you changed and what you intentionally did not do.
+1. Ask when unclear. If intent, architecture, or requirements are ambiguous, ask before coding.
+2. Flag uncertainty. If an approach, dependency, or technical detail is uncertain, say so before proceeding.
+3. Challenge bad direction. If my request conflicts with settled practice or likely long-term maintainability, point it out and suggest a better path.
+4. End with omissions. After each task, state what you changed and what you intentionally did not do.
 
 ## Documentation
 
-Four rules, everywhere: C++ comments, Rust doc comments, Python docstrings, TypeScript and Markdown. `CONTRIBUTING.md` "Comments & Documentation" is the full version.
+Four rules everywhere in comments and docstrings.
 
-1. **What, why, how**, in that order, and only as much as is needed. Never restate the signature; add units, ranges and nullability or say nothing.
-2. **No shouting.** Prose is lowercase. Capitals are for acronyms, identifiers copied from the code, and the Rust `// SAFETY:` marker. For emphasis, put the point first in the sentence.
-3. **No archaeology.** Do not write who ported a thing, which task number carried it, or what an earlier implementation did. A deliberate oddity is still marked deliberate, but as a present-tense constraint: name the behavior, say what breaks if someone "fixes" it, and point at `PARITY-NOTES.md`. Never invent a forward-looking reason to avoid the pointer: a rationale the code does not support gets checked, found false, and the construct gets "fixed".
-4. **Concise.** Short sentences, active voice, one idea each, one term per concept per file. A set of cases wants a table; a flow wants a diagram.
+1. What, why, how, in that order, and only as much as is needed. Never restate the signature; add units, ranges and nullability, or say nothing.
+2. No shouting. Prose is lowercase. Capitals are for acronyms, identifiers copied from the code.
+3. No archaeology. Do not write prose about the history of a class throughout the life cycle of this repository or what an earlier implementation did.
+4. Concise. Short sentences, active voice, one idea each, one term per concept per file. A set of cases wants a table; a flow wants a diagram.
 
-Write for an engineer who knows the language but not this system. Never explain a general concept; always explain this system's specifics. Never delete a diagram, table or formula, and never drop a contract (preconditions, failure values, who frees what, thread safety, ordering, units, caps, encodings) to save space.
+Document the code using ASD-STE100-inspired Simplified Technical English: use short, direct sentences, one term per concept, active voice, explicit conditions, and avoid idioms, unnecessary synonyms, or ambiguous wording. Focus documentation on intent, constraints, side effects, and non-obvious behavior;
+Write for an engineer who knows the language but not this system.
 
 ## What this is
 
