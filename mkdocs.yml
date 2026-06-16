@@ -1,16 +1,18 @@
-site_name: salma Documentation
+# @brief build the generated C++ API site.
+# @author Alex (https://github.com/lextpf)
+#
+
+site_name: salma documentation
 use_directory_urls: false
 
-# docs/ is doxide's output directory, but it also collects working documents that
-# are not part of the published API reference. Everything matched here stays out
-# of site/. Patterns are gitignore-style and need mkdocs 1.6 or later.
+# keep non-API working documents out of the generated site.
 exclude_docs: |
   superpowers/
 
 validation:
   links:
     not_found: info
-site_description: Wizardless FOMOD installer, processor, and selection-inference engine
+site_description: wizardless FOMOD installer and selection-inference engine
 site_author: lextpf
 
 theme:
@@ -22,13 +24,13 @@ theme:
       accent: purple
       toggle:
         icon: material/brightness-4
-        name: Switch to light mode
+        name: switch to light mode
     - scheme: default
       primary: deep purple
       accent: purple
       toggle:
         icon: material/brightness-7
-        name: Switch to dark mode
+        name: switch to dark mode
   features:
     - content.code.copy
     - content.code.annotate
@@ -68,14 +70,9 @@ markdown_extensions:
   - toc:
       permalink: true
 
-# MathJax renders the `$...$` and `$$...$$` spans that pymdownx.arithmatex emits
-# in `generic: true` mode. No page uses math yet.
-#
-# Before adding the first formula, add a local config file ahead of this CDN
-# entry that sets `tex.inlineMath`/`tex.displayMath` and, most importantly,
-# `options.processHtmlClass: "arithmatex"` with `options.ignoreHtmlClass: ".*"`.
-# Without it MathJax typesets the WHOLE page, so a stray dollar sign or a
-# backslash-bracket pair in prose or in an inline code span is swallowed.
+# before adding formulas, load a local MathJax config ahead of this CDN entry. set
+# `options.processHtmlClass` to `arithmatex` and `options.ignoreHtmlClass` to `.*` so MathJax does
+# not process ordinary page text.
 extra_javascript:
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
@@ -97,12 +94,6 @@ nav:
       - Mo2Controller: Server/Mo2Controller/index.md
       - SecurityMiddleware: Server/SecurityMiddleware/index.md
       - Mo2Helpers: Server/Mo2Helpers/index.md
-    # Namespace page. doxide emits one per namespace that carries a
-    # namespace-level doc block, plus a member table for any symbol with no
-    # @ingroup. Only mo2core has such a block (Types.hpp), and its member table
-    # is now empty because every type is tagged into Core individually, which is
-    # what doxide requires: it refuses @ingroup on a namespace itself.
-    # mo2server has no entry here on purpose - every mo2server symbol is grouped,
-    # so doxide generates no fallback page and a nav entry would dangle.
+    # only mo2core has an ungrouped namespace page.
     - Namespaces:
       - mo2core: mo2core/index.md
