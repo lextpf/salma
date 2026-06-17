@@ -1,13 +1,6 @@
-# ============================================================================
-# .gitattributes for salma
-# ============================================================================
-
-# Default: auto-detect text and normalize to LF on commit.
+# normalize detected text to LF unless a pattern overrides it.
 * text=auto eol=lf
 
-# ----------------------------------------------------------------------------
-# C / C++ source
-# ----------------------------------------------------------------------------
 *.c                     text eol=lf diff=cpp
 *.cc                    text eol=lf diff=cpp
 *.cpp                   text eol=lf diff=cpp
@@ -20,9 +13,6 @@
 *.ipp                   text eol=lf diff=cpp
 *.tcc                   text eol=lf diff=cpp
 
-# ----------------------------------------------------------------------------
-# Build system
-# ----------------------------------------------------------------------------
 CMakeLists.txt          text eol=lf
 *.cmake                 text eol=lf
 *.cmake.in              text eol=lf
@@ -49,9 +39,6 @@ Doxyfile.in             text
 .gitattributes          text eol=lf
 .gitignore              text eol=lf
 
-# ----------------------------------------------------------------------------
-# Web / TypeScript
-# ----------------------------------------------------------------------------
 *.ts                    text
 *.tsx                   text
 *.js                    text
@@ -65,23 +52,14 @@ Doxyfile.in             text
 package.json            text eol=lf
 package-lock.json       text eol=lf -diff
 
-# ----------------------------------------------------------------------------
-# Python
-# ----------------------------------------------------------------------------
 *.py                    text diff=python
 *.pyi                   text diff=python
 
-# ----------------------------------------------------------------------------
-# Scripts
-# ----------------------------------------------------------------------------
 *.bat                   text eol=crlf
 *.cmd                   text eol=crlf
 *.ps1                   text eol=crlf
 *.sh                    text eol=lf
 
-# ---------------------------------------------------------------------------
-# Generated
-# ---------------------------------------------------------------------------
 docs/**                 linguist-generated=true -diff
 docs/main.html          -linguist-generated diff=html
 site/**                 linguist-generated=true -diff
@@ -89,9 +67,6 @@ web/dist/**             linguist-generated=true -diff
 external/**             linguist-vendored=true
 cmake/**                linguist-vendored=true
 
-# ---------------------------------------------------------------------------
-# Archives
-# ---------------------------------------------------------------------------
 *.zip                   binary
 *.7z                    binary
 *.gz                    binary
