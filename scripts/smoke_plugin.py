@@ -1,21 +1,10 @@
 #!/usr/bin/env python
-"""Load the packaged DLL through the MO2 plugin's own loader, unmodified.
+"""
+@brief verify a packaged DLL through the MO2 plugin loader.
+@author Alex (https://github.com/lextpf)
 
-`scripts/smoke_ctypes.py` checks the raw ABI surface. This checks the layer
-above it: that `scripts/mo2-salma.py`'s real `find_dll` / `load_dll` /
-`_configure_dll` / `_check_api_version` accept the DLL, which is what decides
-whether MO2 can load it.
-
-The plugin runs verbatim. It is copied, never edited, into a staging tree; the
-packaged DLL is placed where the plugin's own search order finds it first
-(`<plugin dir>/salma/mo2-salma.dll`); and the module is imported with `mobase`
-and `PyQt6` stubbed, because those exist only inside MO2.
-
-Nothing here touches the live MO2 installation. Deploying for real is a separate
-step, documented in CUTOVER.md.
-
-Usage:
-  python scripts/smoke_plugin.py [--dll PATH]
+the command stages copies under `target/plugin-smoke` and does not access the
+live MO2 installation. it supplies the host-only import classes.
 """
 
 import argparse
@@ -40,11 +29,12 @@ def check(label, ok, detail=""):
 
 
 def install_stubs():
-    """Provide the MO2-only imports the plugin performs at module scope.
+    """
+    @fn install_stubs()
+    @brief provide host-only classes needed to import the plugin.
+    @author Alex (https://github.com/lextpf)
 
-    `__getattr__` hands back a fresh empty class for any name, so the plugin's
-    `class X(mobase.IPluginTool)` definitions evaluate. Only the host is stubbed:
-    every line of salma's own code still runs as written.
+    `__getattr__` creates empty classes for MO2 interface bases.
     """
 
     class _Stub(types.ModuleType):
@@ -68,7 +58,7 @@ def main() -> int:
             f"[smoke] {args.dll} not found. Run `python scripts/package.py` first."
         )
 
-    # Stage: the plugin verbatim, and the DLL where its find_dll looks first.
+    # place the DLL first in the plugin's search order.
     shutil.rmtree(STAGING, ignore_errors=True)
     (STAGING / "salma").mkdir(parents=True, exist_ok=True)
     staged_plugin = STAGING / "mo2-salma.py"
@@ -80,8 +70,7 @@ def main() -> int:
 
     install_stubs()
 
-    # Import the staged plugin by path. The hyphen makes it non-importable by
-    # name, so go through the loader API directly.
+    # the hyphenated file name requires path-based import.
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("salma_plugin_under_test", staged_plugin)
@@ -93,13 +82,11 @@ def main() -> int:
         return 1
     check("plugin module imports standalone", True)
 
-    # The plugin's own search order must find the staged DLL first.
     found = plugin.find_dll()
     check("plugin find_dll() locates the staged DLL",
           found.resolve() == staged_dll.resolve(), str(found))
 
-    # load_dll runs both _configure_dll and _check_api_version, so a missing
-    # export or an ABI-major mismatch fails right here.
+    # `load_dll` checks required exports and the ABI major.
     lib = plugin.load_dll()
     check("plugin load_dll() configured and version-checked the DLL", lib is not None)
 
@@ -108,8 +95,7 @@ def main() -> int:
           version.split(".")[0] == plugin.EXPECTED_API_MAJOR,
           f"{version}, expects major {plugin.EXPECTED_API_MAJOR}")
 
-    # Exercise an owned-string round trip through the plugin's own helper, which
-    # is where a freeResult mismatch would surface.
+    # exercise the plugin's owned-string release path.
     out = plugin._call_owned_string(
         lib, lib.inferFomodSelections, b"smoke-absent.7z", b"smoke-absent")
     check("plugin _call_owned_string round-trips inferFomodSelections",
@@ -124,7 +110,7 @@ def main() -> int:
 
     check("installSucceeded is False before any install", lib.installSucceeded() is False)
 
-    # The logger must write next to the DLL, not next to python.exe.
+    # logs must resolve from the DLL location, not the process location.
     log = staged_dll.parent / "logs" / "salma.log"
     addr = lib.install(b"smoke-absent.7z", str(STAGING / "out").encode())
     if addr:
@@ -133,15 +119,12 @@ def main() -> int:
     if log.is_file():
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
         first = lines[0] if lines else ""
-        # Assert the shape of the first line rather than a specific subsystem
-        # tag. The inferFomodSelections round trip above runs before the install
-        # and narrates, so the first line belongs to [infer], not [install].
+        # inference runs first, so validate the record shape rather than its tag.
         shape = re.match(
             r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} (INFO|WARNING|ERROR) \[\w[\w-]*\] ",
             first)
         check("log line carries the C++ timestamp+level+tag shape",
               bool(shape), first or "<empty>")
-        # The install path must still be represented somewhere in the file.
         check("install narrative reached the log",
               any(" [install] " in line for line in lines),
               f"{len(lines)} line(s) written")
