@@ -1,28 +1,17 @@
-"""Single-mod round-trip test: scan -> install -> compare.
+"""
+@brief run one FOMOD inference and install round trip.
+@author Alex (https://github.com/lextpf)
 
-Infers FOMOD selections for one archive, replays the install into a temporary
-directory, and diffs that tree against the mod folder the user already has. The
-archive is passed to the comparison, so the external-file heuristics in
-`scripts/common.py::compare_trees` are active and files the archive cannot have
-produced stay out of the diff.
+the default comparison checks paths and sizes. `--full` also checks bytes. `--dll`
+selects the engine; otherwise DLL discovery can select a deployed build.
 
-Exits 0 when the trees match, and 1 when inference returns an empty string or
-the diff reports any difference. The temporary install directory is always
-removed.
+`SALMA_MODS_PATH` and `SALMA_DEPLOY_PATH` must be set before import.
 
-Usage:
-  python test_one.py <archive> <mod_folder>
-  python test_one.py <archive> <mod_folder> --full        # byte-for-byte compare too
-  python test_one.py <archive> <mod_folder> --dll <path>  # load a specific DLL
+### :material-check-circle-outline: results and cleanup
 
-Without `--full` only file names and sizes are compared. Without `--dll` the DLL
-comes from `scripts/common.py::find_dll`, whose first candidate is the deployed
-build rather than the one you just compiled; read that function's stale-DLL
-warning before trusting a run.
-
-Precondition: SALMA_MODS_PATH and SALMA_DEPLOY_PATH must be set, `--dll` or not.
-Importing scripts.common reads both and exits 2 with setup guidance if either is
-missing, before argparse sees any argument. Run setup.bat once to configure them.
+exit status 0 means the trees match. status 1 means inference, installation, or comparison failed.
+status 2 means a required path was unset during import. the temporary install and configuration are
+removed after the run. the installed mod is not modified.
 """
 
 import argparse
@@ -38,27 +27,25 @@ from scripts.install import install_mod
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Single-mod FOMOD round-trip test")
-    parser.add_argument("archive", help="Path to mod archive")
-    parser.add_argument("mod_path", help="Path to installed mod folder")
+        description="single-mod FOMOD round-trip test")
+    parser.add_argument("archive", help="path to mod archive")
+    parser.add_argument("mod_path", help="path to installed mod folder")
     parser.add_argument("--full", action="store_true",
-                        help="Compare file contents byte-for-byte")
-    parser.add_argument("--dll", help="Path to mo2-salma.dll")
+                        help="compare file contents byte-for-byte")
+    parser.add_argument("--dll", help="path to mo2-salma.dll")
     args = parser.parse_args()
 
     lib = load_dll(Path(args.dll) if args.dll else find_dll())
     archive = Path(args.archive)
     mod_path = Path(args.mod_path)
 
-    # Step 1: infer FOMOD selections
     json_str = scan(archive, mod_path, dll=lib)
     if not json_str:
         print("ERROR: inferFomodSelections returned empty", file=sys.stderr)
         sys.exit(1)
 
-    # Step 2: install into temp dir
     with tempfile.TemporaryDirectory(prefix="salma_test_") as tmp:
-        # Write JSON config outside install dir to avoid "extra" file
+        # keep the config outside the install tree so it is not an extra file.
         json_file = Path(tmp + "_config.json")
         json_file.write_text(json_str, encoding="utf-8")
 
@@ -67,7 +54,6 @@ def main():
         finally:
             json_file.unlink(missing_ok=True)
 
-        # Step 3: compare
         result = compare_trees(mod_path, Path(tmp), args.full,
                                archive_path=archive)
 
