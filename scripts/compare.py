@@ -1,19 +1,10 @@
-"""Compare two directory trees, strictly.
+"""
+@brief compare two directory trees without archive-based exclusions.
+@author Alex (https://github.com/lextpf)
 
-This entry point calls `compare_trees` with no archive, so all three of its
-external-file heuristics stay off and every difference is reported. The same two
-directories can pass under test_all.py, which does pass the archive, and fail
-here. That gap is intended.
-
-Exits 0 when the trees match and 1 when they do not. Only the first 20 entries
-of each difference class are printed.
-
-Precondition: SALMA_MODS_PATH and SALMA_DEPLOY_PATH must be set. Importing
-scripts.common reads them and exits 2 if either is missing, even though this
-script uses neither.
-
-CLI:
-    python scripts/compare.py <expected_dir> <actual_dir> [--no-full]
+the command exits 0 for a match and 1 for differences. it prints at most 20
+paths per difference class. importing `scripts.common` requires
+`SALMA_MODS_PATH` and `SALMA_DEPLOY_PATH`.
 """
 
 from pathlib import Path

@@ -1,18 +1,10 @@
-"""Infer FOMOD selections for a single mod.
+"""
+@brief infer FOMOD selections for one installed mod.
+@author Alex (https://github.com/lextpf)
 
-Library function:
-    scan(archive, mod_path, dll=None) -> str
-
-CLI:
-    python scripts/scan.py <archive> <mod_path> [--output FILE] [--dll PATH]
-
-Prints the JSON re-indented to 2 spaces, or writes it to --output. Exits 1 when
-inference returns an empty string, which is the engine's failure contract for
-every cause: no FOMOD, unreadable archive, parse error.
-
-Precondition: SALMA_MODS_PATH and SALMA_DEPLOY_PATH must be set even when
---dll is given. Importing scripts.common reads them and exits 2 if either is
-missing, before argparse runs.
+an empty result represents every inference failure and exits 1. importing
+`scripts.common` requires `SALMA_MODS_PATH` and `SALMA_DEPLOY_PATH`, including
+when `--dll` is set.
 """
 
 from pathlib import Path
@@ -25,11 +17,13 @@ from scripts.common import call_owned_string, find_dll, load_dll
 
 
 def scan(archive: Path, mod_path: Path, dll=None) -> str:
-    """Infer FOMOD selections. Returns the JSON string, or "" on any failure.
+    """
+    @fn scan(archive: Path, mod_path: Path, dll=None) -> str
+    @brief preserve the DLL result lifetime while running inference.
+    @author Alex (https://github.com/lextpf)
 
-    Goes through ``call_owned_string`` so the C-side ``_strdup`` buffer is
-    freed. Calling the export directly with ``restype = c_char_p`` leaks the
-    result pointer on every call.
+    `call_owned_string` frees the DLL allocation after copying it.
+    @return the choices JSON, or an empty string for any failure.
     """
     if dll is None:
         dll = load_dll(find_dll())
