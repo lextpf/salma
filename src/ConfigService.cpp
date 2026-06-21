@@ -9,26 +9,12 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-// ConfigService - salma.json, the server's only persisted state.
-//
-// mo2ModsPath is the single key written. fomod_output_dir() is derived from it
-// and never stored, so moving the mods path moves the output directory with it.
-//
-// Reads are forgiving: a missing file, an unopenable file and a parse error all
-// leave the defaults in place and log, because the dashboard must still start
-// so the user can fix the path. Writes are not: save() reports failure and
-// apply_mo2_mods_path() rolls the in-memory value back, so memory and disk
-// never disagree. ConfigService.hpp documents the locking.
-
 namespace mo2server
 {
 
 ConfigService::ConfigService()
 {
-    // Anchor salma.json to the executable, not the working directory, so the
-    // file is the same one whichever directory the server was launched from.
-    // executable_directory() falls back to the working directory only if the
-    // Win32 lookup fails.
+    // anchor configuration to the executable so launch location does not change it.
     config_path_ = mo2core::executable_directory() / "salma.json";
 }
 
@@ -85,9 +71,7 @@ bool ConfigService::save()
     std::lock_guard lock(mutex_);
     auto& logger = mo2core::Logger::instance();
 
-    // Write a sibling temp file, then rename over the target. On MSVC
-    // std::filesystem::rename uses MoveFileExW with REPLACE_EXISTING, so no
-    // reader ever sees a partially written salma.json.
+    // replace from a sibling file so readers cannot observe a partial write.
     auto tmp_path = config_path_;
     tmp_path += ".tmp";
 
@@ -160,8 +144,7 @@ bool ConfigService::apply_mo2_mods_path(const std::string& path)
     {
         return true;
     }
-    // The save failed, so roll the in-memory value back. Otherwise the running
-    // process would serve a path that the next restart discards.
+    // restore the value that remains on disk after a failed save.
     std::lock_guard lock(mutex_);
     mo2_mods_path_ = previous;
     return false;
