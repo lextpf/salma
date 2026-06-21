@@ -4,16 +4,6 @@
 #include <cctype>
 #include <cstdlib>
 
-// SecurityContext - the CSRF token and the Origin allowlist, plus the pure
-// predicates SecurityMiddleware applies to them.
-//
-// Nothing here includes Crow, which is the point: the free functions live in
-// salma-support so tests/security_context_test.cpp can link and exercise the
-// policy without an HTTP server. Keep it that way when adding a rule.
-//
-// The singleton reads SALMA_ALLOWED_ORIGINS once, at first use. SecurityContext.hpp
-// carries the per-function contracts.
-
 namespace mo2core
 {
 
