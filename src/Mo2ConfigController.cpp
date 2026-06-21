@@ -11,21 +11,8 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-// Mo2ConfigController - the /api/config read and write.
-//
-// mo2ModsPath is the only key the server persists; everything else in the
-// response is derived from it at read time. A successful PUT returns the same
-// body get_config() would, so the caller never has to re-read.
-//
-// PUT accepts a body without mo2ModsPath and treats it as a re-save of the
-// current state, which is why an unrelated field is not an error.
-
 namespace mo2server
 {
-
-// ---------------------------------------------------------------------------
-// GET /api/config
-// ---------------------------------------------------------------------------
 
 crow::response Mo2Controller::get_config()
 {
@@ -38,10 +25,6 @@ crow::response Mo2Controller::get_config()
               {"mo2ModsPathValid", !mods.empty() && fs::is_directory(mods)}};
     return json_response(200, j);
 }
-
-// ---------------------------------------------------------------------------
-// PUT /api/config
-// ---------------------------------------------------------------------------
 
 crow::response Mo2Controller::put_config(const crow::request& req)
 {
@@ -56,9 +39,7 @@ crow::response Mo2Controller::put_config(const crow::request& req)
             if (mods_path.empty())
                 return json_response(400, {{"error", "mo2ModsPath must not be empty"}});
             {
-                // Match ".." as a whole path segment, not as a substring. A
-                // substring test would reject a real directory such as
-                // "My..Mod".
+                // reject dot-dot components without rejecting names such as My..Mod.
                 auto p = fs::path(mods_path);
                 for (const auto& seg : p)
                 {
@@ -71,10 +52,7 @@ crow::response Mo2Controller::put_config(const crow::request& req)
                 return json_response(
                     400, {{"error", "mo2ModsPath does not exist or is not a directory"}});
 
-            // apply_mo2_mods_path stages the value, saves, and reverts if the
-            // save fails. A plain assign-then-save would leave memory and disk
-            // disagreeing after a full disk or a permission error, and the next
-            // restart would silently undo a change the user saw applied.
+            // use the transactional setter so a failed save restores memory.
             if (!cfg.apply_mo2_mods_path(mods_path))
             {
                 return json_response(500, {{"error", "Failed to persist configuration to disk"}});
@@ -82,8 +60,7 @@ crow::response Mo2Controller::put_config(const crow::request& req)
         }
         else
         {
-            // No mods path in the body: treat the request as a re-save of the
-            // current state.
+            // an absent key requests a save of the current value.
             if (!cfg.save())
             {
                 return json_response(500, {{"error", "Failed to persist configuration to disk"}});
