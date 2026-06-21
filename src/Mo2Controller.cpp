@@ -11,36 +11,14 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-// Mo2Controller - the class's lifetime and GET /api/mo2/status.
-//
-// One class, several translation units. Its handlers are split by concern:
-// Mo2ConfigController.cpp, Mo2FomodController.cpp, Mo2LogController.cpp,
-// Mo2PluginController.cpp and Mo2TestController.cpp. This file owns only the
-// constructor, the destructor and the status read; shared helpers live in
-// Mo2Helpers.
-//
-// get_status reports a snapshot the dashboard polls on a timer, so it answers
-// from a 5-second cache. The scan job invalidates that cache when it finishes.
-
 namespace mo2server
 {
-
-// ---------------------------------------------------------------------------
-// Constructor / Destructor
-// ---------------------------------------------------------------------------
 
 Mo2Controller::Mo2Controller() = default;
 
 Mo2Controller::~Mo2Controller()
 {
-    // Shut the jobs down here, at a known point in the controller's lifetime,
-    // rather than leaving it to reverse-order member destruction. The header's
-    // member order is therefore not load-bearing, and neither is the fact that
-    // BackgroundJob's worker captures shared_ptr<State> by value, which already
-    // lets the state outlive `*this` when a hung worker is detached. Today's
-    // workers touch no Mo2Controller member; pinning the teardown order in code
-    // keeps a future member reorder or capture change from reintroducing the
-    // hazard.
+    // stop workers before destroying state they could otherwise observe.
     scan_job_.shutdown();
     plugin_action_job_.shutdown();
 
@@ -48,9 +26,7 @@ Mo2Controller::~Mo2Controller()
     std::lock_guard<std::mutex> lock(test_mutex_);
     if (test_process_)
     {
-        // A test child still running at shutdown would be orphaned once its
-        // handle closes, so terminate it first. Best effort: log, terminate,
-        // wait briefly, close.
+        // terminate the child before closing its last owned handle.
         DWORD wait = WaitForSingleObject(test_process_, 0);
         if (wait == WAIT_TIMEOUT)
         {
@@ -65,10 +41,6 @@ Mo2Controller::~Mo2Controller()
     }
 #endif
 }
-
-// ---------------------------------------------------------------------------
-// GET /api/mo2/status
-// ---------------------------------------------------------------------------
 
 crow::response Mo2Controller::get_status()
 {
@@ -99,8 +71,7 @@ crow::response Mo2Controller::get_status()
         }
     }
 
-    // MO2 keeps one directory per mod directly under the mods path, so only the
-    // top level is counted.
+    // count only MO2's top-level mod directories.
     if (!mods_path.empty() && fs::is_directory(mods_path))
     {
         for (auto& entry : fs::directory_iterator(mods_path))
