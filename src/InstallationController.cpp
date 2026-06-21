@@ -15,67 +15,6 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-// InstallationController - the two install entry points, their path-containment
-// policy, and the temp-file ownership rule.
-//
-//   POST /api/installation/upload   (multipart body)
-//     parse_and_validate_upload
-//       body size <= 8 GiB                                  else 413
-//       part "file"      -> temp archive on disk            else 400
-//       part "fomodJson" -> temp .json on disk              optional
-//       part "modName"   -> is_safe_mod_name                else 400
-//       no fomodJson: reuse a saved choices JSON from the FOMOD output dir
-//       part "modPath"   -> inside the mods dir             else 400
-//                           (generated from modName when the part is absent)
-//         |
-//   POST /api/installation/install   (JSON body)
-//     validated inline
-//       archivePath -> must exist, then containment         else 400
-//       modPath     -> containment                          else 400
-//       jsonPath    -> must exist, then containment         else 400
-//         |
-//         +--------> job_.try_start                409 when one is running
-//                        |
-//                        +--> SalmaEngine::install_mod
-//                        |      throws on failure; the lambda catches it and
-//                        |      records the message in the job result
-//                        |
-//                        +--> upload route only: the lambda then deletes the
-//                             temp archive and the temp JSON
-//
-// Both routes return 200 {"started":true} immediately. The install itself runs
-// on the single shared BackgroundJob, and the caller polls
-// GET /api/installation/status/current for the outcome.
-//
-// Containment policy. Each input is checked against a different set of roots
-// and behaves differently when nothing is configured. The asymmetry is
-// deliberate, so read the table before changing a row:
-//
-//   input        checked against                    nothing configured
-//   -----------  --------------------------------   ----------------------
-//   modName      is_safe_mod_name. When no modPath   400
-//   (upload      was sent, <mods>/<modName> is
-//    route only) generated and re-checked with
-//                is_inside.
-//   modPath      the MO2 mods dir only               400
-//   archivePath  mods dir or downloads dir           warn, allow
-//   (install     (SALMA_DOWNLOADS_PATH)
-//    route only)
-//   jsonPath     mods, downloads, FOMOD output, or   allow
-//   (install     the archive's own parent directory
-//    route only)
-//
-// SALMA_DOWNLOADS_PATH is ignored unless it is absolute and not a filesystem
-// root, because a root would make the containment test accept everything.
-//
-// Ownership rule. Once job_.try_start returns true, the background lambda owns
-// temp_path and the temp json_path and deletes both when it finishes. The
-// caller has to clear its own cleanup copies at that point, or the outer catch
-// block deletes files the running job is still reading. When try_start returns
-// false, ownership stays with the caller, which deletes them before returning
-// 409. A choices JSON resolved from the output directory is not a temp file and
-// is never deleted; json_is_temp separates the two cases.
-
 namespace mo2server
 {
 
@@ -86,17 +25,7 @@ static crow::response json_response(int status, const json& body)
     return res;
 }
 
-// Strip the Nexus Mods download suffix from an archive filename stem. Nexus
-// appends "-{ModID}-{Version}-{FileID}", as in "SkyUI-1234-5.2-9876". The regex
-// captures everything before those final three hyphen-separated segments, and
-// returns the input unchanged when it does not match, so a caller can use the
-// result unconditionally.
-//
-// parse_nexus_archive_name in Mo2FomodController.cpp decodes the same
-// convention with a different regex: it extracts the two numeric ids and is
-// lazy on the stem, while this one needs only the stem and is greedy, with a
-// restricted character class for the version segment. The two can disagree on a
-// name carrying extra hyphen-digit groups. Change one and check the other.
+// remove the final Nexus mod-id, version, and file-id suffix when present.
 static std::string strip_nexus_suffix(const std::string& stem)
 {
     static const std::regex nexus(R"(^(.*)-\d+-[\d\.\-]+-\d+$)");
@@ -108,22 +37,9 @@ static std::string strip_nexus_suffix(const std::string& stem)
     return stem;
 }
 
-// Locate a previously saved FOMOD choices JSON that matches this mod or
-// archive. Returns an empty string when nothing matches.
-//
-// Two passes:
-//   1. Exact: "{mod_name}.json", "{archive_stem}.json", then
-//      "{archive_base}.json" (Nexus suffix stripped), in that order.
-//   2. Fuzzy: every .json in the output directory, longest stem first so the
-//      greediest match wins. A candidate matches when its lowercase stem is a
-//      prefix of the mod name, the archive stem or the stripped archive base,
-//      and all three guards hold:
-//        - stem length >= 5, so a stem like "a.json" cannot claim unrelated
-//          mods. 5 is the length of the shortest realistic mod name, "SkyUI".
-//        - stem length >= half the target length, so the match covers most of
-//          the name rather than a trivial prefix.
-//        - the character after the prefix is a separator (-, _, space, dot),
-//          so "Sky" cannot match "Skyrim".
+// prefer exact mod, archive, and stripped Nexus names. otherwise use the longest
+// case-insensitive prefix of at least five characters and half the target length.
+// a fuzzy prefix must end at `-`, `_`, space, dot, or the target boundary.
 static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
                                             const std::string& mod_name,
                                             const std::string& archive_filename)
@@ -139,10 +55,7 @@ static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
     const std::string archive_stem_lower = mo2core::to_lower(archive_stem);
     const std::string archive_base_lower = mo2core::to_lower(archive_base);
 
-    // The is_inside guards are a second line of defense. is_safe_mod_name
-    // already screened mod_name, and the archive stem and base come from the
-    // uploaded filename, but every join here still takes caller-controlled
-    // input, so the resolved path is re-checked for containment.
+    // recheck every caller-derived join against the output directory.
     const fs::path exact_mod = fomod_output_dir / (mod_name + ".json");
     if (mo2core::is_inside(fomod_output_dir, exact_mod) && fs::exists(exact_mod))
         return exact_mod.string();
@@ -153,7 +66,7 @@ static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
     if (mo2core::is_inside(fomod_output_dir, exact_archive_base) && fs::exists(exact_archive_base))
         return exact_archive_base.string();
 
-    // Fuzzy pass. Sorting longest stem first makes the greediest match win.
+    // sort longest first so the most specific fuzzy match wins.
     std::vector<fs::path> candidates;
     for (const auto& entry : fs::directory_iterator(fomod_output_dir))
     {
@@ -183,7 +96,7 @@ static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
                 return false;
             if (stem_lower.size() == target.size())
                 return true;
-            // The stem has to end on a separator, not mid-word.
+            // reject prefixes that end inside a word.
             char next = target[stem_lower.size()];
             return next == '-' || next == '_' || next == ' ' || next == '.';
         };
@@ -204,10 +117,7 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
 {
     auto& logger = mo2core::Logger::instance();
 
-    // The upload cap, and the only one: Crow bounds no request body, so this
-    // check runs against a req.body that is already buffered in full. It saves
-    // the multipart parse and the temp-file write, not the memory. main.cpp's
-    // kStreamThreshold holds the same value but bounds a response, not this.
+    // Crow has already buffered the body; this cap prevents parsing and disk use.
     static constexpr size_t kMaxUploadBytes = 8ULL * 1024 * 1024 * 1024;
     if (req.body.size() > kMaxUploadBytes)
     {
@@ -232,14 +142,11 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
                            uploaded.temp_path,
                            uploaded.original_extension));
 
-    // These three parts are optional; each missing one has its own fallback
-    // below.
     auto mod_name = MultipartHandler::get_part_value(msg, "modName");
     auto mod_path = MultipartHandler::get_part_value(msg, "modPath");
     auto fomod_json = MultipartHandler::get_part_value(msg, "fomodJson");
 
-    // The engine reads selections from a file path, so an inline fomodJson has
-    // to land on disk before the background job starts.
+    // the engine accepts a selections path, so persist an inline value first.
     if (!fomod_json.empty())
     {
         logger.log(std::format("[install] FOMOD JSON provided ({} chars)", fomod_json.size()));
@@ -260,8 +167,7 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
         }
     }
 
-    // Fall back to the archive stem, minus any leading download-order digits
-    // such as "007-".
+    // remove a leading download-order prefix from the archive stem.
     if (mod_name.empty())
     {
         mod_name = fs::path(uploaded.filename).stem().string();
@@ -278,7 +184,6 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
     }
     ctx.mod_name = mod_name;
 
-    // With no uploaded JSON, fall back to a previously saved choices file.
     if (ctx.json_path.empty())
     {
         const auto fomod_output_dir = ConfigService::instance().fomod_output_dir();
@@ -311,7 +216,6 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
         }
     }
 
-    // No modPath: derive one under the configured mods directory.
     if (mod_path.empty())
     {
         auto mods_dir = ConfigService::instance().mo2_mods_path();
@@ -324,8 +228,7 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
         mod_path = (fs::path(mods_dir) / mod_name).string();
         if (!mo2core::is_inside(fs::path(mods_dir), fs::path(mod_path)))
         {
-            // is_safe_mod_name above should make this unreachable. The check
-            // is cheap and the invariant is worth stating.
+            // retain containment as defense in depth after name validation.
             error_out = json_response(
                 400, {{"error", "Generated mod path escapes the configured MO2 mods directory"}});
             return std::nullopt;
@@ -353,8 +256,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
             return error_out;
         }
 
-        // Hold cleanup copies until the job takes ownership. They cover the
-        // paths where the job never starts: a 409, or a throw before try_start.
+        // retain ownership until the background job starts.
         temp_path_cleanup = ctx->temp_path;
         if (ctx->json_is_temp)
         {
@@ -362,8 +264,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
             json_temp_cleanup = true;
         }
 
-        // Capture by value: ctx dies when this handler returns, and the job
-        // outlives it.
+        // the job outlives the request context, so capture values only.
         std::string temp_path = ctx->temp_path;
         std::string mod_path = ctx->mod_path;
         std::string json_path = ctx->json_path;
@@ -396,8 +297,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
                         job_result.error = ex.what();
                     }
 
-                    // The job owns both temp files from here; delete them
-                    // whether the install succeeded or threw.
+                    // the job removes owned temporary files on both outcomes.
                     try
                     {
                         fs::remove(temp_path);
@@ -415,7 +315,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
                     return job_result;
                 }))
         {
-            // The job never started, so ownership stayed here.
+            // the request retains ownership when the job slot is busy.
             try
             {
                 if (!temp_path_cleanup.empty())
@@ -434,8 +334,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
             return json_response(409, {{"error", "An installation is already running"}});
         }
 
-        // The lambda now owns the temp files. Clear these copies, or the outer
-        // catch block deletes files the running job is still reading.
+        // clear request-owned copies after ownership moves to the job.
         temp_path_cleanup.clear();
         json_path_cleanup.clear();
         json_temp_cleanup = false;
@@ -480,7 +379,6 @@ crow::response InstallationController::handle_install(const crow::request& req)
             return json_response(400, {{"error", "Archive path does not exist"}});
         }
 
-        // archivePath containment. See the policy table at the top of the file.
         {
             auto mods_path = mo2server::ConfigService::instance().mo2_mods_path();
             const char* downloads_env = std::getenv("SALMA_DOWNLOADS_PATH");
@@ -488,9 +386,7 @@ crow::response InstallationController::handle_install(const crow::request& req)
             if (downloads_env && *downloads_env)
             {
                 auto dp = fs::path(downloads_env);
-                // A root such as "/" or "C:\" would make the containment check
-                // accept everything, and a relative path would resolve against
-                // an attacker-chosen working directory. Reject both.
+                // reject relative and root-only download paths before containment checks.
                 if (dp.is_absolute() && dp.has_relative_path())
                 {
                     downloads_path = downloads_env;
@@ -546,8 +442,7 @@ crow::response InstallationController::handle_install(const crow::request& req)
                 400, {{"error", "modPath must be inside the configured MO2 mods directory"}});
         }
 
-        // jsonPath containment. Without it, a caller could name any readable
-        // file on the host and have the engine parse it.
+        // prevent the engine from parsing an arbitrary readable host file.
         if (!json_path.empty())
         {
             if (!fs::exists(json_path))
@@ -577,7 +472,7 @@ crow::response InstallationController::handle_install(const crow::request& req)
                 json_contained = true;
             if (!fomod_output.empty() && mo2core::is_inside(fomod_output, fs::path(json_path)))
                 json_contained = true;
-            // A choices file sitting next to the archive is also accepted.
+            // accept an archive sidecar after canonical containment succeeds.
             if (!archive_path.empty())
             {
                 auto archive_parent = fs::path(archive_path).parent_path();
@@ -644,23 +539,14 @@ crow::response InstallationController::handle_status(const std::string& job_id)
             "[install] handle_status: job_id '{}' ignored, only 'current' is supported", job_id));
     }
 
-    // Read the running flag inside read_result's callback, where the mutex is
-    // held, so it cannot disagree with has_result. BackgroundJob's worker stores
-    // the result and clears state_->running under that same mutex, so a read
-    // taken inside the callback sees both or neither. The dashboard drives the
-    // upload UI off this pair: running=true next to a finished result would
-    // leave it stuck on a progress state.
-    //
-    // Mo2Controller::get_scan_status and get_plugin_action_status read the flag
-    // outside the callback instead; each explains why at the call site.
+    // read running and result under one lock so the UI receives one job state.
     json result = job_.read_result(
         [this](bool has_result, const InstallJobResult* r, const std::string& error) -> json
         {
             json j = {{"running", job_.is_running()}};
             if (has_result && r)
             {
-                // A non-empty error means BackgroundJob itself caught a throw;
-                // report it as a failed install.
+                // surface exceptions captured by BackgroundJob as install failures.
                 if (!error.empty())
                 {
                     j["success"] = false;
