@@ -1,93 +1,24 @@
-//! Multi-phase CSP solver for FOMOD selection inference.
-//!
-//! The single public entry point [`solve_fomod_csp`] compares a FOMOD
-//! installer's option space against an already-installed target file tree and
-//! returns the best-scoring `[step][group][plugin]` selection grid it can find.
-//!
-//! ## The five phases
-//!
-//! Phases run in order, each behind a gate. A phase runs only while the solve is
-//! still inexact and inside its time budget.
-//!
-//! ```text
-//!   seed: every plugin deselected, select_any_cap = 64 (narrow)
-//!     |
-//!    [1] run_initial_phases
-//!     |     greedy -> local search (at most 5 passes) -> targeted repair
-//!     |
-//!    gate  !exact && !deadline
-//!     |
-//!    [2] run_component_decomposition
-//!     |     per component: local search, then a backtrack pass
-//!     |
-//!    gate  !exact && !deadline
-//!     |
-//!    [3] run_residual_repair
-//!     |     local search, then a backtrack pass, over the affected groups
-//!     |
-//!    gate  !exact && !deadline
-//!     |
-//!    [4] run_focused_search
-//!     |     local search -> backtrack -> focused-exact backtrack
-//!     |
-//!    gate  !exact && !deadline
-//!     |
-//!    [5] run_global_fallback: one group order, a widening cap ladder
-//!           global(64) -> global-widened(256)
-//!                      -> global-targeted(256, affected groups in exact mode)
-//!                      -> global-full(0)
-//!
-//!   gate legend
-//!     exact    = SolverSearchState::found_exact, set by evaluate_candidate the
-//!                moment a candidate reproduces the target with zero errors
-//!     deadline = SolverProgress::deadline_exceeded, a 600 s wall clock
-//!                (CONFIG.time_limit_seconds)
-//!
-//!   phases 2, 3 and 4 can also return without doing anything:
-//!     [2] when the installer decomposes into 1 component or fewer
-//!     [3] when there is no best yet, when that best is not near-perfect
-//!         (missing 0, extra 0, size_mm <= 1, hash_mm <= 2), or when the
-//!         mismatch-affected group set is empty or covers every group
-//!     [4] when there is no best yet, or when the mismatch-affected group set
-//!         is empty or covers every group
-//! ```
-//!
-//! Those gates are the whole control flow. Nothing else short-circuits, and no
-//! phase is skipped because constraint propagation resolved a group.
-//!
-//! ## Scoring oracle and the first-found-wins tie rule
-//!
-//! Every candidate is scored by replaying it through the forward simulator
-//! ([`simulate`]) and diffing against the target ([`compare_trees`]).
-//! [`ReproMetrics::better_than`](crate::fomod_csp_types::ReproMetrics::better_than)
-//! rejects an equal metric tuple, so [`evaluate_candidate`] keeps the first
-//! candidate discovered at any metric tuple. Whenever ties exist, every
-//! visitation, iteration and sort order is therefore observable in the final
-//! grid, which is why each of those orders carries a total tiebreak.
-//!
-//! For a given phase coverage the solve is run-to-run deterministic. Phase
-//! coverage itself is not, because the 600 s wall-clock deadline
-//! (`CONFIG.time_limit_seconds`) gates phases 2 through 5 and can cut a running
-//! backtrack short: a heavily loaded machine can stop at an earlier phase and
-//! return a different grid for the same input. That deadline is the only
-//! timing-dependent input to the result; everything else is a pure function of
-//! the installer, the atoms and the target tree.
-//!
-//! ## Iterative backtracker
-//!
-//! [`backtrack`] walks an explicit stack instead of recursing, so a deep
-//! installer cannot overflow the native stack. It carries branch-and-bound
-//! pruning ([`lower_bound`] / [`cannot_beat`]), subtree memoization keyed by
-//! [`hash_flag_subset`] plus [`contested_signature`], an extra-only option
-//! prune, and node-limit and deadline guards.
-//!
-//! ## Progress logging
-//!
-//! Phases narrate through the `[solver]` log tag, including a tqdm-style
-//! progress bar built by [`format_count`], [`format_duration`],
-//! [`format_option_cap`] and [`build_tqdm_bar`]. The per-node progress check in
-//! [`evaluate_candidate`] runs only when `estimated_total > 1`, so a pass that
-//! never sets an estimate never reads the clock.
+/*!
+ * @brief finds FOMOD selections that best reproduce an installed file tree.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * ### :material-transit-connection-variant: search phases
+ *
+ * phases stop after an exact match or the configured deadline:
+ *
+ * @verbatim
+ * greedy and local repair
+ *   -> component search
+ *   -> residual repair
+ *   -> focused search
+ *   -> widening global search
+ * @endverbatim
+ *
+ * ### :material-timer-outline: search limits
+ *
+ * equal scores keep the first candidate. the backtracker uses an explicit stack, node limits,
+ * memoization, and lower-bound pruning.
+ */
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -112,31 +43,16 @@ use crate::logger::Logger;
 use crate::types::PluginType;
 use crate::utils::hash_combine;
 
-/// Maximum number of memoization entries kept before the whole table is cleared.
+// maximum number of memoization entries kept before the whole table is cleared.
 const MAX_MEMO_ENTRIES: usize = 100_000;
 
-/// Maximum backtrack stack depth before a branch is abandoned.
+// maximum backtrack stack depth before a branch is abandoned.
 const MAX_BACKTRACK_DEPTH: usize = 500;
 
-/// Reconstruct the condition-flag map by replaying selected plugins up to a
-/// given `(step, group)` pair.
-///
-/// `stop_step_idx < 0` replays the whole installer. Steps are walked in document
-/// order; the incremental [`advance_flags_past_group`] path instead advances
-/// groups in the priority-sorted plan order. The two orders differ inside a
-/// step, so each call site uses the one its algorithm needs and they are not
-/// interchangeable.
-///
-/// The stop position takes effect only when its step is visible. The stop test
-/// lives inside the group loop, and an invisible step is skipped wholesale
-/// before that loop runs, so a `stop_step_idx` naming a step that is invisible
-/// under the flags accumulated so far never stops the replay: it runs to the end
-/// of the installer and the returned map holds flags set by later steps. Both
-/// callers (local search and the backtracker) then use that map to decide the
-/// visibility of that very step. Moving the stop test out of the group loop
-/// changes which flags those callers see, and with them the selections the
-/// solver returns; it is a behavior change, not a cleanup. See
-/// `PARITY-NOTES.md`.
+// reconstruct the condition-flag map by replaying selected plugins up to a given (step, group)
+// pair.
+// steps are walked in document order; the incremental `advance_flags_past_group` path instead
+// advances groups in the priority-sorted plan order.
 fn rebuild_flags(
     installer: &FomodInstaller,
     selections: &[Vec<Vec<bool>>],
@@ -187,8 +103,6 @@ fn rebuild_flags(
     flags
 }
 
-/// Is this step visible under the current flags and any external visibility
-/// override? A step with no `visible` condition is always visible.
 fn step_visible_with_flags(
     step: &FomodStep,
     step_idx: usize,
@@ -204,8 +118,6 @@ fn step_visible_with_flags(
     evaluate_condition_inferred(vis, flags, mode, None)
 }
 
-/// Human-readable node count: `1234` -> `1k`, `2_500_000` -> `2.5M`. The `k`
-/// tier prints no decimals; the `M` and `G` tiers print one.
 fn format_count(n: i64) -> String {
     if n >= 1_000_000_000 {
         format!("{:.1}G", n as f64 / 1e9)
@@ -218,8 +130,7 @@ fn format_count(n: i64) -> String {
     }
 }
 
-/// Elapsed seconds as `00:SS` under a minute, `MM:SS` under an hour, and
-/// `H:MM:SS` above it.
+// elapsed seconds as 00:SS under a minute, MM:SS under an hour, and H:MM:SS above it.
 fn format_duration(s: i64) -> String {
     if s < 60 {
         format!("00:{s:02}")
@@ -230,8 +141,6 @@ fn format_duration(s: i64) -> String {
     }
 }
 
-/// A SelectAny cap for display. A non-positive cap means uncapped and prints as
-/// `full`.
 fn format_option_cap(select_any_cap: i32) -> String {
     if select_any_cap <= 0 {
         "full".to_string()
@@ -240,10 +149,7 @@ fn format_option_cap(select_any_cap: i32) -> String {
     }
 }
 
-/// Render a tqdm-style progress bar, 20 cells wide.
-///
-/// The `>` head overwrites the cell after the filled run, so a bar at 0% reads
-/// `>...................` and a full bar carries no head at all.
+// render a tqdm-style progress bar, 20 cells wide.
 fn build_tqdm_bar(current: i64, total: i64, elapsed_s: i64) -> String {
     const WIDTH: usize = 20;
     let total = if total <= 0 { 1 } else { total };
@@ -284,13 +190,7 @@ fn build_tqdm_bar(current: i64, total: i64, elapsed_s: i64) -> String {
     )
 }
 
-/// Emit one `After <phase>: exact=..., missing=..., extra=..., size_mm=...,
-/// hash_mm=...` line. Five call sites share it: greedy, local search, targeted
-/// repair, component solve and focused search. Residual repair (phase 3) emits
-/// no such line, so the log narrative skips it.
-///
-/// `exact` is the run-wide `search.found_exact` flag; the four counters come
-/// from `best.best`.
+// emit one `After phase: exact=..., missing=..., extra=..., size_mm=..., hash_mm=...` line.
 fn log_phase_metrics(state: &SolverState, phase: &str) {
     Logger::instance().log(&format!(
         "[solver] After {phase}: exact={}, missing={}, extra={}, size_mm={}, hash_mm={}",
@@ -302,7 +202,6 @@ fn log_phase_metrics(state: &SolverState, phase: &str) {
     ));
 }
 
-/// Render `affected` group indices as a `"; "`-joined list of group names.
 fn join_group_names(pre: &Precompute<'_>, affected: &[i32]) -> String {
     affected
         .iter()
@@ -311,14 +210,10 @@ fn join_group_names(pre: &Precompute<'_>, affected: &[i32]) -> String {
         .join("; ")
 }
 
-/// Simulate the current selections, score them against the target tree, and
-/// update the best-solution state on a strict improvement.
-///
-/// The only site that increments the node count. An equal metric tuple does not
-/// replace the best, because
-/// [`ReproMetrics::better_than`](crate::fomod_csp_types::ReproMetrics::better_than)
-/// rejects it, so the first candidate found at a given tuple wins. Sets
-/// `search.found_exact` as soon as a candidate reproduces the target exactly.
+// simulate the current selections, score them against the target tree, and update the best-solution
+// state on a strict improvement.
+// an equal metric tuple does not replace the best, because `ReproMetrics::better_than` rejects it,
+// so the first candidate found at a given tuple wins.
 fn evaluate_candidate(
     state: &mut SolverState,
     installer: &FomodInstaller,
@@ -332,9 +227,9 @@ fn evaluate_candidate(
 
     state.search.nodes_explored += 1;
 
-    // Periodic progress logging, from every phase (greedy, local search,
-    // backtrack). The `estimated_total > 1` guard keeps a pass that never sets
-    // an estimate from reading the clock once per node.
+    // periodic progress logging, from every phase (greedy, local search, backtrack). the
+    // `estimated_total > 1` guard keeps a pass that never sets an estimate from reading the clock
+    // once per node.
     if state.progress.estimated_total > 1 {
         let now = Instant::now();
         let elapsed_ms = now
@@ -382,12 +277,9 @@ fn evaluate_candidate(
     metrics
 }
 
-/// Find every group whose selection could influence the given mismatched dests.
-///
-/// Seeds from the direct producers plus, for conditional dests, every group that
-/// sets a needed flag, then expands through the flag dependency chain (BFS). The
-/// returned group indices are sorted, so the hash-set iteration order during the
-/// expansion cannot leak into the result.
+// find every group whose selection could influence the given mismatched dests.
+// the returned group indices are sorted, so the hash-set iteration order during the expansion
+// cannot leak into the result.
 fn groups_for_mismatches(pre: &Precompute, mismatched: &[String]) -> Vec<i32> {
     let mut groups: HashSet<i32> = HashSet::new();
     let mut queue: Vec<i32> = Vec::new();
@@ -439,19 +331,13 @@ fn groups_for_mismatches(pre: &Precompute, mismatched: &[String]) -> Vec<i32> {
     out
 }
 
-/// Number of selected plugins in an option.
 fn selected_count(option: &[bool]) -> i32 {
     option.iter().filter(|&&b| b).count() as i32
 }
 
-/// Build the per-group toggle-bit set for the targeted repair pass.
-///
-/// A repair group contributes the local plugins that produce a mismatched dest,
-/// plus whatever it currently has selected in the best solution. Only SelectAny
-/// and SelectAtLeastOne groups with more than one plugin qualify. Candidates
-/// sort by evidence ascending, then by local index; that second key keeps the
-/// order total, so equal-evidence plugins cannot swap between runs. The list is
-/// capped at 11 bits, and a group is kept only when at least 2 bits survive.
+// build the per-group toggle-bit set for the targeted repair pass.
+// candidates sort by evidence ascending, then by local index; that second key keeps the order
+// total, so equal-evidence plugins cannot swap between runs.
 fn build_repair_plugin_map(
     state: &SolverState,
     pre: &Precompute,
@@ -531,13 +417,7 @@ fn build_repair_plugin_map(
     out
 }
 
-/// Exhaustive bit-flip repair over a small plugin neighborhood.
-///
-/// For each repair group (SelectAny and SelectAtLeastOne only) enumerates all
-/// `2^k` on/off combinations of its toggle bits, `k` capped at 11, over at most
-/// 2 passes, keeping strict improvements. Every combination is scored through
-/// [`evaluate_candidate`]. Does nothing when there is no best solution, no
-/// repair group or no mismatch, and stops as soon as an exact match appears.
+// exhaustive bit-flip repair over a small plugin neighborhood.
 fn targeted_repair_search(
     state: &mut SolverState,
     pre: &Precompute,
@@ -641,7 +521,6 @@ fn targeted_repair_search(
     }
 }
 
-/// Is any producer group for `dest` still unassigned (`order_pos >= next_idx`)?
 fn has_remaining_group(
     map: &HashMap<String, Vec<i32>>,
     dest: &str,
@@ -659,8 +538,6 @@ fn has_remaining_group(
     false
 }
 
-/// A conditional-only dest stays repairable while any group that sets a needed
-/// flag remains unassigned.
 fn conditional_repair_remaining(
     pre: &Precompute,
     dest: &str,
@@ -683,8 +560,6 @@ fn conditional_repair_remaining(
     false
 }
 
-/// Admissible lower bound: simulate the current selections and count only the
-/// mismatches that no still-unassigned group can fix. Feeds [`cannot_beat`].
 fn lower_bound(
     state: &SolverState,
     pre: &Precompute,
@@ -730,9 +605,6 @@ fn lower_bound(
     )
 }
 
-/// Strict lexicographic `>` on `(missing, extra, size_mismatch, hash_mismatch)`:
-/// true when the lower bound already loses to the best, which makes the branch
-/// safe to prune.
 fn cannot_beat(lb: &ReproMetrics, best: &ReproMetrics) -> bool {
     if lb.missing > best.missing {
         return true;
@@ -754,14 +626,10 @@ fn cannot_beat(lb: &ReproMetrics, best: &ReproMetrics) -> bool {
     false
 }
 
-/// FNV fold of the selected, already-assigned contested plugins.
-///
-/// Iterates `pre.contested_plugins` (sorted ascending) and folds
-/// `(flat_plugin + 1)` through [`hash_combine`] for each contested plugin whose
-/// group is already assigned (`0 <= order_pos < next_idx`) and currently
-/// selected. The value is a `MemoKey` equality field: two search states that
-/// fold to the same signature are treated as the same subtree, so the seed, the
-/// iteration order and the `+ 1` all have to stay as they are.
+// FNV fold of the selected, already-assigned contested plugins.
+// the value is a `MemoKey` equality field: two search states that fold to the same signature are
+// treated as the same subtree, so the seed, the iteration order and the `+ 1` all have to stay as
+// they are.
 fn contested_signature(
     state: &SolverState,
     pre: &Precompute,
@@ -803,8 +671,6 @@ fn contested_signature(
     sig
 }
 
-/// Write an option into the selection grid for a group. Plugins past the end of
-/// `option` are cleared, so a short option deselects the tail of the group.
 fn apply_option(selections: &mut [Vec<Vec<bool>>], gref: &GroupRef, option: &[bool]) {
     let s = gref.step_idx as usize;
     let g = gref.group_idx as usize;
@@ -813,11 +679,10 @@ fn apply_option(selections: &mut [Vec<Vec<bool>>], gref: &GroupRef, option: &[bo
     }
 }
 
-/// Advance the incremental flag map past one group's plugins, recording undo
-/// deltas for [`undo_flags_to`].
-///
-/// Its callers walk the priority-sorted plan order, unlike [`rebuild_flags`],
-/// which walks document order.
+// advance the incremental flag map past one group's plugins, recording undo deltas for
+// undo_flags_to.
+// its callers walk the priority-sorted plan order, unlike `rebuild_flags`, which walks document
+// order.
 fn advance_flags_past_group(
     flags: &mut HashMap<String, String>,
     installer: &FomodInstaller,
@@ -851,7 +716,6 @@ fn advance_flags_past_group(
     }
 }
 
-/// Roll the incremental flag map back to a prior undo-stack mark.
 fn undo_flags_to(
     flags: &mut HashMap<String, String>,
     undo: &mut Vec<crate::fomod_csp_types::FlagDelta>,
@@ -867,18 +731,10 @@ fn undo_flags_to(
     }
 }
 
-/// Greedy forward pass: give each group its highest-ranked option, in
-/// `pre.groups` order, tracking flags incrementally, then score once at the end.
-///
-/// "Highest-ranked" is the head of [`get_options_for_group`]'s list, ordered by
-/// the option-reduction heuristic: evidence descending, unique descending,
-/// useful descending, extra ascending, raw index ascending. That heuristic is
-/// not the simulator oracle. Greedy never simulates an individual option and
-/// calls [`evaluate_candidate`] exactly once, on the completed grid; reserve the
-/// word "score" for that oracle.
-///
-/// A group whose step is not visible under the flags so far is left untouched,
-/// and a group with an empty option list only advances the flag map.
+// greedy forward pass: give each group its highest-ranked option, in pre.groups order, tracking
+// flags incrementally, then score once at the end.
+// greedy never simulates an individual option and calls `evaluate_candidate` exactly once, on the
+// completed grid; reserve the word "score" for that oracle.
 fn greedy_solve(
     state: &mut SolverState,
     pre: &Precompute,
@@ -956,12 +812,10 @@ fn greedy_solve(
     );
 }
 
-/// Iterative improvement: re-solve each group in `order`, keeping strictly
-/// improving changes, for at most `max_passes` passes. Returns as soon as an
-/// exact match appears.
-///
-/// Flags are rebuilt from document order with [`rebuild_flags`] before each
-/// group rather than tracked incrementally, because `order` is arbitrary.
+// iterative improvement: re-solve each group in order, keeping strictly improving changes, for at
+// most max_passes passes.
+// flags are rebuilt from document order with `rebuild_flags` before each group rather than
+// tracked incrementally, because `order` is arbitrary.
 #[allow(clippy::too_many_arguments)]
 fn local_search(
     state: &mut SolverState,
@@ -1054,7 +908,6 @@ fn local_search(
     }
 }
 
-/// One level of the explicit backtracker stack.
 struct Frame {
     next_idx: i32,
     branch_idx: i32,
@@ -1066,19 +919,13 @@ struct Frame {
     checkpoint_mark: usize,
 }
 
-/// A saved group selection, put back when its frame unwinds.
 struct CheckpointEntry {
     step_idx: i32,
     group_idx: i32,
     saved: GroupOption,
 }
 
-/// Save a group's current selection as a checkpoint, refusing past
-/// `max_checkpoints`.
-///
-/// Returns false, after logging one `[solver]` warning, when the checkpoint
-/// stack is already at `max_checkpoints`; the caller must then abandon the
-/// branch. Returns true after pushing on every other path.
+// save a group's current selection as a checkpoint, refusing past max_checkpoints.
 fn save_checkpoint(
     checkpoints: &mut Vec<CheckpointEntry>,
     selections: &[Vec<Vec<bool>>],
@@ -1097,7 +944,6 @@ fn save_checkpoint(
     true
 }
 
-/// Restore checkpointed group selections back to a prior mark.
 fn restore_checkpoints_to(
     checkpoints: &mut Vec<CheckpointEntry>,
     selections: &mut [Vec<Vec<bool>>],
@@ -1109,8 +955,6 @@ fn restore_checkpoints_to(
     }
 }
 
-/// Unwind one frame: restore its branching group's selection, then roll flags
-/// and checkpoints back to the marks that frame recorded.
 fn unwind_frame(
     f: &mut Frame,
     pre: &Precompute,
@@ -1130,48 +974,9 @@ fn unwind_frame(
     restore_checkpoints_to(checkpoints, &mut state.search.selections, f.checkpoint_mark);
 }
 
-/// Iterative branch-and-bound backtracking over the plan's group order. The
-/// stack is explicit rather than recursive, so a deep installer cannot overflow
-/// the native stack.
-///
-/// Each frame has two states, selected by `branch_idx`. A frame starts in the
-/// init state (`branch_idx < 0`), walks forward past groups it does not need to
-/// branch on, then becomes a branch frame that hands one option at a time to a
-/// child frame. Every pop path bumps a different [`SolverStats`] counter, which
-/// is what makes the closing pruning-summary log line readable:
-///
-/// ```text
-///   push root { next_idx = start_idx, branch_idx = -1 }
-///        |
-///   +--> init (branch_idx < 0)
-///   |      stack depth > 500 ......... pop  (max_depth_aborts, warn once)
-///   |      nodes >= node_limit ....... pop  (pruned_node_limit)
-///   |      every 64th node, past the deadline .. pop (sets deadline_exceeded)
-///   |      skip run, advancing next_idx past:
-///   |        invisible groups (clear the selection, checkpoint it first)
-///   |                                       (skipped_invisible)
-///   |        single-option groups (apply the option, advance flags)
-///   |      checkpoint stack full during the skip run .. pop
-///   |      order exhausted ........... evaluate_candidate, then pop
-///   |      at the branching index ci, only when a best exists with mismatches,
-///   |      ci >= 4, and ci is a multiple of 'bound_stride':
-///   |        lower_bound cannot_beat best ... pop (pruned_lower_bound)
-///   |        memo hit that is no better ..... pop (pruned_memo)
-///   |      otherwise: branch_idx = ci, save the group, opt_idx = 0
-///   |
-///   +--- branch (branch_idx >= 0)
-///          advance opt_idx past extra-only options  (pruned_extra_only)
-///          no option left, or found_exact, or deadline, or node limit .. pop
-///          else apply_option, advance flags, push child
-///                { next_idx = branch_idx + 1, branch_idx = -1 }
-///
-///   pop == unwind_frame: restore the frame's saved group selection, undo flags
-///                        back to its mark, restore checkpoints to its mark
-/// ```
-///
-/// The loop returns when the stack empties, and unwinds every remaining frame at
-/// once as soon as `found_exact` or `deadline_exceeded` becomes true.
-/// `plan.memo` is cleared wholesale when it reaches `MAX_MEMO_ENTRIES`.
+// iterative branch-and-bound backtracking over the plan's group order.
+// the stack is explicit rather than recursive, so a deep installer cannot overflow the native
+// stack.
 #[allow(clippy::too_many_arguments)]
 fn backtrack(
     state: &mut SolverState,
@@ -1215,12 +1020,9 @@ fn backtrack(
 
         let top = stack.len() - 1;
 
-        // ------------------------------------------------------------------
-        // Init state: skip single-option groups, then run the bounds.
-        // ------------------------------------------------------------------
         if stack[top].branch_idx < 0 {
             if stack.len() > MAX_BACKTRACK_DEPTH {
-                // Warn on the first abort only, before the counter moves.
+                // warn on the first abort only, before the counter moves.
                 if stats.max_depth_aborts == 0 {
                     Logger::instance().log_warning(&format!(
                         "[solver] kMaxBacktrackDepth ({MAX_BACKTRACK_DEPTH}) exceeded; abandoning branch (logged once per solve)"
@@ -1270,7 +1072,6 @@ fn backtrack(
             stack[top].flag_mark = flag_undo.len();
             stack[top].checkpoint_mark = checkpoints.len();
 
-            // Skip through single-option and invisible groups.
             let mut ci = stack[top].next_idx;
             let mut bail = false;
             loop {
@@ -1416,7 +1217,7 @@ fn backtrack(
                 continue;
             }
 
-            // Bounds checking and memoization for the branching group.
+            // bounds checking and memoization for the branching group.
             let gidx = plan.order[ci as usize];
             let gref = pre.groups[gidx as usize];
             if !plan.incremental_flags {
@@ -1506,7 +1307,7 @@ fn backtrack(
                 }
             }
 
-            // Prepare for branching.
+            // prepare for branching.
             stack[top].branch_idx = ci;
             stack[top].gidx = gidx;
             stack[top].saved_group =
@@ -1515,9 +1316,6 @@ fn backtrack(
             stack[top].opt_idx = 0;
         }
 
-        // ------------------------------------------------------------------
-        // Branch state: try the next option for the branching group.
-        // ------------------------------------------------------------------
         let gidx = stack[top].gidx;
         let gref = pre.groups[gidx as usize];
 
@@ -1619,17 +1417,9 @@ fn backtrack(
     }
 }
 
-/// Estimate the number of candidate combinations for `order` as the product of
-/// each group's option count. Returns the sentinel `limit + 1` as soon as the
-/// running product would exceed `limit`.
-///
-/// `limit + 1` is not a count. Callers log it as `space=` and feed it to the
-/// progress bar as a denominator, so a saturated estimate shows as a
-/// suspiciously round figure one above the cap. A group with zero options counts
-/// as 1, so it never zeroes the product.
-///
-/// Side effect: primes the option cache, so a later backtrack over the same
-/// groups hits the cache and does not re-count domain-reduction stats.
+// estimate the number of candidate combinations for order as the product of each group's option
+// count.
+// `limit + 1` is not a count.
 #[allow(clippy::too_many_arguments)]
 fn estimate_search_space(
     pre: &Precompute,
@@ -1656,21 +1446,11 @@ fn estimate_search_space(
     total
 }
 
-/// Run one systematic backtracking pass over `order` with branch-and-bound
-/// pruning, stopping once the solve-wide node count reaches `node_limit`
-/// (0 = unlimited).
-///
-/// `node_limit` is a cumulative ceiling, not a per-pass allowance:
-/// `SolverSearchState::nodes_explored` counts every candidate evaluated since
-/// the solve began and is never reset between phases. Every earlier phase spends
-/// the same budget, so a late pass whose limit is already reached explores no
-/// nodes and returns at once.
-///
-/// Returns at once when `order` is empty or an exact match already exists.
-/// Incremental flag tracking is enabled only when `order` has the same length as
-/// the full group list; a shorter order rebuilds the flag map per group instead.
-/// The progress estimate is cleared on exit so it cannot leak into the next
-/// phase.
+// run one systematic backtracking pass over order with branch-and-bound pruning, stopping once the
+// solve-wide node count reaches node_limit (0 = unlimited).
+// `node_limit` is a cumulative ceiling, not a per-pass allowance:
+// `SolverSearchState::nodes_explored` counts every candidate evaluated since the solve began and is
+// never reset between phases.
 #[allow(clippy::too_many_arguments)]
 fn run_backtrack_pass(
     state: &mut SolverState,
@@ -1710,9 +1490,8 @@ fn run_backtrack_pass(
         );
     }
 
-    // Priming the option cache here is load bearing: it keeps the backtrack
-    // below from re-counting domain-reduction stats for the same groups. The
-    // returned estimate also drives the progress bar's denominator.
+    // fill the option cache before backtracking so domain-reduction stats count each group once.
+    // the estimate also supplies the progress denominator.
     let space = estimate_search_space(
         pre,
         order,
@@ -1749,7 +1528,7 @@ fn run_backtrack_pass(
         ));
     }
 
-    // A 0% bar up front, so even a fast solve shows a visible start.
+    // a 0% bar up front, so even a fast solve shows a visible start.
     if state.progress.estimated_total > 1 {
         let bar = build_tqdm_bar(0, state.progress.estimated_total, 0);
         Logger::instance().log(&format!("[solver] {bar} | searching..."));
@@ -1766,8 +1545,8 @@ fn run_backtrack_pass(
         stats,
     );
 
-    // A closing 100% bar whose denominator is the nodes actually explored rather
-    // than the estimate, so a pass always ends at exactly 100%.
+    // a closing 100% bar whose denominator is the nodes actually explored rather than the estimate,
+    // so a pass always ends at exactly 100%.
     let pass_nodes = state.search.nodes_explored as i64 - state.progress.pass_start_nodes;
     if pass_nodes > 0
         && state.progress.estimated_total > 1
@@ -1785,12 +1564,10 @@ fn run_backtrack_pass(
         }
     }
 
-    // Clear the estimate so it cannot leak into the next phase.
+    // clear the estimate so it cannot leak into the next phase.
     state.progress.estimated_total = 0;
 }
 
-/// Phase 1: greedy solve, iterative local search, then a first targeted repair
-/// over the groups the remaining mismatches touch.
 fn run_initial_phases(
     state: &mut SolverState,
     pre: &Precompute,
@@ -1856,9 +1633,8 @@ fn run_initial_phases(
     }
 }
 
-/// Phase 2: solve each independent component on its own, with a local search
-/// followed by a backtrack pass. Returns without doing anything when the
-/// installer decomposes into 1 component or fewer.
+// phase 2: solve each independent component on its own, with a local search followed by a backtrack
+// pass.
 fn run_component_decomposition(
     state: &mut SolverState,
     pre: &Precompute,
@@ -1875,8 +1651,8 @@ fn run_component_decomposition(
         pre.components.len()
     ));
 
-    // A 1-based counter over every component, empty ones included, so the number
-    // in the log line is the component's position in `pre.components`.
+    // a 1-based counter over every component, empty ones included, so the number in the log line is
+    // the component's position in `pre.components`.
     let mut comp_idx = 0;
     for comp in &pre.components {
         if state.search.found_exact || state.progress.deadline_exceeded {
@@ -1950,11 +1726,8 @@ fn run_component_decomposition(
     log_phase_metrics(state, "component solve");
 }
 
-/// Phase 3: residual repair, run only when the best solution is already
-/// near-perfect: no missing files, no extra files, at most 1 size mismatch and
-/// at most 2 hash mismatches. Returns without doing anything otherwise, and also
-/// when the affected group set is empty or covers every group. This phase emits
-/// no `After ...` metrics line.
+// phase 3: residual repair, run only when the best solution is already near-perfect: no missing
+// files, no extra files, at most 1 size mismatch and at most 2 hash mismatches.
 fn run_residual_repair(
     state: &mut SolverState,
     pre: &Precompute,
@@ -1993,8 +1766,8 @@ fn run_residual_repair(
         mismatched.len(),
         repair_groups.len()
     ));
-    // Unconditional, unlike the phase-1 equivalent: `repair_groups` is known
-    // non-empty here, so this line needs no empty guard.
+    // unconditional, unlike the phase-1 equivalent: `repair_groups` is known non-empty here, so
+    // this line needs no empty guard.
     Logger::instance().log(&format!(
         "[solver] Residual mismatch-affecting groups: {}",
         join_group_names(pre, &repair_groups)
@@ -2031,10 +1804,8 @@ fn run_residual_repair(
     );
 }
 
-/// Phase 4: local search and a backtrack pass over the groups the mismatches
-/// touch, then an exact-mode fallback pass over the same groups. Returns without
-/// doing anything when there is no best solution yet, or when the focus set is
-/// empty or covers every group.
+// phase 4: local search and a backtrack pass over the groups the mismatches touch, then an
+// exact-mode fallback pass over the same groups.
 fn run_focused_search(
     state: &mut SolverState,
     pre: &Precompute,
@@ -2160,22 +1931,16 @@ fn run_focused_search(
     log_phase_metrics(state, "focused search");
 }
 
-/// Outcome of one global fallback pass: whether the pass hit its node limit,
-/// and how many SelectAny options its cap dropped. The cap ladder in
-/// [`run_global_fallback`] branches on both.
+// outcome of one global fallback pass: whether the pass hit its node limit, and how many SelectAny
+// options its cap dropped.
 struct GlobalPassOutcome {
     hit_limit: bool,
     capped_options: i32,
 }
 
-/// One global fallback backtrack pass over the canonical group order.
-///
-/// Restarts from the best selections, clears the option cache, and derives the
-/// node limit from the estimated search space. At the full cap the limit is also
-/// clamped to `CONFIG.full_pass_default_limit`, or to
-/// `CONFIG.full_pass_imperfect_limit` when the best still has missing or extra
-/// files. Returns a zeroed outcome without searching when the solve is already
-/// exact or past the deadline.
+// one global fallback backtrack pass over the canonical group order.
+// restarts from the best selections, clears the option cache, and derives the node limit from the
+// estimated search space.
 #[allow(clippy::too_many_arguments)]
 fn run_global_pass(
     state: &mut SolverState,
@@ -2253,14 +2018,9 @@ fn run_global_pass(
     }
 }
 
-/// Phase 5: global fallback over one canonical group order, widening the
-/// SelectAny cap rung by rung.
-///
-/// The rungs are narrow (64), medium (256), a targeted medium pass that puts the
-/// mismatch-affected groups in exact mode, and full (uncapped). Each rung runs
-/// only while no exact match exists. The targeted and full rungs additionally
-/// need the medium rung to have hit its node limit, capped an option, or left
-/// mismatches behind.
+// phase 5: global fallback over one canonical group order, widening the SelectAny cap rung by rung.
+// the targeted and full rungs additionally need the medium rung to have hit its node limit, capped
+// an option, or left mismatches behind.
 fn run_global_fallback(
     state: &mut SolverState,
     pre: &Precompute,
@@ -2389,8 +2149,7 @@ fn run_global_fallback(
     }
 }
 
-/// Group ordering priority for the per-step sort. Higher sorts first, so the
-/// most constrained group types are assigned before SelectAny.
+// group ordering priority for the per-step sort.
 fn group_priority(t: FomodGroupType) -> i32 {
     match t {
         FomodGroupType::SelectAll => 4,
@@ -2401,36 +2160,6 @@ fn group_priority(t: FomodGroupType) -> i32 {
     }
 }
 
-/// Infer the plugin selections that best reproduce a target file tree.
-///
-/// Builds the flat group list (document order, then a per-step priority sort
-/// with a document-order tiebreak), precomputes the read-only solver data, seeds
-/// an all-deselected state, then drives the five phases described in the module
-/// doc. Returns the best [`SolverResult`] found. It never signals failure;
-/// turning a poor result into `""` is the inference service's concern.
-///
-/// **`propagation` narrows and labels, nothing more.**
-///
-/// - `build_precompute` hands it to
-///   [`crate::fomod_csp_options::get_options_for_group`], which drops any option
-///   that would select a plugin `narrowed_domains` eliminated.
-/// - `resolved_groups` decides which `phase_per_group` entries come out empty.
-///
-/// It does not skip a phase, shorten the search, or seed the selection grid. The
-/// seed is unconditionally all-deselected, and `PropagationResult::fully_resolved`
-/// is never read in this module. Passing `None` only means every group keeps its
-/// full option domain.
-///
-/// **Time budget.** The solve is capped at `CONFIG.time_limit_seconds` (600 s)
-/// from entry. Expiry is not an error: phases 2 through 5 are skipped, a running
-/// backtrack unwinds, and the best result so far is returned. The returned
-/// [`SolverResult`] carries no timed-out flag, so a caller cannot tell a
-/// completed search from a truncated one; only the `[solver] Wall-clock time
-/// limit ... exceeded` log line records it.
-///
-/// **Cost.** Runs on the calling thread and can block for the full time budget.
-/// It performs no file I/O: it reads the already-built `atoms` and `target` and
-/// writes only log lines.
 pub fn solve_fomod_csp(
     installer: &FomodInstaller,
     atoms: &ExpandedAtoms,
@@ -2440,7 +2169,7 @@ pub fn solve_fomod_csp(
     overrides: Option<&InferenceOverrides>,
     propagation: Option<&PropagationResult>,
 ) -> SolverResult {
-    // (S1) Flat GroupRef list in document order (flat_start captured pre-sort).
+    // (s1) flat GroupRef list in document order (flat_start captured pre-sort).
     let mut groups: Vec<GroupRef> = Vec::new();
     let mut flat_plugins = 0i32;
     for (si, step) in installer.steps.iter().enumerate() {
@@ -2456,9 +2185,9 @@ pub fn solve_fomod_csp(
         }
     }
 
-    // (S2) Per-step sort: priority descending, then plugin_count ascending, then
-    // document order. The third key keeps the order total, so two otherwise
-    // equal groups cannot swap places between runs.
+    // (s2) per-step sort: priority descending, then plugin_count ascending, then document order.
+    // the third key keeps the order total, so two otherwise equal groups cannot swap places between
+    // runs.
     for si in 0..installer.steps.len() as i32 {
         let Some(begin) = groups.iter().position(|g| g.step_idx == si) else {
             continue;
@@ -2477,7 +2206,7 @@ pub fn solve_fomod_csp(
         });
     }
 
-    // (S3) Precompute + seed state (every plugin deselected).
+    // (s3) Precompute + seed state (every plugin deselected).
     let evidence = compute_evidence(installer, atoms, atom_index, target, excluded_dests);
     let pre = build_precompute(
         installer,
@@ -2500,7 +2229,7 @@ pub fn solve_fomod_csp(
         state.search.selections.push(step_sel);
     }
 
-    // (S4) Deadline, stats, cache, initial cap.
+    // (s4) deadline, stats, cache, initial cap.
     state.progress.deadline =
         Some(Instant::now() + Duration::from_secs(CONFIG.time_limit_seconds as u64));
     let mut stats = SolverStats {
@@ -2510,7 +2239,7 @@ pub fn solve_fomod_csp(
     let mut options_cache: HashMap<OptionCacheKey, CachedOptions> = HashMap::new();
     let select_any_cap = SELECT_ANY_CAP_NARROW;
 
-    // Total plugin count, for the log line only; nothing branches on it.
+    // total plugin count, for the log line only; nothing branches on it.
     let flat_plugins: i32 = pre.groups.iter().map(|g| g.plugin_count).sum();
     Logger::instance().log(&format!(
         "[solver] Starting CSP: {} groups, {flat_plugins} total plugins, {} components",
@@ -2518,7 +2247,7 @@ pub fn solve_fomod_csp(
         pre.components.len()
     ));
 
-    // (S5) Phase sequence; phases 2-5 run only while unsolved and in budget.
+    // (s5) phase sequence; phases 2-5 run only while unsolved and in budget.
     let mut ran_phase2 = false;
     let mut ran_phase3 = false;
     let mut ran_phase4 = false;
@@ -2567,7 +2296,7 @@ pub fn solve_fomod_csp(
         run_global_fallback(&mut state, &pre, &mut options_cache, &mut stats);
     }
 
-    // (S6) Final reporting, then assemble the result.
+    // (s6) final reporting, then assemble the result.
     if state.progress.deadline_exceeded {
         Logger::instance().log(&format!(
             "[solver] Wall-clock time limit ({}s) exceeded after {} nodes",
@@ -2612,13 +2341,12 @@ pub fn solve_fomod_csp(
 
     state.best.best.nodes_explored = state.search.nodes_explored;
 
-    // `final_phase` is the highest phase entered, not the phase that produced
-    // the result: each `ran_phaseN` is set before the call, so a phase that
-    // returns on its own precondition still wins the label. The phase-2 label
-    // reads "csp.local_search" although phase 2 is component decomposition.
-    // These five strings reach schema-v2 JSON and `inference_diagnostics` maps
-    // them to reason codes by exact match, falling back to no reason at all, so
-    // renaming one changes the emitted output. See PARITY-NOTES.md.
+    // `final_phase` is the highest phase entered, not the phase that produced the result: each
+    // `ran_phaseN` is set before the call, so a phase that returns on its own precondition still
+    // wins the label. the phase-2 label reads "csp.local_search" although phase 2 is component
+    // decomposition. these five strings reach schema-v2 JSON and `inference_diagnostics` maps them
+    // to reason codes by exact match, falling back to no reason at all, so renaming one changes the
+    // emitted output.
     let final_phase = if ran_phase5 {
         "csp.fallback"
     } else if ran_phase4 {
@@ -2632,13 +2360,11 @@ pub fn solve_fomod_csp(
     };
     state.best.best.phase_reached = final_phase.to_string();
 
-    // `phase_per_group` is not per-group provenance: every group the propagator
-    // did not resolve gets the same `final_phase` string, whether or not any
-    // phase touched it. The only per-group distinction is the empty string for a
-    // propagation-resolved group. `alternatives_per_group` is filled with zeros
-    // and nothing ever computes a real alternative count; the zeros feed the
-    // ambiguity term of the confidence model, so leave them alone. See
-    // PARITY-NOTES.md and the field docs on `SolverResult`.
+    // `phase_per_group` is not per-group provenance: every group the propagator did not resolve
+    // gets the same `final_phase` string, whether or not any phase touched it. the only per-group
+    // distinction is the empty string for a propagation-resolved group. `alternatives_per_group` is
+    // filled with zeros and nothing ever computes a real alternative count; the zeros feed the
+    // ambiguity term of the confidence model, so leave them alone.
     state.best.best.phase_per_group = Vec::with_capacity(installer.steps.len());
     state.best.best.alternatives_per_group = Vec::with_capacity(installer.steps.len());
     for (s, step) in installer.steps.iter().enumerate() {
@@ -2676,8 +2402,6 @@ mod tests {
         FomodCondition, FomodConditionType, FomodConditionalPattern, FomodGroup, FomodPlugin,
         FomodStep,
     };
-
-    // --- builders ---------------------------------------------------------
 
     fn plugin(name: &str) -> FomodPlugin {
         FomodPlugin {
@@ -2747,9 +2471,6 @@ mod tests {
         idx
     }
 
-    /// Document-order GroupRefs (pre.groups position == document group index),
-    /// deliberately bypassing the per-step priority sort so the tests pin a known
-    /// order.
     fn doc_refs(installer: &FomodInstaller) -> Vec<GroupRef> {
         let mut groups = Vec::new();
         let mut flat = 0i32;
@@ -2787,13 +2508,8 @@ mod tests {
         }
     }
 
-    // --- evaluate_candidate: equal metrics do not replace ------------------
-
     #[test]
     fn evaluate_candidate_keeps_first_at_equal_metrics() {
-        // Two plugins both produce target "t"; target "u" is producible by nobody
-        // (always missing). Selecting p0 or p1 yields the same metric tuple, so
-        // the first-scored candidate wins.
         let installer = one_step(vec![grp(
             FomodGroupType::SelectExactlyOne,
             vec![plugin("p0"), plugin("p1")],
@@ -2849,8 +2565,6 @@ mod tests {
         );
     }
 
-    // --- apply_option -----------------------------------------------------
-
     #[test]
     fn apply_option_writes_option_masked_by_plugin_count() {
         let mut sel = vec![vec![vec![false, false, false]]];
@@ -2860,19 +2574,14 @@ mod tests {
             flat_start: 0,
             plugin_count: 3,
         };
-        // Option shorter than plugin_count: the trailing plugin stays false.
         apply_option(&mut sel, &gref, &[true, false]);
         assert_eq!(sel[0][0], vec![true, false, false]);
         apply_option(&mut sel, &gref, &[false, true, true]);
         assert_eq!(sel[0][0], vec![false, true, true]);
     }
 
-    // --- contested_signature byte-exactness -------------------------------
-
     #[test]
     fn contested_signature_folds_selected_assigned_contested_in_sorted_order() {
-        // One SelectAny group, two plugins both producing target "d" -> both are
-        // contested (target producers). plugin_to_group = [0, 0].
         let installer = one_step(vec![grp(
             FomodGroupType::SelectAny,
             vec![plugin("p0"), plugin("p1")],
@@ -2907,33 +2616,25 @@ mod tests {
         };
         let mut state = seed_state(&installer);
 
-        // Only p0 selected, group assigned (order_pos 0 < next_idx 1): fold (0+1).
         state.search.selections[0][0] = vec![true, false];
         let mut expect = 14695981039346656037u64;
         hash_combine(&mut expect, 1);
         assert_eq!(contested_signature(&state, &pre, &plan, 1), expect);
 
-        // Both selected: fold (0+1) then (1+1) in sorted contested order.
         state.search.selections[0][0] = vec![true, true];
         let mut expect_both = 14695981039346656037u64;
         hash_combine(&mut expect_both, 1);
         hash_combine(&mut expect_both, 2);
         assert_eq!(contested_signature(&state, &pre, &plan, 1), expect_both);
 
-        // next_idx 0: the group's order_pos (0) is not < 0, so nothing folds.
         assert_eq!(
             contested_signature(&state, &pre, &plan, 0),
             14695981039346656037u64
         );
     }
 
-    // --- two flag-replay orders differ ------------------------------------
-
     #[test]
     fn rebuild_flags_document_order_vs_advance_group_order() {
-        // Two SelectAll groups: g0 sets F=a, g1 sets F=b. Document order
-        // (rebuild_flags) ends F=b (g1 last); advancing groups in reverse (g1
-        // then g0) ends F=a (g0 last).
         let installer = one_step(vec![
             grp(FomodGroupType::SelectAll, vec![plugin_flag("pA", "F", "a")]),
             grp(FomodGroupType::SelectAll, vec![plugin_flag("pB", "F", "b")]),
@@ -2953,13 +2654,11 @@ mod tests {
         assert_ne!(doc.get("F"), flags.get("F"), "the two replay orders differ");
     }
 
-    // --- lower_bound counts a mismatch only when unfixable ------------------
-
     #[test]
     fn lower_bound_skips_a_dest_a_later_group_can_still_produce() {
-        // g0 produces extra "x"; g1 produces target "d". With nothing selected
-        // "d" is missing; lower_bound must skip it while g1 is still ahead in the
-        // order, and must count it once g1 is behind.
+        // g0 produces extra "x"; g1 produces target "d". with nothing selected "d" is missing;
+        // lower_bound must skip it while g1 is still ahead in the order, and must count it once g1
+        // is behind.
         let installer = one_step(vec![
             grp(FomodGroupType::SelectAny, vec![plugin("p0")]),
             grp(FomodGroupType::SelectAny, vec![plugin("p1")]),
@@ -3010,14 +2709,8 @@ mod tests {
         assert_eq!(compare_trees(&sim, pre.target, pre.excluded).missing, 1);
     }
 
-    // --- extra-only option prune ------------------------------------------
-
     #[test]
     fn backtrack_prunes_extra_only_options() {
-        // A SelectAtLeastOne group whose plugins produce only extra dests and set
-        // no needed flag: every option is extra-only, so all survive reduce
-        // (keep-empty fallback) and the backtrack prunes each in the branch
-        // state.
         let installer = one_step(vec![grp(
             FomodGroupType::SelectAtLeastOne,
             vec![plugin("p0"), plugin("p1")],
@@ -3062,13 +2755,8 @@ mod tests {
         );
     }
 
-    // --- node-limit >= boundary -------------------------------------------
-
     #[test]
     fn node_limit_boundary_uses_gte() {
-        // greedy scores one node (nodes_explored == 1); a follow-up backtrack
-        // with node_limit == 1 prunes immediately (>= boundary), keeping the
-        // greedy best.
         let installer = one_step(vec![grp(
             FomodGroupType::SelectExactlyOne,
             vec![plugin("p0"), plugin("p1")],
@@ -3127,14 +2815,8 @@ mod tests {
         );
     }
 
-    // --- memo prune -------------------------------------------------------
-
     #[test]
     fn backtrack_memo_prunes_equivalent_subtree() {
-        // Two branches of group 0 (both set F=v, neither is a target producer)
-        // converge on an identical (flag, contested) state at the branching group
-        // at order position 4, so the second visit re-hits the memo with a
-        // not-better lower bound and is pruned.
         let g0 = grp(
             FomodGroupType::SelectExactlyOne,
             vec![plugin_flag("p0", "F", "v"), plugin_flag("p1", "F", "v")],
@@ -3147,8 +2829,6 @@ mod tests {
             vec![plugin("r0"), plugin("r1")],
         );
         let mut installer = one_step(vec![g0, g1, g2, g3, g4]);
-        // A conditional gated on F makes F a "needed" flag, so g0's flag-only
-        // options are not dropped as extra-only. It produces nothing.
         installer.conditional_patterns = vec![FomodConditionalPattern {
             condition: FomodCondition {
                 r#type: FomodConditionType::Flag,
@@ -3192,7 +2872,6 @@ mod tests {
         let mut cache = HashMap::new();
         let mut stats = fresh_stats(&pre);
 
-        // Establish a non-exact best (group 4 can only cover one of t4a/t4b).
         greedy_solve(
             &mut state,
             &pre,
@@ -3220,8 +2899,6 @@ mod tests {
             stats.pruned_memo
         );
     }
-
-    // --- deadline / budget smoke ------------------------------------------
 
     fn tiny_nonrepro() -> (
         FomodInstaller,
@@ -3259,7 +2936,7 @@ mod tests {
             ev,
         );
 
-        // (A) deadline already in the past -> deadline_exceeded flips, no panic.
+        // (a) deadline already in the past -> deadline_exceeded flips, no panic.
         let mut state = seed_state(&installer);
         state.progress.deadline = Some(Instant::now() - Duration::from_secs(1));
         let mut cache = HashMap::new();
@@ -3277,8 +2954,8 @@ mod tests {
         );
         assert!(state.progress.deadline_exceeded, "past deadline must trip");
 
-        // (B) deadline None -> the deadline path is never taken; the pass runs to
-        // completion and records a best.
+        // (b) deadline None -> the deadline path is never taken; the pass runs to completion and
+        // records a best.
         let mut state2 = seed_state(&installer);
         assert!(state2.progress.deadline.is_none());
         let mut cache2 = HashMap::new();
