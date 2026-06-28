@@ -1,22 +1,19 @@
-//! Content-root detection for archives that carry no FOMOD installer.
-//!
-//! [`crate::installation_service`] uses this to find which subdirectory of an
-//! extracted archive holds the mod content, so a wrapper folder
-//! (`ModName-v1.2/meshes/...` instead of `meshes/...`) is not installed one
-//! level too deep.
-//!
-//! Detection is a name probe, not a content inspection: a directory counts as a
-//! mod root when it holds an entry named in [`MOD_FOLDERS`].
+/*!
+ * @brief detects installable content roots in archives without a FOMOD.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * known game-data markers identify a mod root. the scan checks direct child directories and keeps
+ * filesystem enumeration order.
+ */
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::logger::Logger;
 
-/// The game-data folder names that mark a directory as a mod root.
-///
-/// Declaration order is observable only through short-circuiting in
-/// [`has_mod_structure`], which cannot change the boolean result.
+// the game-data folder names that mark a directory as a mod root.
+// declaration order is observable only through short-circuiting in `has_mod_structure`, which
+// cannot change the boolean result.
 const MOD_FOLDERS: [&str; 11] = [
     "SKSE",
     "meshes",
@@ -31,48 +28,29 @@ const MOD_FOLDERS: [&str; 11] = [
     "materials",
 ];
 
-/// Whether `dir` looks like a mod root, that is, holds any of [`MOD_FOLDERS`].
-///
-/// Two properties of the probe are load-bearing:
-///
-/// - Matching is case-insensitive, with no explicit `to_lower`, because
-///   [`Path::exists`] resolves the name through Win32 on NTFS. `meshes`,
-///   `Meshes` and `MESHES` all match. On a case-sensitive filesystem only the
-///   listed spellings would match.
-/// - The probe is `exists`, not `is_dir`, so a plain file named `textures`
-///   makes the directory a mod root. This is deliberate, not an oversight;
-///   tightening it changes which folder gets installed for archives that ship
-///   such a file. See PARITY-NOTES.md.
-///
-/// Every probe error reads as `false`, so a permission fault on one candidate
-/// leaves the scan running. The input is always a freshly extracted temp tree
-/// owned by this process, so no probe is expected to fail.
+/**
+ * @fn has_mod_structure(&Path) -> bool
+ * @brief count any existing marker path, including a regular file.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * matching follows filesystem case rules. a regular file with a marker name also counts.
+ *
+ * @return true when any MOD_FOLDERS child exists.
+ */
 pub fn has_mod_structure(dir: &Path) -> bool {
     MOD_FOLDERS.iter().any(|folder| dir.join(folder).exists())
 }
 
-/// Every immediate subdirectory of `archive_root` that [`has_mod_structure`].
-///
-/// One level deep only:
-///
-/// ```text
-///   archive root/
-///     ModA/meshes/          -> candidate
-///     ModB/textures/        -> candidate
-///     Docs/readme/          -> not a candidate, no game-data folder
-///     Outer/Inner/meshes/   -> not a candidate, the marker is two levels down
-///     meshes/               -> not a candidate, only children are reported
-/// ```
-///
-/// A read failure logs a warning and returns the candidates collected so far,
-/// so an unreadable `archive_root` yields an empty vector and a fault partway
-/// through yields a partial one.
-///
-/// Result order follows [`fs::read_dir`] (Win32
-/// `FindFirstFileW`/`FindNextFileW`) and is not sorted further. Order does not
-/// reach install behavior: the caller uses index 0 only when the vector holds
-/// exactly one entry, and otherwise selects by name match, treating any other
-/// count as fatal.
+/**
+ * @fn find_main_mod_folders(&Path) -> Vec<PathBuf>
+ * @brief return unsorted direct-child matches and keep partial results on read errors.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * a read failure logs a warning and returns the candidates collected so far. result order follows
+ * filesystem enumeration and is not sorted.
+ *
+ * @return matching direct child directories.
+ */
 pub fn find_main_mod_folders(archive_root: &Path) -> Vec<PathBuf> {
     let logger = Logger::instance();
     let mut results = Vec::new();
@@ -92,8 +70,8 @@ pub fn find_main_mod_folders(archive_root: &Path) -> Vec<PathBuf> {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
-                // A mid-iteration fault stops the scan and keeps the partial
-                // results, rather than skipping just this entry.
+                // a mid-iteration fault stops the scan and keeps the partial results, rather than
+                // skipping just this entry.
                 logger.log_warning(&format!(
                     "[install] Cannot scan \"{}\": {err}",
                     archive_root.display()
@@ -102,14 +80,7 @@ pub fn find_main_mod_folders(archive_root: &Path) -> Vec<PathBuf> {
             }
         };
         let path = entry.path();
-        // `Path::is_dir` resolves through `fs::metadata`, so it follows
-        // symlinks and Windows junctions: a junction pointing at a mod folder
-        // counts as a candidate.
-        //
-        // Do not swap in `entry.file_type()`. That call does not traverse a
-        // link, which is why `FileOperations::copy_folder` uses it to skip
-        // symlinked entries, so the switch would silently stop counting
-        // junctions and change which folder gets installed.
+        // is_dir follows symlinks and junctions, so linked mod folders remain candidates.
         if !path.is_dir() {
             continue;
         }
@@ -131,7 +102,6 @@ mod tests {
     use crate::utils::random_hex_string;
     use std::fs as stdfs;
 
-    /// Unique scratch directory under the OS temp dir.
     fn scratch(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("salma-msd-{tag}-{}", random_hex_string(8)));
         stdfs::create_dir_all(&dir).expect("create scratch");
@@ -164,7 +134,6 @@ mod tests {
         stdfs::remove_dir_all(&root).ok();
     }
 
-    /// `Path::exists` is case-insensitive on Windows.
     #[test]
     fn folder_match_is_case_insensitive() {
         let root = scratch("case");
@@ -173,8 +142,6 @@ mod tests {
         stdfs::remove_dir_all(&root).ok();
     }
 
-    /// The probe does not require a directory, so a file named after a mod
-    /// folder counts.
     #[test]
     fn a_file_named_like_a_mod_folder_also_counts() {
         let root = scratch("file");
@@ -200,7 +167,6 @@ mod tests {
         stdfs::remove_dir_all(&root).ok();
     }
 
-    /// One level deep only: `Outer/Inner/meshes` must not be detected.
     #[test]
     fn find_main_mod_folders_does_not_recurse() {
         let root = scratch("nested");
@@ -215,9 +181,6 @@ mod tests {
         assert!(find_main_mod_folders(&root).is_empty());
     }
 
-    /// A top-level `meshes/` makes the root itself a mod root, but
-    /// `find_main_mod_folders` reports children only, so the caller falls
-    /// through to the flat copy.
     #[test]
     fn mod_folder_at_root_is_not_reported_as_a_child_candidate() {
         let root = scratch("flat");
