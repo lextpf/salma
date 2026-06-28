@@ -1,32 +1,12 @@
-//! FOMOD dependency evaluation: the single source of truth for what a
-//! `<dependencies>` tree means.
-//!
-//! Free functions that evaluate pre-compiled [`FomodCondition`] IR trees. Every
-//! stage that decides what a FOMOD installs answers its questions here, so
-//! changing the semantics in this module changes all of them at once:
-//!
-//! - [`crate::fomod_service`] - the real install replay
-//! - [`crate::fomod_forward_simulator`] - the offline simulation the solver
-//!   scores candidates against
-//! - [`crate::fomod_propagator`] - the deterministic fixpoint pre-pass
-//! - [`crate::fomod_csp_solver`] and [`crate::fomod_csp_options`] - constraint
-//!   solving and per-group option enumeration
-//!
-//! Sharing one implementation is the point: a change moves the install replay
-//! and the simulator it is scored against together, so the two cannot drift.
-//!
-//! [`crate::fomod_ir_parser`] imports [`MAX_DEPENDENCY_DEPTH`] from here but
-//! calls no evaluation function.
-//!
-//! Two evaluation modes share one tree walk. Normal mode answers external
-//! conditions from a [`FomodDependencyContext`] and the filesystem. Inferred
-//! mode answers them from an [`ExternalConditionOverride`] and touches neither.
-//! Flags and composites evaluate identically in both.
-//!
-//! Three warnings leave this module and their subsystem tags are not uniform:
-//! the depth warning is tagged `[fomod-ir]`, the malformed-version warning
-//! `[fomod]`, and the unknown-file-state warning carries no tag at all. The
-//! spellings are deliberate; read PARITY-NOTES.md before normalizing them.
+/*!
+ * @brief evaluates compiled FOMOD dependency trees.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * normal mode reads the dependency context and filesystem. inferred mode uses external
+ * overrides and performs no filesystem access. both modes share flag and composite semantics.
+ *
+ * evaluation is bounded by MAX_DEPENDENCY_DEPTH.
+ */
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -36,76 +16,38 @@ use crate::logger::Logger;
 use crate::types::{FomodDependencyContext, PluginType};
 use crate::utils::{normalize_path, to_lower};
 
-/// Maximum nesting depth for recursive condition evaluation, a guard against
-/// malformed XML. Shared with [`crate::fomod_ir_parser`]'s condition compiler.
-///
-/// Both users count from depth 0 at the outermost `<dependencies>`, and both
-/// degrade rather than fail when the bound is passed. The parser replaces the
-/// over-deep subtree with an empty `Or`, which is always false. The evaluator
-/// answers false for the over-deep subtree. Neither reports an error, so an
-/// over-deep condition reads as unmet, never as invalid.
+/**
+ * @brief maximum nesting depth for recursive condition evaluation, a guard against malformed XML.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * both users count from depth 0 at the outermost `<dependencies>`, and both degrade rather than
+ * fail when the bound is passed.
+ */
 pub const MAX_DEPENDENCY_DEPTH: i32 = 32;
 
-/// How inferred mode answers an external dependency.
-///
-/// Consulted only in inferred mode; no variant reads the filesystem or the game
-/// state, because inferred mode never probes either. `Unknown` is the default
-/// for an inference run with no [`FomodDependencyContext`].
-///
-/// Inferred mode splits the condition types into two categories, and the split
-/// applies under every override, not only under `Unknown`:
-///
-/// - **File, Plugin, Fomod** are external and follow the override. They
-///   reference user-installed content that may or may not be present, so
-///   answering false unless forced keeps the solver from speculatively
-///   activating optional files that depend on packages the user might not have.
-/// - **Game, Fomm, Fose** are infrastructure and are true under every override.
-///   They reference engine, script-extender and loader version checks, which an
-///   installed mod almost always satisfies on the machine it was installed on,
-///   so true matches the common case and avoids spurious gating.
-///
-/// Three overrides, two distinct results: `Unknown` and `ForceFalse` are
-/// indistinguishable for every condition type.
-///
-/// ```text
-/// inferred-mode leaf result by condition type and override:
-///
-///               File   Plugin  Fomod | Game  Fomm  Fose
-///   Unknown     false  false   false | true  true  true
-///   ForceFalse  false  false   false | true  true  true
-///   ForceTrue   true   true    true  | true  true  true
-///
-/// Flag and Composite never reach leaf dispatch; they are handled earlier.
-/// ```
-///
-/// The two variants stay separate because diagnostics have to tell "not
-/// determined" from "determined absent": [`crate::fomod_inference_service`]
-/// maps each override onto its own step-visibility reason code. Its
-/// `compute_overrides` emits only `ForceTrue` and `Unknown`, so the `ForceFalse`
-/// reason code is structurally unreachable and only the tests exercise it.
-/// Collapsing the variants would erase the distinction from the output while
-/// changing no result. The matrix is pinned by the test
-/// `inferred_mode_override_matrix`.
+/**
+ * @enum ExternalConditionOverride
+ * @brief how inferred mode answers an external dependency.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * consulted only in inferred mode; no variant reads the filesystem or the game state, because
+ * inferred mode never probes either.
+ */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum ExternalConditionOverride {
-    /// External state cannot be determined. Evaluates exactly as `ForceFalse`;
-    /// the separate variant exists so callers and diagnostics can report "not
-    /// determined" rather than "determined absent".
+    /**
+     * @brief external state cannot be determined.
+     * @author Alex (https://github.com/lextpf)
+     */
     #[default]
     Unknown = 0,
-    /// External dependencies evaluate as unmet. Same results as `Unknown`.
     ForceFalse = 1,
-    /// External dependencies evaluate as met.
     ForceTrue = 2,
 }
 
-/// Compare two integer version vectors element-wise, padding the shorter one
-/// with zeros: "1.2" equals "1.2.0" and is less than "1.2.1".
-///
-/// Returns -1 when `x < y`, 0 when they are equal, 1 when `x > y`. The sign is
-/// the whole contract, and the two call sites pass their arguments in opposite
-/// orders, so check which vector is `x` before reading a comparison here.
+// compare two integer version vectors element-wise, padding the shorter one with zeros: "1.2"
+// equals "1.2.0" and is less than "1.2.1".
 fn compare_version_parts(x: &[i32], y: &[i32]) -> i32 {
     for i in 0..x.len().max(y.len()) {
         let xv = x.get(i).copied().unwrap_or(0);
@@ -120,31 +62,12 @@ fn compare_version_parts(x: &[i32], y: &[i32]) -> i32 {
     0
 }
 
-/// Parse a FOMOD version string into an integer vector: drop every character
-/// that is neither an ASCII digit nor '.', split on '.', parse each token, then
-/// tail-pad to length 3.
-///
-/// A token that will not parse, meaning an empty one or one wider than `i32`,
-/// becomes 0 and writes a `[fomod]` warning to `logs/salma.log`.
-///
-/// A trailing '.' yields no trailing empty token, while a leading dot and
-/// consecutive dots do. The trailing-dot case is special-cased on purpose:
-/// without it, every version string ending in a dot would log a spurious
-/// malformed-component warning. The token column is taken before the tail-pad
-/// step, so it is not what the function returns:
-///
-/// | input    | tokens      | returned    |
-/// |----------|-------------|-------------|
-/// | `"1.2."` | `[1, 2]`    | `[1, 2, 0]` |
-/// | `"1..2"` | `[1, 0, 2]` | `[1, 0, 2]` |
-/// | `".1"`   | `[0, 1]`    | `[0, 1, 0]` |
-/// | `""`     | none        | `[0, 0, 0]` |
-///
-/// The return value is always at least 3 elements long, and longer when the
-/// input has more than three components.
+// parse a FOMOD version string into an integer vector: drop every character that is neither an
+// ASCII digit nor '.', split on '.', parse each token, then tail-pad to length 3.
+// a token that will not parse, meaning an empty one or one wider than `i32`, becomes 0 and writes a
+// `[fomod]` warning to `logs/salma.log`.
 fn parse_version_parts(version_string: &str) -> Vec<i32> {
-    // Keep ASCII digits and dots only. A non-ASCII digit is dropped like any
-    // other stray character.
+    // keep ASCII digits and dots only. a non-ASCII digit is dropped like any other stray character.
     let cleaned: String = version_string
         .chars()
         .filter(|c| c.is_ascii_digit() || *c == '.')
@@ -154,12 +77,12 @@ fn parse_version_parts(version_string: &str) -> Vec<i32> {
     if !cleaned.is_empty() {
         let mut tokens: Vec<&str> = cleaned.split('.').collect();
         if cleaned.ends_with('.') {
-            // A trailing delimiter contributes no token; see the doc comment.
+            // a trailing delimiter contributes no token; see the doc comment.
             tokens.pop();
         }
         for token in tokens {
-            // Empty token (leading or consecutive dot) and i32 overflow both
-            // recover as 0 after a warning. Neither aborts the parse.
+            // empty token (leading or consecutive dot) and i32 overflow both recover as 0 after a
+            // warning. neither aborts the parse.
             match token.parse::<i32>() {
                 Ok(value) => parts.push(value),
                 Err(err) => {
@@ -177,39 +100,15 @@ fn parse_version_parts(version_string: &str) -> Vec<i32> {
     parts
 }
 
-// ---------------------------------------------------------------------------
-// Windows path decomposition.
-//
-// Plugin detection has to split a path the way MSVC std::filesystem::path does.
-// Rust's std::path::Path uses different rules (extension() drops the leading
-// dot, and ".gitignore" and "file." decompose differently), so these helpers
-// implement the MSVC rules directly. Both '/' and '\' are separators.
-// ---------------------------------------------------------------------------
-
-/// Filename component under MSVC `std::filesystem::path` rules: everything after
-/// the last '/' or '\' separator, and empty when the path ends with a separator.
-///
-/// Two root-name rules make the no-separator cases surprising. Both are verified
-/// against MSVC 2022; see PARITY-NOTES.md.
-///
-/// - A leading drive root-name is excluded, so `C:foo.esp` has filename
-///   `foo.esp` and `C:` has filename "". Root-names exist only at the start of a
-///   path, so `dir/C:bar` has filename `C:bar`, and the strip applies only in
-///   the no-separator branch.
-/// - Exactly two leading separators followed by a non-separator start a UNC
-///   root-name that runs to the next separator. With no further separator the
-///   whole path is the root-name and the filename is "": `//server.esp`,
-///   `\\server`, `\\?`. With a further separator the generic
-///   after-the-last-separator rule already agrees (`//server/share.esp` ->
-///   `share.esp`, `\\?\foo` -> `foo`), and three or more leading separators form
-///   no root-name at all (`///foo` -> `foo`).
+// filename component under MSVC std::filesystem::path rules: everything after the last '/' or '\'
+// separator, and empty when the path ends with a separator.
+// two root-name rules make the no-separator cases surprising.
 fn cpp_path_filename(path: &str) -> &str {
     let bytes = path.as_bytes();
     let is_sep = |b: u8| b == b'/' || b == b'\\';
-    // UNC root-name rule: when nothing after the two leading separators holds
-    // another separator, the whole path is the root-name and the filename is
-    // empty. The byte-wise scan is safe because '/' and '\' are ASCII and never
-    // occur inside a UTF-8 continuation sequence.
+    // UNC root-name rule: when nothing after the two leading separators holds another separator,
+    // the whole path is the root-name and the filename is empty. the byte-wise scan is safe because
+    // '/' and '\' are ASCII and never occur inside a UTF-8 continuation sequence.
     if bytes.len() >= 3
         && is_sep(bytes[0])
         && is_sep(bytes[1])
@@ -230,10 +129,7 @@ fn cpp_path_filename(path: &str) -> &str {
     }
 }
 
-/// Extension under MSVC `std::filesystem::path` rules, including the leading dot
-/// (".esp"). A filename that is "." or "..", that has no dot, or whose only dot
-/// is the first character (".gitignore") has no extension; "file." has extension
-/// ".".
+// extension under MSVC std::filesystem::path rules, including the leading dot (".esp").
 fn cpp_path_extension(path: &str) -> &str {
     let filename = cpp_path_filename(path);
     if filename == "." || filename == ".." {
@@ -245,52 +141,19 @@ fn cpp_path_extension(path: &str) -> &str {
     }
 }
 
-/// Existence probe that never fails: any I/O error answers "does not exist".
+// existence probe that never fails: any I/O error answers "does not exist".
 fn safe_exists(p: &Path) -> bool {
     p.exists()
 }
 
-/// True when the path's extension, lowercased, names a game plugin file.
 fn is_plugin_extension(file_path: &str) -> bool {
     let ext_lower = to_lower(cpp_path_extension(file_path));
     matches!(ext_lower.as_str(), ".esp" | ".esm" | ".esl")
 }
 
-/// Decide a `<fileDependency>` leaf in normal mode.
-///
-/// Returns false at once when `file_path` is empty. Otherwise it establishes
-/// whether the file exists, then answers according to `state`:
-///
-/// ```text
-/// existence probes, in order, first hit wins:
-///   1 ctx.installed_files contains normalize_path(file_path)
-///   2 .esp/.esm/.esl only: ctx.installed_plugins contains the lowercased filename
-///   3 ctx.archive_root joined with the normalized path exists on disk
-///   4 ctx.game_path    joined with the normalized path exists on disk
-///   no ctx -> exists = false, no probe runs
-///
-/// answer by state:
-///   state      .esp/.esm/.esl                      any other extension
-///   Active     exists                              exists
-///   Missing    not exists                          not exists
-///   Inactive   not exists, or exists and the       same as Missing:
-///              lowercased filename is not in       not exists
-///              ctx.installed_plugins
-///   any other  warn, then answer as Active         warn, then as Active
-/// ```
-///
-/// The `Inactive` row is surprising in two ways. A missing file answers true for
-/// every extension, because the plugin branch is guarded by `file_exists` and
-/// the fallthrough answer is `!file_exists`. An existing non-plugin file answers
-/// false, because FOMOD gives `Inactive` no meaning outside .esp/.esm/.esl and
-/// the code falls back to `Missing` semantics.
-///
-/// Probes 3 and 4 are blocking filesystem calls, up to two per leaf, and run
-/// only when the context sets `archive_root` or `game_path`. Any I/O error
-/// answers "does not exist"; nothing is thrown or returned as an error.
-///
-/// Probes 1 and 2 handle case differently: probe 1 compares normalized paths,
-/// which are already lowercase, and probe 2 lowercases the filename itself.
+// decide a fileDependency leaf in normal mode.
+// a missing file answers true for every extension, because the plugin branch is guarded by
+// `file_exists` and the fallthrough answer is `!file_exists`.
 fn eval_file_dep(file_path: &str, state: &str, ctx: Option<&FomodDependencyContext>) -> bool {
     if file_path.is_empty() {
         return false;
@@ -303,8 +166,8 @@ fn eval_file_dep(file_path: &str, state: &str, ctx: Option<&FomodDependencyConte
         if ctx.installed_files.contains(&normalized) {
             file_exists = true;
         }
-        // The extension and filename checks run on the original file_path, not
-        // on the normalized one.
+        // the extension and filename checks run on the original file_path, not on the normalized
+        // one.
         if !file_exists && is_plugin_extension(file_path) {
             let lower_name = to_lower(cpp_path_filename(file_path));
             if ctx.installed_plugins.contains(&lower_name) {
@@ -330,10 +193,9 @@ fn eval_file_dep(file_path: &str, state: &str, ctx: Option<&FomodDependencyConte
     }
 
     if state == "Inactive" {
-        // For a plugin file (.esp/.esm/.esl), "Inactive" means the file exists
-        // but is not in the active plugin list. FOMOD gives it no meaning for a
-        // non-plugin file, so those fall back to !file_exists, that is, to
-        // "Missing" semantics.
+        // for a plugin file (.esp/.esm/.esl), "Inactive" means the file exists but is not in the
+        // active plugin list. FOMOD gives it no meaning for a non-plugin file, so those fall back
+        // to !file_exists, that is, to "Missing" semantics.
         if file_exists {
             if let Some(ctx) = ctx {
                 if is_plugin_extension(file_path) {
@@ -345,9 +207,7 @@ fn eval_file_dep(file_path: &str, state: &str, ctx: Option<&FomodDependencyConte
         return !file_exists;
     }
 
-    // "Active" is the default: any other state string warns and is then treated
-    // as Active. This warning is the one engine message with no subsystem tag.
-    // Leave it untagged; see the module doc.
+    // unknown states log an untagged warning and use Active semantics.
     if state != "Active" {
         Logger::instance().log_warning(&format!(
             "Unknown file dependency state: {state} for file: {file_path}, treating as Active"
@@ -356,13 +216,10 @@ fn eval_file_dep(file_path: &str, state: &str, ctx: Option<&FomodDependencyConte
     file_exists
 }
 
-/// Decide a `<gameDependency>` leaf: true unless the context supplies both a
-/// `game_path` and a `game_version` and the installed version is lower than the
-/// required one.
-///
-/// No context, an empty `game_path`, an empty required version or an empty
-/// `game_version` all answer true. That is standalone mode: with no game to
-/// check against, a game version requirement cannot fail the install.
+// decide a gameDependency leaf: true unless the context supplies both a game_path and a
+// game_version and the installed version is lower than the required one.
+// no context, an empty `game_path`, an empty required version or an empty `game_version` all answer
+// true.
 fn eval_game_dep(version: &str, ctx: Option<&FomodDependencyContext>) -> bool {
     let Some(ctx) = ctx else {
         return true; // standalone mode
@@ -381,16 +238,8 @@ fn eval_game_dep(version: &str, ctx: Option<&FomodDependencyContext>) -> bool {
     true
 }
 
-/// Decide a `<pluginDependency>` leaf.
-///
-/// Returns false at once when `plugin_name` is empty. "Active" means the
-/// lowercased name is in `ctx.installed_plugins`. When it is not, and the context
-/// sets `game_path`, one blocking disk probe tests
-/// `<game_path>/Data/<plugin_name>` using the raw name, not the lowercased one.
-///
-/// `plugin_type == "Inactive"` asks for a file that exists but is not active.
-/// Every other value, including `"Active"` and the empty string, asks for an
-/// active plugin.
+// decide a pluginDependency leaf.
+// every other value, including `"Active"` and the empty string, asks for an active plugin.
 fn eval_plugin_dep(
     plugin_name: &str,
     plugin_type: &str,
@@ -407,7 +256,7 @@ fn eval_plugin_dep(
     if !file_exists {
         if let Some(ctx) = ctx {
             if !ctx.game_path.is_empty() {
-                // The join uses the raw plugin_name, not the lowered one.
+                // the join uses the raw plugin_name, not the lowered one.
                 let data_path = Path::new(&ctx.game_path).join("Data").join(plugin_name);
                 if safe_exists(&data_path) {
                     file_exists = true;
@@ -423,13 +272,8 @@ fn eval_plugin_dep(
     }
 }
 
-/// Decide a `<fomodDependency>` leaf: a case-sensitive exact match against
-/// `ctx.installed_fomods`. An empty name is false.
-///
-/// The case sensitivity is deliberate and asymmetric with plugin names, which
-/// are lowercased before lookup. Do not make the two symmetric: callers are
-/// required to store FOMOD names exactly as written, so lowercasing one side
-/// here would stop every mixed-case name matching.
+// decide a fomodDependency leaf: a case-sensitive exact match against ctx.installed_fomods.
+// an empty name is false.
 fn eval_fomod_dep(fomod_name: &str, ctx: Option<&FomodDependencyContext>) -> bool {
     if fomod_name.is_empty() {
         return false;
@@ -437,9 +281,8 @@ fn eval_fomod_dep(fomod_name: &str, ctx: Option<&FomodDependencyContext>) -> boo
     ctx.is_some_and(|c| c.installed_fomods.contains(fomod_name))
 }
 
-/// Decide a `<fommDependency>` leaf against the FOMM version MO2 hardcodes,
-/// "0.13.21". True when the required version is empty, or is less than or equal
-/// to that.
+// decide a fommDependency leaf against the FOMM version MO2 hardcodes, "0.13.21".
+// true when the required version is empty, or is less than or equal to that.
 fn eval_fomm_version(version: &str) -> bool {
     if version.is_empty() {
         return true;
@@ -449,7 +292,6 @@ fn eval_fomm_version(version: &str) -> bool {
     compare_version_parts(&required, &actual) <= 0
 }
 
-/// Normal-mode leaf dispatch: each type answers from the context and the disk.
 fn eval_leaf_normal(c: &FomodCondition, ctx: Option<&FomodDependencyContext>) -> bool {
     match c.r#type {
         FomodConditionType::File => eval_file_dep(&c.file_path, &c.file_state, ctx),
@@ -458,16 +300,14 @@ fn eval_leaf_normal(c: &FomodCondition, ctx: Option<&FomodDependencyContext>) ->
         FomodConditionType::Fomod => eval_fomod_dep(&c.fomod_name, ctx),
         FomodConditionType::Fomm => eval_fomm_version(&c.version),
         FomodConditionType::Fose => true,
-        // evaluate_condition_core handles Flag and Composite, so neither reaches
-        // here. The arm answers true to keep the match exhaustive.
+        // evaluate_condition_core handles Flag and Composite, so neither reaches here. the arm
+        // answers true to keep the match exhaustive.
         FomodConditionType::Flag | FomodConditionType::Composite => true,
     }
 }
 
-/// Inferred-mode leaf dispatch: the external types (File, Plugin, Fomod) follow
-/// the override, so both `Unknown` and `ForceFalse` answer false. Everything
-/// else, including the unreachable Flag and Composite arm, answers true. No
-/// context is consulted and no filesystem probe runs.
+// inferred-mode leaf dispatch: the external types (File, Plugin, Fomod) follow the override, so
+// both Unknown and ForceFalse answer false.
 fn eval_leaf_inferred(c: &FomodCondition, external_override: ExternalConditionOverride) -> bool {
     match c.r#type {
         FomodConditionType::File | FomodConditionType::Plugin | FomodConditionType::Fomod => {
@@ -476,12 +316,6 @@ fn eval_leaf_inferred(c: &FomodCondition, external_override: ExternalConditionOv
         _ => true,
     }
 }
-
-// ---------------------------------------------------------------------------
-// evaluate_condition_core: the shared tree walk. It owns Composite and Flag
-// handling, which is why those two evaluate identically in both modes, and
-// hands every other type to the supplied leaf function.
-// ---------------------------------------------------------------------------
 
 fn evaluate_condition_core(
     condition: &FomodCondition,
@@ -492,19 +326,13 @@ fn evaluate_condition_core(
     match condition.r#type {
         FomodConditionType::Composite => {
             if depth > MAX_DEPENDENCY_DEPTH {
-                // Tagged [fomod-ir], not the [fomod] the rest of this module
-                // uses. Keep the spelling; see the module doc.
                 Logger::instance().log_warning(
                     "[fomod-ir] Condition tree exceeds maximum depth, treating as unmet",
                 );
                 return false;
             }
             let is_and = condition.op == FomodConditionOp::And;
-            // And seeds true, Or seeds false, so an empty And is true and an
-            // empty Or is false. Both empties are load-bearing: the parser's
-            // depth-truncation bail emits an empty Or and must read as
-            // always-false, and a pattern with no dependencies is an empty And
-            // and must read as always-true.
+            // empty And is true. empty Or is false and represents a rejected over-depth subtree.
             let mut result = is_and;
             for child in &condition.children {
                 let child_met = evaluate_condition_core(child, flags, eval_leaf, depth + 1);
@@ -522,10 +350,9 @@ fn evaluate_condition_core(
             }
             result
         }
-        // Flags are answered here, ahead of leaf dispatch, which is why they
-        // evaluate identically in both modes. A missing flag is true only when
-        // the expected value is empty; a present flag is an exact
-        // case-sensitive comparison, with no trimming.
+        // flags are answered here, ahead of leaf dispatch, which is why they evaluate identically
+        // in both modes. a missing flag is true only when the expected value is empty; a present
+        // flag is an exact case-sensitive comparison, with no trimming.
         FomodConditionType::Flag => match flags.get(&condition.flag_name) {
             None => condition.flag_value.is_empty(),
             Some(actual) => *actual == condition.flag_value,
@@ -534,27 +361,6 @@ fn evaluate_condition_core(
     }
 }
 
-/// Evaluate a [`FomodCondition`] tree in normal mode, against a flag map and an
-/// optional context.
-///
-/// Never panics for well-formed IR. Filesystem errors during file-dependency
-/// checks are swallowed: the probe answers "does not exist".
-///
-/// **Depth.** Recursion starts at depth 0. A Composite subtree nested deeper
-/// than [`MAX_DEPENDENCY_DEPTH`] evaluates as unmet and writes a `[fomod-ir]`
-/// warning to `logs/salma.log`. There is no error return, so an over-deep tree
-/// silently reads as unsatisfied.
-///
-/// **Blocking I/O.** With a `Some(context)` that sets `archive_root` or
-/// `game_path`, each File leaf can issue up to two existence probes and each
-/// Plugin leaf one. With `None`, or with a context whose two path fields are
-/// empty, no probe runs.
-///
-/// The only caller that supplies a context is the install replay:
-/// `installation_service::handle_fomod_install` builds one with `archive_root`
-/// always set and `game_path` set only when the config JSON carries `gamePath`.
-/// Inference passes `None` everywhere - the propagator, the CSP solver and every
-/// `simulate()` call site - so a solve issues no probe at all.
 pub fn evaluate_condition(
     condition: &FomodCondition,
     flags: &HashMap<String, String>,
@@ -563,26 +369,6 @@ pub fn evaluate_condition(
     evaluate_condition_core(condition, flags, &|c| eval_leaf_normal(c, context), 0)
 }
 
-/// Evaluate a [`FomodCondition`] tree for inference. Flags evaluate exactly as
-/// in [`evaluate_condition`]; the external conditions (File, Plugin, Fomod)
-/// follow `external_override`.
-///
-/// - `ForceTrue`: external conditions are true
-/// - `ForceFalse`: external conditions are false
-/// - `Unknown`: same results as `ForceFalse` (see
-///   [`ExternalConditionOverride`] for the full matrix and for why the two are
-///   kept apart)
-///
-/// Infrastructure conditions (Game, Fomm, Fose) are true under all three
-/// overrides.
-///
-/// **Depth.** Same guard as [`evaluate_condition`]: recursion starts at depth 0,
-/// and a Composite subtree nested deeper than [`MAX_DEPENDENCY_DEPTH`] evaluates
-/// as unmet and logs a `[fomod-ir]` warning.
-///
-/// **No I/O.** Inferred mode issues no filesystem probe, whatever `_context`
-/// holds. The parameter is never read; it exists so both entry points take the
-/// same call shape.
 pub fn evaluate_condition_inferred(
     condition: &FomodCondition,
     flags: &HashMap<String, String>,
@@ -597,23 +383,7 @@ pub fn evaluate_condition_inferred(
     )
 }
 
-/// Determine a plugin's effective type under the current flag state: test
-/// `type_patterns` in order, first match wins, otherwise fall back to the
-/// plugin's declared type.
-///
-/// Context presence selects the evaluation mode, and that asymmetry is
-/// deliberate. With a context the patterns evaluate in normal mode; without one
-/// they evaluate in inferred mode under the `Unknown` override, so external
-/// leaves answer false. The CSP solver always passes no context and therefore
-/// always gets inferred-Unknown semantics.
-///
-/// Do not rewrite the `None` branch as `evaluate_condition(..., None)`. It looks
-/// equivalent and is not: a File leaf with state `Missing` or `Inactive` is true
-/// in normal mode without a context, and false under inferred-Unknown.
-///
-/// With a context this function can block on disk: up to two probes per File
-/// leaf, `archive_root` then `game_path`, and one per Plugin leaf, for every
-/// pattern it tests up to the first match. With `None` it does no I/O.
+// the first matching type pattern wins. absence retains the declared type.
 pub fn evaluate_plugin_type(
     plugin: &FomodPlugin,
     flags: &HashMap<String, String>,
@@ -645,8 +415,6 @@ mod tests {
     use std::collections::HashSet;
     use std::fs;
     use std::path::PathBuf;
-
-    // --- helpers -----------------------------------------------------------
 
     fn flags(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
@@ -711,9 +479,6 @@ mod tests {
         }
     }
 
-    /// Composite chain of `levels` nested composites. The root evaluates at
-    /// depth 0, so the innermost composite sits at depth `levels - 1` and
-    /// carries one always-true Flag leaf.
     fn nested_chain(levels: usize) -> FomodCondition {
         let mut node = composite(FomodConditionOp::And, vec![flag_leaf("missing", "")]);
         for _ in 1..levels {
@@ -726,8 +491,6 @@ mod tests {
         FomodDependencyContext::default()
     }
 
-    /// Temp dir scoped helper: creates a unique dir under std temp, runs the
-    /// closure, removes the dir.
     fn with_temp_dir(f: impl FnOnce(&Path)) {
         let dir = std::env::temp_dir().join(format!(
             "salma_rs_dep_eval_{}",
@@ -738,8 +501,6 @@ mod tests {
         fs::remove_dir_all(&dir).expect("remove temp dir");
     }
 
-    // --- trap (a): composite depth guard + And/Or semantics ----------------
-
     #[test]
     fn empty_and_is_true_empty_or_is_false() {
         let no_flags = HashMap::new();
@@ -747,7 +508,6 @@ mod tests {
         let empty_or = composite(FomodConditionOp::Or, vec![]);
         assert!(evaluate_condition(&empty_and, &no_flags, None));
         assert!(!evaluate_condition(&empty_or, &no_flags, None));
-        // Same in inferred mode: Composite handling is shared.
         assert!(evaluate_condition_inferred(
             &empty_and,
             &no_flags,
@@ -765,7 +525,6 @@ mod tests {
     #[test]
     fn and_short_circuits_on_first_false_or_on_first_true() {
         let no_flags = HashMap::new();
-        // And: [false, true] -> false; Or: [true, false] -> true.
         let f = flag_leaf("f", "set"); // missing flag, non-empty value -> false
         let t = flag_leaf("f", ""); // missing flag, empty value -> true
         let and = composite(FomodConditionOp::And, vec![f.clone(), t.clone()]);
@@ -777,16 +536,9 @@ mod tests {
     #[test]
     fn depth_32_composite_evaluates_depth_33_is_unmet() {
         let no_flags = HashMap::new();
-        // 33 nested composites put the innermost at depth 32, equal to
-        // MAX_DEPENDENCY_DEPTH. The guard is `depth > max`, so it still
-        // evaluates, and the flag leaf makes it true.
         assert!(evaluate_condition(&nested_chain(33), &no_flags, None));
-        // 34 nested composites put the innermost at depth 33, past the bound.
-        // That node is false, collapsing the whole And chain to false.
         assert!(!evaluate_condition(&nested_chain(34), &no_flags, None));
     }
-
-    // --- trap (b): flag semantics, shared across modes ---------------------
 
     #[test]
     fn missing_flag_with_empty_expected_value_is_true() {
@@ -832,8 +584,6 @@ mod tests {
         }
     }
 
-    // --- trap (c): file dependency states ----------------------------------
-
     #[test]
     fn file_dep_empty_path_is_false_for_every_state() {
         let no_flags = HashMap::new();
@@ -853,7 +603,6 @@ mod tests {
             installed_files: set(&["textures/armor/file.dds"]),
             ..empty_ctx()
         };
-        // Original path is un-normalized; the lookup normalizes it.
         let cond = file_leaf("Textures\\Armor\\File.DDS", "Active");
         assert!(evaluate_condition(&cond, &no_flags, Some(&ctx)));
         assert!(!evaluate_condition(
@@ -870,13 +619,11 @@ mod tests {
             installed_plugins: set(&["skyui.esp"]),
             ..empty_ctx()
         };
-        // Not in installed_files, but .esp filename is in installed_plugins.
         assert!(evaluate_condition(
             &file_leaf("Data/SkyUI.esp", "Active"),
             &no_flags,
             Some(&ctx)
         ));
-        // Non-plugin extension gets no fallback.
         let ctx2 = FomodDependencyContext {
             installed_plugins: set(&["skyui.txt"]),
             ..empty_ctx()
@@ -886,7 +633,6 @@ mod tests {
             &no_flags,
             Some(&ctx2)
         ));
-        // .esm and .esl take the fallback too.
         let ctx3 = FomodDependencyContext {
             installed_plugins: set(&["a.esm", "b.esl"]),
             ..empty_ctx()
@@ -925,8 +671,6 @@ mod tests {
     #[test]
     fn file_dep_inactive_on_plugin_file_checks_active_plugin_list() {
         let no_flags = HashMap::new();
-        // Exists (installed_files) but not active (installed_plugins) ->
-        // Inactive is true.
         let ctx = FomodDependencyContext {
             installed_files: set(&["mod.esp"]),
             ..empty_ctx()
@@ -936,7 +680,6 @@ mod tests {
             &no_flags,
             Some(&ctx)
         ));
-        // Exists and is active -> Inactive is false.
         let ctx2 = FomodDependencyContext {
             installed_files: set(&["mod.esp"]),
             installed_plugins: set(&["mod.esp"]),
@@ -956,13 +699,11 @@ mod tests {
             installed_files: set(&["readme.txt"]),
             ..empty_ctx()
         };
-        // Exists, non-plugin extension -> !file_exists -> false.
         assert!(!evaluate_condition(
             &file_leaf("readme.txt", "Inactive"),
             &no_flags,
             Some(&ctx)
         ));
-        // Absent, non-plugin -> true.
         assert!(evaluate_condition(
             &file_leaf("gone.txt", "Inactive"),
             &no_flags,
@@ -977,7 +718,6 @@ mod tests {
             installed_files: set(&["present.txt"]),
             ..empty_ctx()
         };
-        // An unrecognized state warns and falls through to the Active branch.
         assert!(evaluate_condition(
             &file_leaf("present.txt", "Enabled"),
             &no_flags,
@@ -988,7 +728,6 @@ mod tests {
             &no_flags,
             Some(&ctx)
         ));
-        // Lowercase state literals do not match ("missing" != "Missing").
         assert!(evaluate_condition(
             &file_leaf("present.txt", "missing"),
             &no_flags,
@@ -1032,25 +771,21 @@ mod tests {
                 game_path: game_path.to_string_lossy().into_owned(),
                 ..empty_ctx()
             };
-            // Hit via archive_root (normalized relative path join).
             assert!(evaluate_condition(
                 &file_leaf("Sub\\In_Archive.txt", "Active"),
                 &no_flags,
                 Some(&ctx)
             ));
-            // Hit via game_path only.
             assert!(evaluate_condition(
                 &file_leaf("sub/in_game.txt", "Active"),
                 &no_flags,
                 Some(&ctx)
             ));
-            // Miss everywhere.
             assert!(!evaluate_condition(
                 &file_leaf("sub/nowhere.txt", "Active"),
                 &no_flags,
                 Some(&ctx)
             ));
-            // Empty archive_root/game_path disable the respective probe.
             let ctx_no_probe = FomodDependencyContext { ..empty_ctx() };
             assert!(!evaluate_condition(
                 &file_leaf("sub/in_archive.txt", "Active"),
@@ -1060,86 +795,60 @@ mod tests {
         });
     }
 
-    // --- trap (d): MSVC path extension/filename semantics ------------------
-
     #[test]
     fn cpp_path_helpers_mirror_msvc_fs_path() {
-        // The extension includes the dot.
         assert_eq!(cpp_path_extension("mod.esp"), ".esp");
         assert_eq!(cpp_path_extension("dir/mod.esp"), ".esp");
         assert_eq!(cpp_path_extension("dir\\mod.esp"), ".esp");
-        // No dot -> no extension.
         assert_eq!(cpp_path_extension("mod"), "");
-        // Leading dot with no other dot -> no extension (".gitignore").
         assert_eq!(cpp_path_extension(".gitignore"), "");
         assert_eq!(cpp_path_extension("dir/.gitignore"), "");
-        // Leading dot plus another dot -> extension from the last dot.
         assert_eq!(cpp_path_extension(".profile.txt"), ".txt");
-        // Trailing dot -> extension ".".
         assert_eq!(cpp_path_extension("file."), ".");
-        // "." and ".." have no extension.
         assert_eq!(cpp_path_extension("."), "");
         assert_eq!(cpp_path_extension(".."), "");
         assert_eq!(cpp_path_extension("dir/.."), "");
-        // Dot in a directory component does not count.
         assert_eq!(cpp_path_extension("dir.d/file"), "");
 
-        // filename(): after the last separator of either kind.
         assert_eq!(cpp_path_filename("a/b/c.esp"), "c.esp");
         assert_eq!(cpp_path_filename("a\\b\\c.esp"), "c.esp");
         assert_eq!(cpp_path_filename("a/b\\c.esp"), "c.esp");
         assert_eq!(cpp_path_filename("c.esp"), "c.esp");
         assert_eq!(cpp_path_filename("a/"), "");
 
-        // Drive root-name decomposition without a separator: MSVC excludes
-        // the root-name ("C:") from filename().
+        // drive root-name decomposition without a separator: MSVC excludes the root-name ("C:")
+        // from filename().
         assert_eq!(cpp_path_filename("C:foo.esp"), "foo.esp");
         assert_eq!(cpp_path_filename("c:foo.esp"), "foo.esp");
         assert_eq!(cpp_path_filename("C:"), "");
         assert_eq!(cpp_path_filename("C:/foo.esp"), "foo.esp");
-        // Not a drive prefix: two letters, or a non-letter, before ':'.
         assert_eq!(cpp_path_filename("CC:foo"), "CC:foo");
         assert_eq!(cpp_path_filename("1:foo"), "1:foo");
         assert_eq!(cpp_path_filename(":foo"), ":foo");
-        // Root-names only exist at the start of the path; after a separator
-        // the colon component is kept whole.
         assert_eq!(cpp_path_filename("dir/C:bar"), "C:bar");
-        // The extension follows the corrected filename: "C:.esp" has filename
-        // ".esp", whose only dot is leading, so there is no extension.
         assert_eq!(cpp_path_extension("C:foo.esp"), ".esp");
         assert_eq!(cpp_path_extension("C:.esp"), "");
         assert_eq!(cpp_path_extension("C:.gitignore"), "");
 
-        // UNC root-name decomposition: exactly two leading separators plus a
-        // non-separator start a root-name that runs to the next separator.
-        // With no further separator the whole path is the root-name, so the
-        // filename and extension are empty even for a plugin-shaped tail.
-        // Every expectation here was verified against MSVC 2022 fs::path.
         assert_eq!(cpp_path_filename("//server.esp"), "");
         assert_eq!(cpp_path_extension("//server.esp"), "");
         assert_eq!(cpp_path_filename("//server"), "");
         assert_eq!(cpp_path_filename("\\\\server"), "");
         assert_eq!(cpp_path_filename("//C:"), "");
         assert_eq!(cpp_path_filename("\\\\?"), "");
-        // A separator after the root-name resumes the generic rule.
         assert_eq!(cpp_path_filename("//server/share.esp"), "share.esp");
         assert_eq!(cpp_path_extension("//server/share.esp"), ".esp");
         assert_eq!(cpp_path_filename("//server.esp/x.esp"), "x.esp");
         assert_eq!(cpp_path_filename("//server/"), "");
         assert_eq!(cpp_path_filename("\\\\?\\foo"), "foo");
         assert_eq!(cpp_path_filename("\\??\\foo"), "foo");
-        // Three or more leading separators form no root-name, and "\??" is not
-        // a device prefix without its trailing separator.
+        // three or more leading separators form no root-name, and "\??" is not a device prefix
+        // without its trailing separator.
         assert_eq!(cpp_path_filename("///foo"), "foo");
         assert_eq!(cpp_path_filename("//"), "");
         assert_eq!(cpp_path_filename("\\??"), "??");
     }
 
-    /// A UNC-root-name-only path with a plugin-shaped tail must not take the
-    /// installed_plugins fallback. Its filename and extension are both empty, so
-    /// the evaluator treats "//server.esp" as a non-plugin file that does not
-    /// exist: "Active" is false even when server.esp is an active plugin, and
-    /// "Inactive" is true.
     #[test]
     fn file_dep_unc_root_name_is_not_a_plugin() {
         let no_flags = HashMap::new();
@@ -1155,7 +864,6 @@ mod tests {
             &no_flags,
             Some(&ctx)
         ));
-        // Control: the same tail below a UNC share is a plugin filename.
         assert!(evaluate_condition(
             &file_leaf("//host/server.esp", "Active"),
             &no_flags,
@@ -1163,15 +871,11 @@ mod tests {
         ));
     }
 
-    // --- trap (e): game dependency -----------------------------------------
-
     #[test]
     fn game_dep_standalone_mode_is_true() {
         let no_flags = HashMap::new();
         let leaf = version_leaf(FomodConditionType::Game, "1.5.97");
-        // No ctx.
         assert!(evaluate_condition(&leaf, &no_flags, None));
-        // Ctx with empty game_path.
         let ctx = empty_ctx();
         assert!(evaluate_condition(&leaf, &no_flags, Some(&ctx)));
     }
@@ -1185,18 +889,13 @@ mod tests {
             ..empty_ctx()
         };
         let leaf = version_leaf(FomodConditionType::Game, "1.5.97");
-        // game_version >= required -> true.
         assert!(evaluate_condition(&leaf, &no_flags, Some(&ctx("1.5.97"))));
         assert!(evaluate_condition(&leaf, &no_flags, Some(&ctx("1.6.1170"))));
-        // game_version < required -> false.
         assert!(!evaluate_condition(&leaf, &no_flags, Some(&ctx("1.5.80"))));
-        // Empty required version or empty game_version -> true.
         let empty_req = version_leaf(FomodConditionType::Game, "");
         assert!(evaluate_condition(&empty_req, &no_flags, Some(&ctx("1.0"))));
         assert!(evaluate_condition(&leaf, &no_flags, Some(&ctx(""))));
     }
-
-    // --- trap (f): plugin dependency ----------------------------------------
 
     #[test]
     fn plugin_dep_empty_name_is_false() {
@@ -1226,8 +925,6 @@ mod tests {
             &no_flags,
             Some(&ctx)
         ));
-        // Any type string other than "Inactive" behaves as Active,
-        // including garbage and lowercase "inactive".
         assert!(evaluate_condition(
             &plugin_leaf("SkyUI.esp", "Enabled"),
             &no_flags,
@@ -1243,7 +940,7 @@ mod tests {
             &no_flags,
             Some(&ctx)
         ));
-        // Active plugin fails the Inactive check.
+        // active plugin fails the Inactive check.
         assert!(!evaluate_condition(
             &plugin_leaf("SkyUI.esp", "Inactive"),
             &no_flags,
@@ -1263,19 +960,16 @@ mod tests {
                 game_path: dir.to_string_lossy().into_owned(),
                 ..empty_ctx()
             };
-            // Exists in Data/, not active -> Inactive true.
             assert!(evaluate_condition(
                 &plugin_leaf("OnDisk.esp", "Inactive"),
                 &no_flags,
                 Some(&ctx)
             ));
-            // Exists in Data/, not active -> Active false.
             assert!(!evaluate_condition(
                 &plugin_leaf("OnDisk.esp", "Active"),
                 &no_flags,
                 Some(&ctx)
             ));
-            // Absent everywhere -> Inactive false.
             assert!(!evaluate_condition(
                 &plugin_leaf("Nowhere.esp", "Inactive"),
                 &no_flags,
@@ -1299,8 +993,6 @@ mod tests {
         ));
     }
 
-    // --- trap (g): fomod dependency -----------------------------------------
-
     #[test]
     fn fomod_dep_matches_exactly_without_lowercasing() {
         let no_flags = HashMap::new();
@@ -1313,7 +1005,6 @@ mod tests {
             &no_flags,
             Some(&ctx)
         ));
-        // Asymmetric with plugins: no lowercasing.
         assert!(!evaluate_condition(
             &fomod_leaf("skyui"),
             &no_flags,
@@ -1323,28 +1014,19 @@ mod tests {
         assert!(!evaluate_condition(&fomod_leaf("SkyUI"), &no_flags, None));
     }
 
-    // --- trap (h): fomm version ---------------------------------------------
-
     #[test]
     fn fomm_dep_boundary_at_hardcoded_version() {
         let no_flags = HashMap::new();
         let fomm = |v: &str| version_leaf(FomodConditionType::Fomm, v);
-        // Exactly the hardcoded actual -> true (required <= actual).
         assert!(evaluate_condition(&fomm("0.13.21"), &no_flags, None));
-        // Below -> true.
         assert!(evaluate_condition(&fomm("0.13.20"), &no_flags, None));
         assert!(evaluate_condition(&fomm("0.12"), &no_flags, None));
-        // Above -> false.
         assert!(!evaluate_condition(&fomm("0.13.22"), &no_flags, None));
         assert!(!evaluate_condition(&fomm("1.0"), &no_flags, None));
-        // Empty required -> true.
         assert!(evaluate_condition(&fomm(""), &no_flags, None));
-        // Pad-zero equality: "0.13.21.0" == "0.13.21".
         assert!(evaluate_condition(&fomm("0.13.21.0"), &no_flags, None));
         assert!(!evaluate_condition(&fomm("0.13.21.1"), &no_flags, None));
     }
-
-    // --- trap (i): fose always true -----------------------------------------
 
     #[test]
     fn fose_dep_is_always_true_in_both_modes() {
@@ -1361,8 +1043,6 @@ mod tests {
             assert!(evaluate_condition_inferred(&fose, &no_flags, ov, None));
         }
     }
-
-    // --- trap (j): inferred-mode override matrix -----------------------------
 
     #[test]
     fn inferred_mode_override_matrix() {
@@ -1402,8 +1082,8 @@ mod tests {
 
     #[test]
     fn inferred_mode_ignores_context_entirely() {
-        // A context that would make the File leaf true in normal mode has no
-        // effect in inferred mode, which never reads it.
+        // a context that would make the File leaf true in normal mode has no effect in inferred
+        // mode, which never reads it.
         let no_flags = HashMap::new();
         let ctx = FomodDependencyContext {
             installed_files: set(&["a.esp"]),
@@ -1419,8 +1099,6 @@ mod tests {
         ));
     }
 
-    // --- traps (k), (l): version parsing and comparison ---------------------
-
     #[test]
     fn parse_version_parts_table() {
         let cases: &[(&str, &[i32])] = &[
@@ -1428,23 +1106,17 @@ mod tests {
             ("v1.2.3-beta", &[1, 2, 3]),
             ("1.2.3b", &[1, 2, 3]),
             ("1.2.3.99 (custom)", &[1, 2, 3, 99]),
-            // Consecutive dots: empty token -> 0.
             ("1..2", &[1, 0, 2]),
-            // Leading dot: empty first token -> 0.
             (".1", &[0, 1, 0]),
-            // Trailing dot yields no trailing empty token.
             ("1.2.", &[1, 2, 0]),
             ("1.", &[1, 0, 0]),
-            // Fully empty and non-numeric inputs.
             ("", &[0, 0, 0]),
             ("beta", &[0, 0, 0]),
-            // Only dots: "." -> [""], ".." -> ["", ""] after the trailing pop.
             (".", &[0, 0, 0]),
             ("..", &[0, 0, 0]),
             // i32 overflow token -> 0.
             ("99999999999999999999", &[0, 0, 0]),
             ("1.99999999999999999999.2", &[1, 0, 2]),
-            // Pad to 3.
             ("7", &[7, 0, 0]),
             ("1.2", &[1, 2, 0]),
         ];
@@ -1471,12 +1143,9 @@ mod tests {
             compare_version_parts(&parse_version_parts("1.2.1"), &parse_version_parts("1.2")),
             1
         );
-        // Longer-than-3 vectors still compare element-wise.
         assert_eq!(compare_version_parts(&[1, 2, 3, 4], &[1, 2, 3]), 1);
         assert_eq!(compare_version_parts(&[1, 2, 3], &[1, 2, 3, 0]), 0);
     }
-
-    // --- trap (m): evaluate_plugin_type --------------------------------------
 
     fn plugin_with_patterns(
         base: PluginType,
@@ -1532,8 +1201,6 @@ mod tests {
 
     #[test]
     fn plugin_type_ctx_presence_selects_normal_vs_inferred_unknown() {
-        // Pattern with a File condition that the ctx satisfies but that
-        // inferred-Unknown evaluates to false.
         let no_flags = HashMap::new();
         let plugin = plugin_with_patterns(
             PluginType::Optional,
@@ -1543,12 +1210,10 @@ mod tests {
             installed_files: set(&["marker.esp"]),
             ..empty_ctx()
         };
-        // Some(ctx): normal mode, File leaf true -> pattern matches.
         assert_eq!(
             evaluate_plugin_type(&plugin, &no_flags, Some(&ctx)),
             PluginType::Required
         );
-        // None: Inferred/Unknown, File leaf false -> fallback type.
         assert_eq!(
             evaluate_plugin_type(&plugin, &no_flags, None),
             PluginType::Optional
@@ -1557,28 +1222,23 @@ mod tests {
 
     #[test]
     fn plugin_type_none_ctx_dispatches_inferred_not_normal_with_null_ctx() {
-        // Distinguisher: a File leaf with state "Missing" or "Inactive" is true
-        // in normal mode without a context, because file_exists is false, but
-        // false under inferred-Unknown, where File leaves follow the override
-        // whatever their state. Only the inferred dispatch is correct for the
-        // None branch, and that is the hot path: the CSP solver always passes no
-        // context. The ctx-presence test above cannot catch a regression to
-        // evaluate_condition(..., None), because its "Active" leaf is false in
-        // both modes without a context.
+        // distinguisher: a File leaf with state "Missing" or "Inactive" is true in normal mode
+        // without a context, because file_exists is false, but false under inferred-Unknown, where
+        // File leaves follow the override whatever their state. only the inferred dispatch is
+        // correct for the None branch, and that is the hot path: the CSP solver always passes no
+        // context. the ctx-presence test above cannot catch a regression to evaluate_condition(...,
+        // None), because its "Active" leaf is false in both modes without a context.
         let no_flags = HashMap::new();
         for state in ["Missing", "Inactive"] {
             let plugin = plugin_with_patterns(
                 PluginType::Optional,
                 vec![(file_leaf("x.esp", state), PluginType::Required)],
             );
-            // None: inferred-Unknown -> File leaf false -> fallback type.
             assert_eq!(
                 evaluate_plugin_type(&plugin, &no_flags, None),
                 PluginType::Optional,
                 "state {state:?}"
             );
-            // Some(empty ctx): normal mode -> file does not exist -> leaf
-            // true -> pattern type.
             let ctx = empty_ctx();
             assert_eq!(
                 evaluate_plugin_type(&plugin, &no_flags, Some(&ctx)),
@@ -1587,8 +1247,6 @@ mod tests {
             );
         }
     }
-
-    // --- trap (n): enum representation ---------------------------------------
 
     #[test]
     fn external_condition_override_repr_matches_cpp() {
@@ -1601,13 +1259,10 @@ mod tests {
         );
     }
 
-    // --- trap (o): non-throwing filesystem probes ----------------------------
-
     #[test]
     fn filesystem_probes_swallow_errors_as_not_exists() {
         let no_flags = HashMap::new();
-        // Invalid path characters on Windows: the probe must return false,
-        // never panic.
+        // invalid path characters on windows: the probe must return false, never panic.
         let ctx = FomodDependencyContext {
             archive_root: "Z:/definitely/not/a/real\u{0}/root".to_string(),
             game_path: "??invalid<>path".to_string(),
@@ -1625,13 +1280,9 @@ mod tests {
         ));
     }
 
-    // --- integration: composite trees over mixed leaves ----------------------
-
     #[test]
     fn nested_or_inside_and_evaluates_with_short_circuit() {
         let state = flags(&[("a", "1")]);
-        // And( Or(flag a==2 [false], flag a==1 [true]) [true],
-        //      Fose [true] ) -> true
         let tree = composite(
             FomodConditionOp::And,
             vec![
@@ -1643,7 +1294,6 @@ mod tests {
             ],
         );
         assert!(evaluate_condition(&tree, &state, None));
-        // Same tree with the Or unsatisfiable -> false.
         let tree2 = composite(
             FomodConditionOp::And,
             vec![
