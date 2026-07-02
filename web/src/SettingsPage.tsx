@@ -11,14 +11,7 @@ import type { AppConfig } from './types'
 const MONO = 'var(--font-mono)'
 const RETRY_DELAY_MS = 2000
 
-// A cheap syntactic screen, not a Windows path validator: non-empty, and free
-// of the wildcard and redirection characters * ? < > |. The colon and both
-// separators are allowed because a Windows path needs them, and the double
-// quote passes even though Windows forbids it in a path component. Gates the
-// Apply button and drives the sheet's validity badge.
-//
-// Whether the path exists is a separate, server-side question:
-// config.mo2ModsPathValid answers it after a save.
+// this is a syntax screen only. the server checks whether the path exists.
 function isPathValid(p: string): boolean {
   return p.trim().length > 0 && !/[*?<>|]/.test(p)
 }
@@ -43,7 +36,6 @@ export default function SettingsPage() {
   const retryCountRef = useRef(0)
 
   const pathValid = isPathValid(modsPath)
-  // Real dirty tracking, so Apply and Revert are both inert on a clean sheet.
   const dirty =
     config != null &&
     (modsPath !== config.mo2ModsPath || testArgs !== savedTestArgs || tailLogs !== savedTailLogs)
@@ -154,8 +146,6 @@ export default function SettingsPage() {
         />
       </ModuleHeader>
 
-      {/* Scrolling body. The sheet is capped at 840px and centred, so the gutter
-          beside it is deliberate margin rather than an unfilled pane. */}
       <div
         style={{
           flex: 1,
@@ -167,8 +157,6 @@ export default function SettingsPage() {
       >
         <div style={{ width: '100%', maxWidth: 840, background: 'var(--paper)' }}>
           {loadError ? (
-            // The third state of this one region, so it runs full-bleed like
-            // the table and the skeleton: a wash band, not a bordered card.
             <div
               style={{
                 padding: '16px 14px',
@@ -214,7 +202,6 @@ export default function SettingsPage() {
               />
             </div>
           ) : !config ? (
-            // Stands in for the table, so it sits at the same width and padding.
             <div
               style={{
                 padding: '15px 14px',
