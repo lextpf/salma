@@ -1,7 +1,6 @@
 import { createContext, useContext } from 'react'
 
 export type Theme = 'dark' | 'light'
-/** What the user chose. 'system' follows the OS and keeps following it. */
 export type ThemeMode = 'system' | 'dark' | 'light'
 
 export const ThemeContext = createContext<{

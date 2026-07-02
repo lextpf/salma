@@ -13,13 +13,10 @@ function systemTheme(): Theme {
 }
 
 /**
- * Theme state.
+ * @fn ThemeProvider({ children }: { children: ReactNode }): React.JSX.Element
+ * @brief preserve system mode as a preference distinct from its resolved theme.
+ * @author Alex (https://github.com/lextpf)
  *
- * Three modes rather than two, because "follow the OS" is a real preference and
- * a plain toggle cannot express it once it has been clicked. With no stored
- * choice the mode is `system`, not light: salma sits beside Mod Organizer 2,
- * most MO2 setups are dark, and a light flash on first run is the wrong first
- * impression.
  */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<ThemeMode>(storedMode)
@@ -40,8 +37,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     localStorage.setItem(KEY, mode)
   }, [theme, mode])
 
-  // The top-bar button is a two-way switch: it always lands on an explicit
-  // choice, which is what a user pressing it expects.
   const toggleTheme = useCallback(() => {
     setMode(theme === 'dark' ? 'light' : 'dark')
   }, [theme])
