@@ -1,24 +1,15 @@
-// Token-level syntax colouring for a single log line, used by LogStreamRow.
-// Returns segments tagged with the .log-* CSS classes declared in index.css.
-//
-// A line is peeled in a fixed order: timestamp, then level, then quoted strings,
-// then TOKEN_REGEX over whatever is left. Quotes come out first so a path or a
-// number inside a quoted string is not tokenized again.
-//
-// The timestamp shapes and the level keywords here are duplicated in logParse.ts
-// and have to stay in step. This file has no subsystem concept and colours every
-// bracket group as a tag; the rule for what counts as a real subsystem lives only
-// in logParse.ts.
-
 export interface HighlightSegment {
   text: string
   cls: string
 }
 
-// Split out quoted strings before the token regex runs, so it never has to deal
-// with them. A single quote closes a string only when the next character is not
-// alphanumeric, which is what keeps mod names like 'JK's Temple of Talos' in one
-// piece.
+/**
+ * @fn extractQuoted(text: string): HighlightSegment[]
+ * @brief protect quoted spans before other log tokenization.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * an alphanumeric character after a quote makes it an apostrophe.
+ */
 export function extractQuoted(text: string): HighlightSegment[] {
   const out: HighlightSegment[] = []
   let i = 0
@@ -36,8 +27,6 @@ export function extractQuoted(text: string): HighlightSegment[] {
       out.push({ text: text.slice(i, end), cls: 'log-string' })
       i = end; plain = end
     } else if (text[i] === "'") {
-      // A closing ' cannot be followed by an alphanumeric character; that would
-      // make it an apostrophe.
       let end = i + 1
       let found = false
       while (end < text.length) {
@@ -84,6 +73,7 @@ const TOKEN_REGEX = new RegExp([
 ].map(r => r.source).join('|'), 'g')
 
 export function highlightTokens(text: string, parts: HighlightSegment[], depth = 0) {
+  // keep timestamp and level recognition synchronized with `logParse.ts`.
   if (depth > 3) { parts.push({ text, cls: '' }); return }
   const regex = new RegExp(TOKEN_REGEX.source, TOKEN_REGEX.flags)
   let lastIndex = 0
@@ -96,8 +86,7 @@ export function highlightTokens(text: string, parts: HighlightSegment[], depth =
     if (tag) parts.push({ text: full, cls: 'log-tag' })
     else if (url) parts.push({ text: full, cls: 'log-url' })
     else if (path) {
-      // Trim trailing non-path text after a file extension, as in
-      // ".dds (priority: 0)".
+      // exclude trailing metadata after a file extension.
       const cleaned = full.replace(/(\.\w{1,10})\s(?!.*[\\/]).*$/, '$1')
       if (cleaned.length < full.length) {
         parts.push({ text: cleaned, cls: 'log-path' })
@@ -141,15 +130,14 @@ export function highlightLog(line: string): HighlightSegment[] {
   const parts: HighlightSegment[] = []
   let remaining = line
 
-  // Long timestamp at line start: 2024-01-15 12:34:56(.ms),
-  // [2024-01-15 12:34:56], or 3-01 18:37:31.708
+  // parse the long timestamp forms written by the application log.
   const tsMatch = remaining.match(/^(\[?(?:\d{4}-\d{2}-\d{2}|\d{1,2}-\d{2})[\sT]\d{2}:\d{2}:\d{2}(?:\.\d+)?\]?\s*)/)
   if (tsMatch) {
     parts.push({ text: tsMatch[1], cls: 'log-timestamp' })
     remaining = remaining.slice(tsMatch[1].length)
   }
 
-  // Short timestamp, HH:MM:SS(.ms), which is what test.log writes.
+  // parse the time-only form written by `test.log`.
   if (!tsMatch) {
     const shortTsMatch = remaining.match(/^(\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+)/)
     if (shortTsMatch) {
@@ -158,7 +146,6 @@ export function highlightLog(line: string): HighlightSegment[] {
     }
   }
 
-  // Log level, optionally wrapped in dashes.
   const levelMatch = remaining.match(/^(?:-\s*)?(ERROR|WARNING|WARN|INFO|DEBUG|TRACE|CRITICAL|FATAL)\b(?:\s*-(?!-)\s*)?/i)
   if (levelMatch) {
     const level = levelMatch[1].toUpperCase()
@@ -170,7 +157,7 @@ export function highlightLog(line: string): HighlightSegment[] {
     remaining = remaining.slice(levelMatch[0].length)
   }
 
-  // Quoted strings first, then the token regex over the unquoted remainder.
+  // protect quoted strings from further tokenization.
   if (remaining) {
     for (const seg of extractQuoted(remaining)) {
       if (seg.cls) parts.push(seg)

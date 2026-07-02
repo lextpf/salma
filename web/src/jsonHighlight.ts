@@ -1,7 +1,3 @@
-// JSON tokenizer for the inspector's JSON tab. Splits a pretty-printed JSON
-// string into spans tagged with the .json-* CSS classes from index.css, so the
-// raw record can be colorized without a highlighter dependency.
-
 export interface JsonToken {
   text: string
   cls: string
