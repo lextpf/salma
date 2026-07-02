@@ -1,11 +1,9 @@
+/**
+ * @brief normalize supported cache schema variants before rendering.
+ * @author Alex (https://github.com/lextpf)
+ *
+ */
 import type { ConfidenceScore, FomodGroup, FomodReason, FomodStep } from './types'
-
-// Normalizes the schema-v2 step, group and plugin shapes into a stable view
-// model. Cached records span several schema versions, so the same field arrives
-// in several shapes: a plugin may be a string, a number or an object; groups sit
-// under `optionalFileGroups` or under `groups`; selection is `selected` or
-// `isSelected`. Every consumer reads through these helpers rather than touching
-// the raw JSON, so one parser covers all of it.
 
 export interface NormalizedPlugin {
   name: string
