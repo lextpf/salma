@@ -1,45 +1,10 @@
-//! Process-wide logger: `logs/salma.log` next to the DLL, plus a host callback.
-//!
-//! One [`OnceLock`]-backed instance per process, reached through
-//! [`Logger::instance`]. Construction never fails, so no call site has to handle
-//! a missing logger.
-//!
-//! ## Output routing
-//!
-//! A registered callback replaces file logging; it does not duplicate it.
-//! `setLogCallback(null)` restores file logging. The console echo happens either
-//! way.
-//!
-//! ```text
-//!  callback registered? | console                   | logs/salma.log | callback
-//!  ---------------------|---------------------------|----------------|------------
-//!  no                   | stdout (info, warning),   | formatted line | -
-//!                       | stderr (error)            |                |
-//!  yes                  | stdout (info, warning),   | nothing        | raw message
-//!                       | stderr (error)            |                |
-//! ```
-//!
-//! Two rules the table cannot carry:
-//!
-//! - The console echo and the callback both receive the raw message, with no
-//!   timestamp and no level prefix. Only the file line carries those.
-//! - A callback that logs re-entrantly on the same thread is dropped, with a
-//!   diagnostic on stderr, instead of recursing until the stack dies.
-//!
-//! The file write happens under the state mutex. The console echo and the
-//! callback both run outside it, so two threads can interleave there, and a slow
-//! host callback never blocks another thread's file write.
-//!
-//! ## Line format
-//!
-//! `YYYY-MM-DD HH:MM:SS.mmm LEVEL message`, where `LEVEL` is `INFO`, `WARNING`
-//! or `ERROR`. The timestamp is local time on Windows (`GetLocalTime`). On every
-//! other platform it is UTC, because `std` has no local-time conversion; see
-//! `now_local`. salma ships Windows-only, and the non-Windows arm exists only so
-//! the crate still compiles elsewhere.
-//!
-//! The file is opened in append mode and rotates at 10 MiB, keeping
-//! `salma.log.1` through `.3`.
+/*!
+ * @brief routes process-wide logs to a file or host callback.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * a callback replaces file output. callback and console calls occur outside the state lock.
+ * reentrant callback logging is dropped. file output rotates at 10 MiB and keeps three backups.
+ */
 
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
@@ -51,57 +16,63 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::utils::module_directory;
 
-/// Host log callback.
-///
-/// The ABI spelling is the parameter type of [`crate::capi::setLogCallback`],
-/// `Option<unsafe extern "C" fn(*const c_char)>`, which the MO2 plugin declares
-/// as `ctypes.CFUNCTYPE(None, ctypes.c_char_p)`. All three must agree.
+/**
+ * @brief host log callback.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * the ABI spelling is the parameter type of [`crate::capi::setLogCallback`], `Option<unsafe extern
+ * "C" fn(*const c_char)>`, which the MO2 plugin declares as `ctypes.CFUNCTYPE(None,
+ * ctypes.c_char_p)`.
+ */
 pub type LogCallback = unsafe extern "C" fn(*const c_char);
 
-/// Rotate once the current file reaches this size, in bytes (10 MiB).
+// rotate once the current file reaches this size, in bytes (10 MiB).
 const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
 
-/// Keep `salma.log.1` through `salma.log.3`.
 const MAX_ROTATED_FILES: u32 = 3;
 
-/// The file handle and its byte counter, which only ever move together. Grouping
-/// them in one struct is what makes the state mutex cover both.
+// the file handle and its byte counter, which only ever move together.
 struct FileState {
-    /// Absolute path to the `logs` directory.
+    // absolute path to the logs directory.
     directory: PathBuf,
-    /// Append-mode handle, `None` when the file could not be opened.
     file: Option<File>,
-    /// Approximate bytes written since the last rotation.
+    // approximate bytes written since the last rotation.
     bytes_written: u64,
 }
 
-/// The logger singleton.
+/**
+ * @struct Logger
+ * @brief the logger singleton.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * ### :material-lock-outline: thread safety
+ *
+ * the file state is protected by a mutex. callback and console calls run outside that lock.
+ * callbacks can run on several threads at once. reentrant callback logging is dropped.
+ *
+ */
 pub struct Logger {
     state: Mutex<FileState>,
-    /// Callback function-pointer address, 0 when cleared. Stored lock-free so
-    /// `set_callback` never blocks a logging thread.
+    // callback function-pointer address, 0 when cleared.
+    // stored lock-free so `set_callback` never blocks a logging thread.
     callback: AtomicUsize,
 }
 
-/// An address inside this module, used to resolve the DLL that owns this code.
-///
-/// The log directory has to follow mo2-salma.dll, not the host executable: MO2
-/// loads the DLL out of its plugins tree while the process is ModOrganizer.exe,
-/// and the log belongs next to the DLL either way. Anchoring on a function
-/// defined here is what makes that resolution point at the right module.
+// module_anchor supplies an address from mo2-salma.dll for module path resolution.
+// the log directory has to follow mo2-salma.dll, not the host executable: MO2 loads the DLL out of
+// its plugins tree while the process is ModOrganizer.exe, and the log belongs next to the DLL
+// either way.
 fn module_anchor() {}
 
-// Re-entrancy guard for the host callback. A callback that itself logs would
-// otherwise recurse until the stack overflows. The flag is per-thread because
-// callbacks run on whichever thread logged.
+// re-entrancy guard for the host callback. a callback that itself logs would otherwise recurse
+// until the stack overflows. the flag is per-thread because callbacks run on whichever thread
+// logged.
 thread_local! {
     static IN_CALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
 
-/// Severity tag written into the file. The console and callback paths receive
-/// the raw message with no level prefix.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Level {
     Info,
@@ -120,19 +91,12 @@ impl Level {
 }
 
 impl Logger {
-    /// The process-wide logger, constructed on first use.
-    ///
-    /// Construction resolves `<module dir>/logs`, creates it, and opens
-    /// `salma.log` in append mode, seeding the rotation counter from the
-    /// existing file size so a restart does not restart the rotation cycle.
-    ///
-    /// Construction always succeeds; there is no failing path and no `Result`.
-    /// If the `logs` directory cannot be created, or `salma.log` cannot be
-    /// opened, a `[Logger] ...` diagnostic goes to stderr and the logger is
-    /// still returned, holding no file handle. In that degraded state every file
-    /// write is discarded silently, while the console echo and the host callback
-    /// keep working normally. No public accessor reports the state. A later
-    /// successful [`Logger::clear_log`] re-opens the handle and ends it.
+    /**
+     * @fn instance() -> &'static Logger
+     * @brief the process-wide logger, constructed on first use.
+     * @author Alex (https://github.com/lextpf)
+     *
+     */
     pub fn instance() -> &'static Logger {
         LOGGER.get_or_init(Logger::new)
     }
@@ -159,22 +123,14 @@ impl Logger {
         }
     }
 
-    /// Register (or with `None`, clear) the host callback.
-    ///
-    /// A single lock-free atomic store, so it never contends with an in-flight
-    /// log call and never blocks. Clearing re-enables file logging.
-    ///
-    /// The callback is process-global, not per-thread. Two caller obligations:
-    ///
-    /// - The callback must be thread-safe. It runs outside this logger's state
-    ///   mutex, on whichever thread logged, so two threads can be inside it at
-    ///   the same time.
-    /// - The function pointer is stored as a raw address and must stay valid
-    ///   until it is replaced or cleared with `None`. Leaving a dangling pointer
-    ///   registered is undefined behavior.
-    ///
-    /// A callback that logs re-entrantly on the same thread is dropped, not
-    /// invoked; see `invoke_callback`.
+    /**
+     * @fn set_callback(&self, Option<LogCallback>)
+     * @brief replace the callback with one atomic store; None clears it.
+     * @author Alex (https://github.com/lextpf)
+     *
+     * a single lock-free atomic store, so it never contends with an in-flight log call and never
+     * blocks.
+     */
     pub fn set_callback(&self, callback: Option<LogCallback>) {
         let addr = match callback {
             Some(f) => f as usize,
@@ -183,46 +139,37 @@ impl Logger {
         self.callback.store(addr, Ordering::SeqCst);
     }
 
-    /// Whether a host callback is currently registered.
-    ///
-    /// Exists so the ABI test can assert that `setLogCallback` reached the
-    /// logger without transmuting the stored address itself.
     pub fn has_callback(&self) -> bool {
         self.callback.load(Ordering::SeqCst) != 0
     }
 
-    /// Currently registered callback, if any.
     fn callback(&self) -> Option<LogCallback> {
         let addr = self.callback.load(Ordering::SeqCst);
         if addr == 0 {
             None
         } else {
-            // SAFETY: the address was stored from a `LogCallback` in
+            // safety: the address was stored from a `LogCallback` in
             // `set_callback` and function pointers are not invalidated by the
             // round trip through `usize`.
             Some(unsafe { std::mem::transmute::<usize, LogCallback>(addr) })
         }
     }
 
-    /// Log at INFO.
     pub fn log(&self, message: &str) {
         self.emit(Level::Info, message);
     }
 
-    /// Log at WARNING.
     pub fn log_warning(&self, message: &str) {
         self.emit(Level::Warning, message);
     }
 
-    /// Log at ERROR.
     pub fn log_error(&self, message: &str) {
         self.emit(Level::Error, message);
     }
 
-    /// The shared body of the three level methods.
     fn emit(&self, level: Level, message: &str) {
-        // 1. Under the lock: snapshot the callback, and write the file line
-        //    only when no callback is registered.
+        // 1. under the lock: snapshot the callback, and write the file line only when no callback
+        // is registered.
         let cb = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             let cb = self.callback();
@@ -232,15 +179,15 @@ impl Logger {
             cb
         };
 
-        // 2. Console echo, outside the lock: interleaved console output is
-        //    acceptable, holding the mutex across slow I/O is not.
+        // 2. console echo, outside the lock: interleaved console output is acceptable, holding the
+        // mutex across slow I/O is not.
         if level == Level::Error {
             eprintln!("{message}");
         } else {
             println!("{message}");
         }
 
-        // 3. Callback, if registered.
+        // 3. callback, if registered.
         if let Some(cb) = cb {
             self.invoke_callback(cb, message);
         }
@@ -251,8 +198,8 @@ impl Logger {
             eprintln!("[Logger] Re-entrant callback dropped: {message}");
             return;
         }
-        // A C string cannot carry an interior NUL, so a message holding one is
-        // delivered truncated at the first NUL rather than dropped.
+        // a C string cannot carry an interior NUL, so a message holding one is delivered truncated
+        // at the first NUL rather than dropped.
         let Ok(cstr) = CString::new(message) else {
             let truncated: String = message.chars().take_while(|c| *c != '\0').collect();
             let Ok(cstr) = CString::new(truncated) else {
@@ -266,9 +213,9 @@ impl Logger {
 
     fn call_guarded(&self, cb: LogCallback, cstr: &CString, message: &str) {
         IN_CALLBACK.with(|f| f.set(true));
-        // A host callback that unwinds must not tear down the log call site.
+        // a host callback that unwinds must not tear down the log call site.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // SAFETY: `cb` came from `set_callback` and `cstr` is a valid
+            // safety: `cb` came from `set_callback` and `cstr` is a valid
             // nul-terminated string that outlives the call.
             unsafe { cb(cstr.as_ptr()) }
         }));
@@ -278,22 +225,23 @@ impl Logger {
         }
     }
 
-    /// Truncate `salma.log` and reopen it.
-    ///
-    /// Returns `true` only when the truncation and the reopen both succeeded.
-    /// A `false` return does not mean the log file is closed: on the
-    /// truncation-failure path the file is reopened in append mode and logging
-    /// continues, with `bytes_written` reseeded from the reopened file's size so
-    /// the rotation counter still matches what is on disk.
-    ///
-    /// Blocks on the state mutex and does file I/O.
+    /**
+     * @fn clear_log(&self) -> bool
+     * @brief truncate under the logger mutex and reopen in append mode.
+     * @author Alex (https://github.com/lextpf)
+     *
+     * a `false` return does not mean the log file is closed: on the truncation-failure path the
+     * file is reopened in append mode and logging continues, with `bytes_written` reseeded from the
+     * reopened file's size so the rotation counter still matches what is on disk.
+     * @return `true` only when the truncation and the reopen both succeeded.
+     */
     pub fn clear_log(&self) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let path = state.directory.join("salma.log");
         state.file = None; // flush + close
 
         if File::create(&path).is_err() {
-            // Reopen in append mode even on failure, so logging survives.
+            // reopen in append mode even on failure, so logging survives.
             let (file, bytes) = open_append(&path);
             state.file = file;
             state.bytes_written = bytes;
@@ -307,13 +255,11 @@ impl Logger {
         opened
     }
 
-    /// Absolute path of the active log file.
     pub fn log_path(&self) -> PathBuf {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.directory.join("salma.log")
     }
 
-    /// Absolute path of the log directory.
     pub fn log_directory(&self) -> PathBuf {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.directory.clone()
@@ -321,22 +267,8 @@ impl Logger {
 }
 
 impl FileState {
-    /// Write one formatted line and rotate if the file has grown past the cap.
-    /// The caller must hold the state mutex. Does nothing when there is no file
-    /// handle.
-    ///
-    /// **One-write invariant, do not break it.** `salma.log` has two independent
-    /// appending writers: this module, and the `Logger` compiled into
-    /// mo2-server, which resolves the same file because the DLL is deployed next
-    /// to the exe. Both open the file with O_APPEND (see `open_append`), and
-    /// O_APPEND makes one write atomic but cannot glue two writes together. Each
-    /// record must therefore reach the unbuffered `std::fs::File` in a single
-    /// `write_all` of the whole line, trailing newline included, which
-    /// `format_line` already appends. Do not wrap the handle in a `BufWriter`,
-    /// and do not split the newline into a second write: that produces torn
-    /// records, 129 damaged out of 11,547 lines in a sample log.
-    /// `Logger::write_log_unlocked` in `src/Logger.cpp` holds the same
-    /// invariant on the server side.
+    // write one formatted line and rotate if the file has grown past the cap.
+    // the caller must hold the state mutex.
     fn write_line(&mut self, level: Level, message: &str) {
         let Some(file) = self.file.as_mut() else {
             return;
@@ -345,50 +277,15 @@ impl FileState {
         if file.write_all(line.as_bytes()).is_err() {
             return;
         }
-        // The newline is part of `line` and the whole record goes out in one
-        // call, so the counter takes the line length with no `+ 1` adjustment.
-        // Adding one would drift the rotation point away from the real size.
+        // the newline is part of `line` and the whole record goes out in one call, so the counter
+        // takes the line length with no `+ 1` adjustment. adding one would drift the rotation point
+        // away from the real size.
         self.bytes_written += line.len() as u64;
         self.rotate_if_needed();
     }
 
-    /// Rotate the log once it passes [`MAX_LOG_SIZE`]. The caller must hold the
-    /// state mutex.
-    ///
-    /// The check runs after the write, so the file always crosses the cap before
-    /// it rotates. `bytes_written` is seeded from the existing file size when the
-    /// handle is opened, so the count survives a process restart.
-    ///
-    /// ```text
-    ///   bytes_written >= MAX_LOG_SIZE (10 MiB)
-    ///             |
-    ///             v
-    ///    close salma.log
-    ///             |
-    ///             v
-    ///    salma.log.3 -> deleted          i == MAX_ROTATED_FILES
-    ///    salma.log.2 -> salma.log.3      loop runs i = 3, 2, 1;
-    ///    salma.log.1 -> salma.log.2      a missing file is skipped
-    ///             |
-    ///             v
-    ///    rename salma.log -> salma.log.1
-    ///        |                      |
-    ///     ok |                      | fails (file pinned by an antivirus
-    ///        |                      |        scanner or a log viewer)
-    ///        v                      v
-    ///   reopen append          reopen append
-    ///   bytes_written = 0      bytes_written unchanged
-    ///                            -> the file grows past the cap, no entries
-    ///                               are lost, and the next rotation catches up
-    /// ```
-    ///
-    /// Leaving the counter alone on the failure branch is deliberate, not an
-    /// oversight: it is what keeps entries from being dropped while the rename
-    /// cannot happen. Resetting it would leave the counter claiming an empty
-    /// file when the real one is already past the cap. Do not "fix" it.
-    ///
-    /// A failed delete or a failed rename of a rotated file only prints a
-    /// diagnostic to stderr; rotation continues.
+    // rotate the log once it passes MAX_LOG_SIZE.
+    // the caller must hold the state mutex.
     fn rotate_if_needed(&mut self) {
         if self.bytes_written < MAX_LOG_SIZE {
             return;
@@ -397,7 +294,7 @@ impl FileState {
 
         let dir = &self.directory;
 
-        // Shift the rotated files down: .3 is deleted, .2 -> .3, .1 -> .2.
+        // shift the rotated files down: .3 is deleted, .2 -> .3, .1 -> .2.
         for i in (1..=MAX_ROTATED_FILES).rev() {
             let src = dir.join(format!("salma.log.{i}"));
             if !src.exists() {
@@ -422,11 +319,8 @@ impl FileState {
             }
         }
 
-        // Rotate the current log to .1. A rename can still fail on Windows if
-        // an antivirus scanner or a log viewer pins the file. When it does, the
-        // counter is deliberately left alone: the existing file is reopened in
-        // append mode and grows past the cap, which loses no entries and lets
-        // the next rotation catch up.
+        // rotate the current log to .1. a rename can still fail on windows if an antivirus scanner
+        // or a log viewer pins the file.
         let current = dir.join("salma.log");
         if let Err(err) = fs::rename(&current, dir.join("salma.log.1")) {
             eprintln!("[Logger] Failed to rotate salma.log -> salma.log.1: {err}");
@@ -441,13 +335,9 @@ impl FileState {
     }
 }
 
-/// Open `path` in append mode, reporting the existing size so the rotation
-/// counter continues from where a previous process left off.
-///
-/// Never fails. On an open error it prints a diagnostic to stderr and returns
-/// `(None, 0)`, which puts the logger into the degraded, file-less mode
-/// described on [`Logger::instance`]. The handle is deliberately unbuffered:
-/// see the one-write invariant on `FileState::write_line`.
+// open path in append mode, reporting the existing size so the rotation counter continues from
+// where a previous process left off.
+// never fails.
 fn open_append(path: &Path) -> (Option<File>, u64) {
     match OpenOptions::new().create(true).append(true).open(path) {
         Ok(file) => {
@@ -464,8 +354,8 @@ fn open_append(path: &Path) -> (Option<File>, u64) {
     }
 }
 
-/// Broken-down local time: calendar fields plus milliseconds, the exact set the
-/// log line format needs.
+// broken-down local time: calendar fields plus milliseconds, the exact set the log line format
+// needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Stamp {
     year: i32,
@@ -477,16 +367,12 @@ struct Stamp {
     millis: u32,
 }
 
-/// Current local time.
-///
-/// On Windows this is `GetLocalTime`, which applies the machine's timezone and
-/// DST rules, so a salma line is comparable to any other line in the log. `std`
-/// has no local-time conversion, so there is no portable alternative.
+// current local time.
 #[cfg(windows)]
 fn now_local() -> Stamp {
     use windows_sys::Win32::System::SystemInformation::GetLocalTime;
     let mut st = unsafe { std::mem::zeroed() };
-    // SAFETY: GetLocalTime only writes the SYSTEMTIME out-parameter.
+    // safety: GetLocalTime only writes the SYSTEMTIME out-parameter.
     unsafe { GetLocalTime(&mut st) };
     Stamp {
         year: st.wYear as i32,
@@ -499,8 +385,6 @@ fn now_local() -> Stamp {
     }
 }
 
-/// Non-Windows fallback: UTC, since there is no local-time source in `std`.
-/// salma is Windows-only; this exists so the crate still builds elsewhere.
 #[cfg(not(windows))]
 fn now_local() -> Stamp {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -521,7 +405,6 @@ fn now_local() -> Stamp {
     }
 }
 
-/// Days-since-epoch to civil date (Howard Hinnant's algorithm).
 #[cfg(not(windows))]
 fn civil_from_days(z: i64) -> (i32, u32, u32) {
     let z = z + 719_468;
@@ -536,12 +419,10 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     ((y + i64::from(m <= 2)) as i32, m as u32, d as u32)
 }
 
-/// Format one log line, newline included:
-/// `{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {level} {message}\n`.
-///
-/// The trailing newline is part of the format string because each record must
-/// reach the file in a single write; see the one-write invariant on
-/// `FileState::write_line`.
+// format one log line, newline included: {:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {level}
+// {message}\n.
+// the trailing newline is part of the format string because each record must reach the file in a
+// single write; see the one-write invariant on `FileState::write_line`.
 fn format_line(s: Stamp, level: &str, message: &str) -> String {
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {} {}\n",
@@ -565,8 +446,6 @@ mod tests {
         }
     }
 
-    /// The exact shape of a real `logs/salma.log` line, zero-padded in every
-    /// field including the 3-digit milliseconds.
     #[test]
     fn line_format_matches_the_cpp_layout() {
         assert_eq!(
@@ -599,8 +478,6 @@ mod tests {
         assert_eq!(Level::Error.as_str(), "ERROR");
     }
 
-    /// An empty message still produces a well-formed line, ending in a single
-    /// space before the newline.
     #[test]
     fn empty_message_still_formats() {
         assert_eq!(
@@ -626,8 +503,6 @@ mod tests {
         assert!(s.millis < 1000);
     }
 
-    /// The singleton anchors its directory on the module that owns this code,
-    /// so the path ends in `logs` and is absolute.
     #[test]
     fn instance_resolves_a_logs_directory() {
         let dir = Logger::instance().log_directory();
@@ -638,9 +513,9 @@ mod tests {
         );
     }
 
-    // Registering and clearing the callback is covered once, by
-    // `capi::tests::set_log_callback_reaches_the_logger`, which drives the same
-    // code through the actual ABI export. Duplicating it here would race: the
-    // callback is process-global and cargo runs tests in this binary in
-    // parallel, so two tests toggling it would see each other's writes.
+    // registering and clearing the callback is covered once, by
+    // `capi::tests::set_log_callback_reaches_the_logger`, which drives the same code through the
+    // actual ABI export. duplicating it here would race: the callback is process-global and cargo
+    // runs tests in this binary in parallel, so two tests toggling it would see each other's
+    // writes.
 }
