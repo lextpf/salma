@@ -1,35 +1,10 @@
-//! Integration tests for the schema-v2 diagnostics wire format.
-//!
-//! Every case here drives the crate from outside, so it sees only what a
-//! consumer of the emitted document sees. The structural asserts walk the owned
-//! `Value` through its introspection accessors.
-//!
-//! What the nine cases pin:
-//!
-//! - `assemble_json_emits_schema_v2` - the document shape `assemble_json`
-//!   produces: `schema_version`, the step/group/plugin skeleton, the per-plugin
-//!   `selected` flag and reason chain, and the `diagnostics` object with its
-//!   `timings_ms`, `repro` and `cache` children.
-//! - `reason_code_names` - the `ReasonCode` to wire-name round trip.
-//! - `confidence_band_thresholds` - the run band: high for a forced exact
-//!   match, below high on the global-fallback path.
-//! - `cache_hit_all_plugins_cache_reason` - the Tier-1 cache path, which puts a
-//!   `FOMOD_PLUS_CACHE` reason on every plugin, selected and deselected alike.
-//! - `propagator_records_forced_required` - the propagator records
-//!   `FORCED_REQUIRED` for a Required plugin.
-//! - `backward_compat_plugin_reader` - the schema-tolerant string-or-object
-//!   plugin-entry reader.
-//! - `repro_component_collapses_on_massive_misses`,
-//!   `repro_component_size_mismatch_gets_half_credit` and
-//!   `repro_component_flat_without_target_count` - the three repro-component
-//!   cases.
-//!
-//! The confidence-formula micro-tests are not here. They need the private
-//! helpers, so they live in the unit-test module of
-//! `mo2_salma_rs::inference_diagnostics`: the boundary tables, the worked
-//! group-composite example, the all-forced short-circuit, the run penalties,
-//! the `reproduced` backfill branches and the `serialize_*` key-order tests.
-//! Put a new formula test there and a new wire-shape test here.
+/*!
+ * @brief verifies the public schema-v2 diagnostics wire format.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * these integration tests cover document shape, stable reason names, confidence bands, cache
+ * reasons, propagation reasons, plugin compatibility entries, and reproduction metrics.
+ */
 
 use mo2_salma_rs::fomod_atom::{
     AtomIndex, ExpandedAtoms, FomodAtom, Origin, TargetFile, TargetTree,
@@ -46,17 +21,10 @@ use mo2_salma_rs::json::Value;
 
 use std::collections::HashSet;
 
-/// Parse an inline `<config>` document into the IR. The empty archive prefix
-/// leaves source paths exactly as the XML spells them, so a test can assert on
-/// the literal strings it wrote.
 fn parse_xml(xml: &str) -> FomodInstaller {
     let doc = load_document(xml).expect("load inline config xml");
     parse(&doc, "")
 }
-
-// ---------------------------------------------------------------------------
-// Schema v2 wire format
-// ---------------------------------------------------------------------------
 
 #[test]
 fn assemble_json_emits_schema_v2() {
@@ -156,10 +124,6 @@ fn assemble_json_emits_schema_v2() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// ReasonCode -> string round trip
-// ---------------------------------------------------------------------------
-
 #[test]
 fn reason_code_names() {
     assert_eq!(
@@ -184,10 +148,6 @@ fn reason_code_names() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Confidence formula band thresholds
-// ---------------------------------------------------------------------------
-
 const BAND_XML: &str = r#"
     <config>
       <installSteps>
@@ -210,7 +170,6 @@ const BAND_XML: &str = r#"
 fn confidence_band_thresholds() {
     let installer = parse_xml(BAND_XML);
 
-    // Forced + exact match -> band high.
     {
         let result = SolverResult {
             selections: vec![vec![vec![true]]],
@@ -225,7 +184,6 @@ fn confidence_band_thresholds() {
         assert_eq!(builder.diagnostics().run.confidence.band, "high");
     }
 
-    // No reason + no exact match + csp.fallback path -> drops below high.
     {
         let result = SolverResult {
             selections: vec![vec![vec![true]]],
@@ -241,10 +199,6 @@ fn confidence_band_thresholds() {
         assert_ne!(builder.diagnostics().run.confidence.band, "high");
     }
 }
-
-// ---------------------------------------------------------------------------
-// Cache-hit path produces FOMOD_PLUS_CACHE on every plugin
-// ---------------------------------------------------------------------------
 
 #[test]
 fn cache_hit_all_plugins_cache_reason() {
@@ -339,10 +293,6 @@ fn cache_hit_all_plugins_cache_reason() {
     ));
 }
 
-// ---------------------------------------------------------------------------
-// Propagator records FORCED_REQUIRED on Required plugins
-// ---------------------------------------------------------------------------
-
 #[test]
 fn propagator_records_forced_required() {
     let xml = r#"
@@ -418,16 +368,6 @@ fn propagator_records_forced_required() {
     assert_eq!(prop.plugin_reasons[0][0][0], ReasonCode::ForcedRequired);
 }
 
-// ---------------------------------------------------------------------------
-// Backward-compat plugin reader (string and object forms)
-// ---------------------------------------------------------------------------
-
-/// Copy of `fomod_service::read_plugin_name`, which accepts either a bare
-/// string or an object with a string `name` and yields an empty string for
-/// anything else.
-///
-/// The original is private to its module, so this test carries its own copy.
-/// Nothing keeps the two in step: change one and change the other.
 fn read_plugin_name_local(entry: &Value) -> String {
     if entry.is_string() {
         return entry.as_str().unwrap().to_string();
@@ -458,10 +398,6 @@ fn backward_compat_plugin_reader() {
     let malformed = Value::Int(42);
     assert_eq!(read_plugin_name_local(&malformed), "");
 }
-
-// ---------------------------------------------------------------------------
-// Repro component reflects tree-compare quality
-// ---------------------------------------------------------------------------
 
 const SINGLE_GROUP_XML: &str = r#"
 <config>
