@@ -10,13 +10,6 @@ interface StepsTabProps {
   detail: FomodDetail
 }
 
-/**
- * A step header: a tracked mono label over the step's groups, not the cap of a
- * card.
- *
- * The label is what marks the start of a step, so the groups below it need no
- * box of their own.
- */
 function StepBand({ label, meta }: { label: string; meta: string }) {
   return (
     <div
@@ -60,10 +53,6 @@ function StepBand({ label, meta }: { label: string; meta: string }) {
   )
 }
 
-/**
- * The plugin-level mark: a flat 4px square, filled in signal when the option was
- * picked and an empty outline when it was not. No dot, no ring, no bloom.
- */
 function Mark({ on }: { on: boolean }) {
   return (
     <span
@@ -79,12 +68,7 @@ function Mark({ on }: { on: boolean }) {
   )
 }
 
-/**
- * One option line at the deepest level of the tree.
- *
- * The mark is decorative, so the picked/not-picked state is spelled out in the
- * title too: weight and colour alone carry nothing to a screen reader.
- */
+// include selection state in the title because the marker is decorative.
 function OptionLine({ name, on }: { name: string; on: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
@@ -106,12 +90,6 @@ function OptionLine({ name, on }: { name: string; on: boolean }) {
   )
 }
 
-/**
- * One resolved group: what salma picked, and how sure it is.
- *
- * A plain band rather than a card - the group label sits over its picked
- * options, and the unpicked alternatives stay reachable but folded away.
- */
 function GroupRow({ group, index }: { group: NormalizedGroup; index: number }) {
   const [open, setOpen] = useState(false)
   const chosen = group.plugins.filter(p => p.selected)
@@ -145,9 +123,7 @@ function GroupRow({ group, index }: { group: NormalizedGroup; index: number }) {
           </span>
         )}
 
-        {/* Gated on hasData, not on a truthy confidence object. A score with
-            no numeric composite renders no pill, and a bare 0 beside it would
-            read as a real zero-percent result. */}
+        {/* do not present missing confidence as a zero score. */}
         {info.hasData && (
           <>
             <ConfidencePill confidence={group.confidence} size="sm" />
@@ -191,9 +167,7 @@ function GroupRow({ group, index }: { group: NormalizedGroup; index: number }) {
               display: 'flex',
               alignItems: 'center',
               gap: 5,
-              // The parent is a block, so alignSelf does nothing here. Without
-              // a width, the button stretches and paints its .btn hover fill
-              // across the whole row.
+              // prevent the block parent from stretching the button.
               width: 'fit-content',
               marginTop: 4,
               marginLeft: -6,
@@ -223,13 +197,6 @@ function GroupRow({ group, index }: { group: NormalizedGroup; index: number }) {
   )
 }
 
-/**
- * The Selections tab: step to group to option, drawn as a tree.
- *
- * Each step is a labelled band with its groups indented under it. It reads
- * through the shared schema-v2 normalization, so it tolerates the plugin and
- * group shapes older cached records still use.
- */
 export default function StepsTab({ detail }: StepsTabProps) {
   const steps = detail.steps ?? []
 

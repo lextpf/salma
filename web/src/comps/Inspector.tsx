@@ -16,17 +16,10 @@ interface InspectorProps {
   detail: FomodDetail | null
   error: string | null
   onRetry: () => void
-  /** Narrow docks degrade the dial to a chip and tighten the column minimum. */
   tight?: boolean
 }
 
-// Two views, because a record answers two questions: what was selected, and how
-// well that reproduced. Resist adding a third.
-//   - a file manifest would repeat the virtual output tree in the column beside
-//     this one, and two lists of the same files read as a duplicate
-//   - a raw JSON view is a debugging surface, not a user one
-//   - conflicts needs MO2 VFS data the backend does not surface, so the tab
-//     would be permanently empty (see features.ts)
+// conflict views require MO2 VFS data that the backend does not expose.
 type TabId = 'steps' | 'diagnostics'
 
 const TAB_ITEMS: { id: TabId; label: string }[] = [
@@ -34,14 +27,9 @@ const TAB_ITEMS: { id: TabId; label: string }[] = [
   { id: 'diagnostics', label: 'Diagnostics' },
 ]
 
-/**
- * Height of the column header row, in CSS pixels, matched by the other two
- * triptych panes (records, tree) so their labels sit on one line across the
- * screen. Change one and you must change RecordsList.tsx and VfsTree.tsx too.
- */
+// keep this CSS-pixel height synchronized with `RecordsList` and `VfsTree`.
 const HEAD_H = 34
 
-/** Tracked uppercase mono, the label voice used for every band in the module. */
 const LABEL_STYLE = {
   fontFamily: 'var(--font-mono)',
   fontSize: 'var(--fs-micro)',
@@ -50,12 +38,6 @@ const LABEL_STYLE = {
   color: 'var(--ink-faint)',
 } as const
 
-/**
- * The inspector's column header row: the same 34px label line the records list
- * and the tree carry, so the tops of the triptych's panes line up. It carries
- * the priority as plain quiet text, because a priority is an index, not a
- * status, and an accent chip would overstate it.
- */
 function HeadBand({ priority }: { priority: string | null }) {
   return (
     <div
@@ -79,12 +61,6 @@ function HeadBand({ priority }: { priority: string | null }) {
   )
 }
 
-/**
- * The inspector column for its three non-record states.
- *
- * Every state renders the header row, so the triptych's panes stay aligned at
- * the top whether a record is selected, loading or failed.
- */
 function InspectorShell({
   children,
   tight,
@@ -111,7 +87,6 @@ function InspectorShell({
   )
 }
 
-/** The no-selection body: a centred placeholder on the bare plane. */
 function PlaceholderBody({ children }: { children: ReactNode }) {
   return (
     <div
@@ -130,22 +105,11 @@ function PlaceholderBody({ children }: { children: ReactNode }) {
   )
 }
 
-// The trailing column of the Library triptych: the record inspector. It owns
-// the active-tab state, which the parent resets by remounting on a record
-// change, and renders the spec band plus the tabbed content. Loading and error
-// for the detail are lifted to the page so the sibling VFS tree shares one
-// fetch; this component only reflects them.
-//
-// The column carries no fill and no rules of its own. It sits on the triptych's
-// single plane and stacks its regions full-bleed (header row, title, spec, tab
-// strip, content), separated by spacing alone. No cards, no nested panels.
 export default function Inspector({ name, priority, entry, detail, error, onRetry, tight = false }: InspectorProps) {
+  // detail state is lifted so the sibling tree shares the request.
   const [tab, setTab] = useState<TabId>('steps')
 
   if (!name) {
-    // A labelled placeholder rather than blank space, painting nothing of its
-    // own. The metadata is static because there is no record to describe yet:
-    // it says what this pane is and where its data comes from.
     return (
       <InspectorShell tight={tight} priority={null}>
         <PlaceholderBody>
@@ -183,8 +147,6 @@ export default function Inspector({ name, priority, entry, detail, error, onRetr
   }
 
   if (error) {
-    // A full-bleed band under the header rather than a centred alert card: the
-    // failure is the state of this column, not an object floating in it.
     return (
       <InspectorShell tight={tight} priority={priority}>
         <div className="scroll-pane" style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
@@ -236,9 +198,6 @@ export default function Inspector({ name, priority, entry, detail, error, onRetr
   }
 
   if (!detail) {
-    // Top-aligned and padded like the loaded layout, so the skeleton stands in
-    // the place the title band and content will occupy rather than floating in
-    // the middle of the column.
     return (
       <InspectorShell tight={tight} priority={priority}>
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: '16px 22px 24px' }}>
@@ -258,11 +217,6 @@ export default function Inspector({ name, priority, entry, detail, error, onRetr
   const stamp = detail.updated ?? detail.modified ?? entry?.modified
   const inferredText = formatInferred(stamp)
 
-  // Everything on this line comes from the record itself. The prototype also
-  // shows a mod version and an overwrite count; neither exists anywhere in the
-  // schema (an overwrite is an MO2 VFS conflict, which is the same data gap
-  // that removed the Conflicts tab - see the TabId note above), so they are
-  // omitted rather than invented.
   const tree = detail.outputTree ?? []
   const fileCount = detail.outputTreeTotal ?? tree.length
   const installedBytes = tree.reduce((sum, f) => sum + (f.size ?? 0), 0)
@@ -289,10 +243,8 @@ export default function Inspector({ name, priority, entry, detail, error, onRetr
       }}
     >
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        {/* Band 1: the column header, matching the other panes. */}
         <HeadBand priority={priority} />
 
-        {/* Band 2: identity. */}
         <div
           style={{
             flexShrink: 0,
@@ -339,10 +291,8 @@ export default function Inspector({ name, priority, entry, detail, error, onRetr
           </div>
         </div>
 
-        {/* Band 3: the spec, as a band inside this column rather than a pane. */}
         <SpecBand diagnostics={detail.diagnostics} />
 
-        {/* Band 4: the content switch. */}
         <div
           style={{
             display: 'flex',
