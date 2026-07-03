@@ -10,19 +10,7 @@ interface BarRowProps {
   hint: string
 }
 
-/**
- * One component score as a bar. `value` is in [0, 1]; it is shown as a
- * percentage, so 0.9 renders as a 90% fill labelled "90%".
- *
- * The colour uses the tier thresholds from confidence.ts (0.85 `HIGH`, 0.6
- * `PARTIAL`, below that `LOW`) and adds a fourth band, --tier-exact at 0.98 and
- * above, that those thresholds do not have. `tierFor` reaches `EXACT` only
- * through the backend's exact_match flag, never through a score, so a component
- * at 0.99 wears the exact colour next to a pill reading `HIGH`. That marks one
- * near-perfect axis; it does not claim the run was exact.
- *
- * The track is a flat fill with no inner lip: two solid tones and nothing else.
- */
+// component scores use exact color at 0.98 without claiming an exact run.
 function BarRow({ label, value, hint }: BarRowProps) {
   const pct = Math.round(value * 100)
   const fill =
@@ -81,17 +69,8 @@ function BarRow({ label, value, hint }: BarRowProps) {
   )
 }
 
-/**
- * The four confidence axes as bars, in the order the engine weights them.
- *
- * The hints are the only place a user learns what a bar measures, so each one
- * states what the engine computes. Two of the four are graded lookups, not
- * fractions; wording them as ratios invites a reader to reconcile a 60% bar
- * with a file count that cannot produce it. Keep them in step with
- * evidence_component, propagation_component and ambiguity_component in
- * src/inference_diagnostics.rs.
- */
 export default function ConfidenceBreakdown({ components }: ConfidenceBreakdownProps) {
+  // keep hints synchronized with `inference_diagnostics.rs` calculations.
   return (
     <div className="flex flex-col" style={{ gap: 6, width: '100%' }}>
       <BarRow
