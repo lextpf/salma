@@ -1,11 +1,11 @@
 import type { InstallationJob } from '../types'
 
 /**
- * The destination mod folder, as a leaf rather than a full path.
+ * @fn modLeaf(job: InstallationJob): string | null
+ * @brief select a compact destination name for job rows.
+ * @author Alex (https://github.com/lextpf)
  *
- * `modName` arrives on the upload response, so it is known while the install is
- * still running. `modPath` lands only on completion and is absolute, so it is
- * reduced to its last segment; the full path overflows the meta line.
+ * prefer the upload-time name. completed jobs can use the last path segment.
  */
 export function modLeaf(job: InstallationJob): string | null {
   if (job.modName) return job.modName
