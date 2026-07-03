@@ -16,22 +16,7 @@ interface FacetChipProps {
   onClick: () => void
 }
 
-/**
- * One subsystem chip: its tag, a proportional mini-bar, and its count.
- *
- * The mini-bar turns a run of numbers into a distribution readable without
- * arithmetic. It works in a row as well as in a column because each bar is read
- * against its own label, not against its neighbours.
- *
- * Selection uses the app's flat treatment (a 2px square leading edge, a flat
- * wash, ink stepped up, the count in signal) rather than the underline a tab
- * would take. These are filters, not tabs, so they must not borrow the
- * vocabulary of a control where exactly one option is always active.
- *
- * An unselected chip sets no background at all rather than an explicit
- * transparent: an inline declaration outranks any stylesheet rule, so writing
- * the resting fill here would silently kill the .fm-row:hover wash.
- */
+// omit an inline background so stylesheet hover state remains effective.
 function FacetChip({ label, count, share, on, onClick }: FacetChipProps) {
   return (
     <button
@@ -95,20 +80,8 @@ function FacetChip({ label, count, share, on, onClick }: FacetChipProps) {
   )
 }
 
-/**
- * The subsystem distribution, doubling as a filter. "All" clears the filter;
- * any other chip toggles it.
- *
- * A row across the top, not a left rail. A log line is one long unbroken string
- * and the stream is the point of the module, so a rail would take 176px plus a
- * gutter from the only column that needs it in order to show two or three
- * chips. Horizontally the same facets cost one 32px band.
- *
- * Mini-bars normalise against the largest single subsystem, not the grand
- * total. The total is the sum of them all, so normalising against it squashes
- * every bar to a sliver.
- */
 export default function SubsystemFacets({ facets, active, total, onToggle, onClear }: SubsystemFacetsProps) {
+  // normalize mini-bars against the largest subsystem, not the total.
   const facetMax = Math.max(1, ...facets.map(f => f.count))
 
   return (

@@ -2,19 +2,14 @@ import type { HistogramBucket } from '../logParse'
 
 interface VolumeHistogramProps {
   buckets: HistogramBucket[]
-  // Reflects the live/paused tail state; drives the blinking LED.
   live: boolean
   onToggleLive?: () => void
   errors?: number
   warnings?: number
   passes?: number
-  // Swaps the third tally: true (test.log) reports the runner's pass count,
-  // false reports the derived "ok" remainder (total minus errors and warnings).
   showPasses?: boolean
 }
 
-// The value takes the severity colour as well as the dot. Reading the number is
-// the point, and a grey 17 next to a brass dot loses that.
 function StatDot({ color, value, label }: { color: string; value: number; label: string }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
@@ -39,16 +34,6 @@ function StatDot({ color, value, label }: { color: string; value: number; label:
   )
 }
 
-/**
- * The volume strip: the screen's hero numeral, severity tallies, the tail
- * toggle, and the activity histogram.
- *
- * The gridlines and the baseline are what make this readable as an instrument:
- * with no reference, bar heights carry no information. A bucket escalates to
- * brass on a 'WARN' and to danger on an 'ERROR', so a spike of trouble shows
- * before a single line is read. Every bar is a flat fill; height and colour
- * carry the reading and nothing is lit.
- */
 export default function VolumeHistogram({
   buckets,
   live,
@@ -122,8 +107,6 @@ export default function VolumeHistogram({
 
         <span style={{ flex: 1 }} />
 
-        {/* Scale readout: the gridlines are proportional, so the peak column is
-            the only number that turns a bar height back into a record count. */}
         <span
           className="tabular-nums"
           style={{
@@ -138,9 +121,6 @@ export default function VolumeHistogram({
           {buckets.length} cols &middot; peak {maxCount.toLocaleString()}
         </span>
 
-        {/* A control, so it wears the same ghost skin as Button: a --btn-bg
-            fill inside a --rule-ctrl edge, and the .btn class that index.css
-            hangs the hover and active states off. */}
         <button
           type="button"
           className="btn"

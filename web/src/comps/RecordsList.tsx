@@ -11,38 +11,24 @@ interface RecordsListProps {
   onSelect: (name: string) => void
   loading: boolean
   totalCount: number
-  /** Narrow docks tighten the column's minimum so the inspector still fits. */
   tight?: boolean
-  /** Picked a record: the chooser folds to a spine so the record gets the width. */
   collapsed?: boolean
-  /** Unfold the chooser to pick a different record. */
   onExpand?: () => void
 }
 
 const GRID = '34px minmax(0, 1fr) 78px'
 
-/**
- * Height of the column header row, in CSS pixels, matched by the other two
- * triptych panes (tree, inspector) so their labels sit on one line across the
- * screen. Change one and you must change VfsTree.tsx and Inspector.tsx with it.
- */
+// keep this CSS-pixel height synchronized with `VfsTree` and `Inspector`.
 const HEAD_H = 34
 
-/**
- * Every row reserves the 2px selection edge, selected or not, so selecting a
- * row cannot shift the grid sideways by two pixels.
- */
+// reserve the selection edge so state changes do not shift row content.
 const EDGE = '2px solid'
 
 type Row =
   | { kind: 'sep'; key: string; label: string; count: number }
   | { kind: 'rec'; key: string; entry: FomodEntry; pri: number }
 
-// Band order, strongest first. MO2 groups its mod list with user separators;
-// salma has no separator data, so it bands by the one thing it knows about
-// every record, which is how well the inference reproduced it. That collects
-// "these need a look" at the bottom instead of scattering them through
-// directory order.
+// group strongest confidence first and sort names within each band.
 const BANDS: { tier: Tier | 'NONE'; label: string }[] = [
   { tier: 'EXACT', label: 'Exact' },
   { tier: 'HIGH', label: 'High confidence' },
@@ -51,7 +37,6 @@ const BANDS: { tier: Tier | 'NONE'; label: string }[] = [
   { tier: 'NONE', label: 'Not scored' },
 ]
 
-/** Group into confidence bands, then alphabetically inside each band. */
 function buildRows(fomods: FomodEntry[]): Row[] {
   const buckets = new Map<string, FomodEntry[]>()
   for (const e of fomods) {
@@ -62,8 +47,7 @@ function buildRows(fomods: FomodEntry[]): Row[] {
     else buckets.set(key, [e])
   }
 
-  // With nothing scored there is only one band, and a lone band header is
-  // noise - fall back to a flat list.
+  // omit the only band header when no record has confidence data.
   const populated = BANDS.filter(b => (buckets.get(b.tier)?.length ?? 0) > 0)
   const flat = populated.length < 2
 
@@ -82,12 +66,6 @@ function buildRows(fomods: FomodEntry[]): Row[] {
   return rows
 }
 
-/**
- * A 24px band, the shape MO2 gives its user separators.
- *
- * A single --sep-bg fill with no depth of its own. It carries its member count,
- * so the grouping is quantified rather than only drawn.
- */
 function SeparatorRow({ label, count }: { label: string; count: number }) {
   return (
     <div
@@ -122,20 +100,6 @@ function SeparatorRow({ label, count }: { label: string; count: number }) {
   )
 }
 
-/**
- * The leading column of the Library triptych: the record list, banded by
- * confidence. It comes first because it is the entry point, and folds to a
- * spine once a record has been chosen.
- *
- * Rows are windowed. Separator bands are 24px against 34px mod rows, so the
- * scroll arithmetic runs off a per-row height array rather than one constant; a
- * single fixed height makes every spacer wrong and the list drifts as it
- * scrolls.
- *
- * The selected row wears the app's one selection treatment: a flat --sel-bg
- * wash, a square 2px --sel-edge on the leading side, ink stepped to --ink and
- * the priority numeral stepped to --signal. No bar, no glow, no gradient.
- */
 export default function RecordsList({
   fomods,
   selectedName,
@@ -147,6 +111,7 @@ export default function RecordsList({
   onExpand,
 }: RecordsListProps) {
   const rows = useMemo(() => buildRows(fomods), [fomods])
+  // separator and record rows require separate virtual heights.
   const heights = useMemo(
     () => rows.map(r => (r.kind === 'sep' ? ROW_SEP : ROW_RECORD)),
     [rows],
@@ -158,11 +123,6 @@ export default function RecordsList({
   const startIdx = getStartIdx(total)
   const endIdx = getEndIdx(total)
 
-  // Folded: a 34px spine carrying the same header row the other panes wear,
-  // turned on its side. Choosing a record is something you do once, so the list
-  // earns its 340px only until a record is picked; after that the width belongs
-  // to the tree and the record. The spine stays because a chooser you cannot
-  // see is a chooser you cannot get back to.
   if (collapsed) {
     return (
       <button
@@ -175,9 +135,6 @@ export default function RecordsList({
           flex: '0 0 34px',
           width: 34,
           minWidth: 34,
-          // `border: none`, not the column hairline the expanded list carries.
-          // With no other rule in the triptych, a single vertical line here
-          // reads as something forgotten rather than something meant.
           border: 'none',
           background: 'transparent',
           display: 'flex',
@@ -379,8 +336,6 @@ export default function RecordsList({
                 >
                   {entry.name}
                 </span>
-                {/* `lit` is not a glow. It steps the meter's unfilled bars up
-                    to --tick so they survive the --sel-bg wash behind them. */}
                 <SignalMeter confidence={entry.confidence} exactMatch={entry.exactMatch} lit={selected} />
               </div>
             )
