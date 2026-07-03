@@ -18,14 +18,6 @@ interface ConfigSheetProps {
   saveMessage: { type: 'success' | 'error'; text: string } | null
 }
 
-/**
- * A section break in the settings table.
- *
- * A tracked label on the page plane, not a card header: the sheet is one
- * continuous table rather than a stack of boxes. The note on the right says
- * where the section's values actually live, which is the question every one of
- * these rows is really answering.
- */
 function SectionBand({ title, note }: { title: string; note: string }) {
   return (
     <div
@@ -34,10 +26,6 @@ function SectionBand({ title, note }: { title: string; note: string }) {
         alignItems: 'center',
         gap: 10,
         height: 26,
-        // A section label has to belong to what follows it more than to what
-        // precedes it. With no rule closing the previous section, only an
-        // asymmetric gap can say that: wide above, none below. Do not even it
-        // out.
         marginTop: 26,
         padding: '0 14px',
       }}
@@ -62,8 +50,6 @@ function SectionBand({ title, note }: { title: string; note: string }) {
           fontSize: 'var(--fs-micro)',
           textTransform: 'uppercase',
           letterSpacing: 'var(--tr-chip)',
-          // --ink-5, not --ink-6: the note carries a real value, and it holds
-          // the same level as the section title beside it.
           color: 'var(--ink-5)',
           whiteSpace: 'nowrap',
         }}
@@ -74,7 +60,6 @@ function SectionBand({ title, note }: { title: string; note: string }) {
   )
 }
 
-/** One table row: a label column and a control column. */
 function Row({
   label,
   description,
@@ -106,7 +91,6 @@ function Row({
   )
 }
 
-/** Flat input: fill plus a visible control border. Focus is the global outline. */
 function TextField({
   value,
   onChange,
@@ -145,7 +129,6 @@ function TextField({
   )
 }
 
-/** Chooser: the same flat geometry as the input, with the .btn hover states. */
 function Select<T extends string>({
   value,
   options,
@@ -157,11 +140,7 @@ function Select<T extends string>({
   onChange: (v: T) => void
   ariaLabel: string
 }) {
-  // The real control is a transparent <select> laid over the chrome, and an
-  // outline on a zero-opacity element paints nothing - so the global
-  // :focus-visible ring never reached the user. Mirror it onto the visible
-  // chrome, deferring to the browser's own :focus-visible decision so the ring
-  // shows up exactly where it would on a native control.
+  // mirror native focus onto the visible chrome over the transparent select.
   const [ring, setRing] = useState(false)
   return (
     <span
@@ -187,8 +166,6 @@ function Select<T extends string>({
     >
       {options.find(o => o.value === value)?.label ?? value}
       <MIcon name="expand_more" size={15} style={{ color: 'var(--ink-4)' }} />
-      {/* A real <select> laid over the chrome, transparent: native keyboard
-          handling and the platform picker, our styling. */}
       <select
         value={value}
         onChange={e => { onChange(e.target.value as T); }}
@@ -215,7 +192,6 @@ function Select<T extends string>({
   )
 }
 
-/** 40x22 switch. Two flat fills and a flat knob: no inner lip, no bloom. */
 function Toggle({ on, onChange, ariaLabel }: { on: boolean; onChange: (v: boolean) => void; ariaLabel: string }) {
   return (
     <button
@@ -253,7 +229,6 @@ function Toggle({ on, onChange, ariaLabel }: { on: boolean; onChange: (v: boolea
   )
 }
 
-/** Derived values are flat text, never a disabled input pretending to be one. */
 function ReadOnly({ value, title }: { value: string; title?: string }) {
   return (
     <span
@@ -279,32 +254,6 @@ const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'light', label: 'Light' },
 ]
 
-/**
- * The settings sheet.
- *
- * One continuous table: section bands break it into groups and every setting is
- * a label and control row, so the screen reads as an instrument panel rather
- * than a stack of cards.
- *
- * Only rows backed by something real appear. The server persists exactly one
- * key, mo2ModsPath; the FOMOD output directory and the path-validity flag are
- * derived server-side, and the bind address comes from SALMA_BIND_ADDR in the
- * server's environment. Rows for solver strategy, log level and the like are
- * absent on purpose rather than rendered as controls that do nothing. The
- * Appearance and Test-harness groups are browser-local and label themselves so.
- *
- * The table closes on an environment readout whose lines look alike but are
- * three different kinds of value:
- *   - instance, mods root, path check and fomod output come from the saved
- *     server config, so they answer the editable rows above rather than echo
- *     them.
- *   - theme mode, tail logs and test args are browser-local preferences.
- *   - config file, persisted key, bind address and log file are literals
- *     written into this component. They state the default, not the resolved
- *     value. The bind address stays "127.0.0.1:5000" even once
- *     SALMA_BIND_ADDR has moved the real one, because /api/config does not
- *     carry it. Add it to AppConfig before treating that row as trustworthy.
- */
 export default function ConfigSheet({
   config,
   modsPath,
@@ -316,10 +265,10 @@ export default function ConfigSheet({
   valid,
   saveMessage,
 }: ConfigSheetProps) {
+  // only `mo2ModsPath` persists on the server. other settings are browser-local.
   const { mode, setMode, theme } = useTheme()
 
-  // An empty field is "not set yet", not "invalid": flagging a fresh install in
-  // danger red reads as a fault when nothing has gone wrong.
+  // an empty path means not configured, not invalid.
   const pathState = modsPath.trim().length === 0
     ? { icon: 'remove', tone: 'var(--ink-5)', text: 'not set' }
     : !valid
@@ -328,7 +277,7 @@ export default function ConfigSheet({
         ? { icon: 'check_circle', tone: 'var(--moss)', text: 'exists' }
         : { icon: 'warning', tone: 'var(--brass)', text: 'not found' }
 
-  // The environment readout reports the saved path, not the edit buffer above.
+  // report the saved path, not the edit buffer.
   const resolvedState = config.mo2ModsPath.trim().length === 0
     ? { text: 'not set', tone: 'var(--ink-5)' }
     : config.mo2ModsPathValid
@@ -342,8 +291,7 @@ export default function ConfigSheet({
     { k: 'fomod output', v: config.fomodOutputDir || 'not derived yet' },
     { k: 'config file', v: 'salma.json' },
     { k: 'persisted key', v: 'mo2ModsPath' },
-    // The compile-time default, not the resolved address: SALMA_BIND_ADDR can
-    // move it and /api/config does not report where it landed.
+    // the API does not expose the resolved `SALMA_BIND_ADDR` value.
     { k: 'bind address', v: '127.0.0.1:5000' },
     { k: 'log file', v: 'logs/salma.log' },
     { k: 'theme mode', v: mode === 'system' ? `system (${theme})` : mode },
@@ -421,8 +369,6 @@ export default function ConfigSheet({
       />
 
       <SectionBand title="Server and diagnostics" note="read-only" />
-      {/* The value shown is the default. It does not follow SALMA_BIND_ADDR,
-          so it is wrong for exactly the user who acted on this description. */}
       <Row
         label="Listen address"
         description="mo2-server binds loopback only by default. Change it with the SALMA_BIND_ADDR environment variable; non-loopback values log a security warning. This row shows the default, not the address in use."

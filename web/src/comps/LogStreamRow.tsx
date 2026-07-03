@@ -7,18 +7,10 @@ interface LevelStyle {
   fg: string
   bg: string
   bd: string
-  /** Base colour for the message text on this severity. */
   msg: string
   label: string
 }
 
-// Levels are chips rather than coloured words: a fixed-width block in a fixed
-// column scans down the page in a way coloured text does not. The message tone
-// carries the same severity one step quieter.
-//
-// The chip is a wash and nothing else. An outline here would draw a box on
-// every visible row, thirty down a full screen of log, to mark a boundary the
-// wash already marks.
 function levelStyle(level: LogLevel): LevelStyle {
   switch (level) {
     case 'WARN':
@@ -46,16 +38,8 @@ function renderParts(parts: HighlightSegment[]) {
   )
 }
 
-/**
- * Fixed-height mono row matching the virtual-scroll line height: timestamp,
- * level chip, subsystem, highlighted message.
- *
- * A 'WARN' or 'ERROR' row also gets a flat 2px left severity edge and a flat
- * wash, applied from CSS through the data-level attribute so hover composes
- * with them. The inset severity bar is the only box-shadow on the row, and it
- * is a drawn edge rather than a lift.
- */
 export default memo(function LogStreamRow({ record }: { record: LogRecord }) {
+  // row height must match `ROW_LOG` in `useVirtualScroll.ts`.
   const lvl = levelStyle(record.level)
   const subsystem = record.subsystem || 'general'
   return (
@@ -65,9 +49,6 @@ export default memo(function LogStreamRow({ record }: { record: LogRecord }) {
       style={{
         display: 'flex',
         alignItems: 'center',
-        // Tight on purpose. The four leading columns are fixed and read as
-        // columns, so the space between them is separation, not rhythm. What it
-        // saves goes to the message, the only part that can run out of room.
         gap: 9,
         height: ROW_LOG,
         padding: '0 18px 0 16px',
@@ -77,8 +58,6 @@ export default memo(function LogStreamRow({ record }: { record: LogRecord }) {
         minWidth: 0,
       }}
     >
-      {/* A timestamp is data, not a mark: it sits on a text-grade ink level
-          rather than the meta level the stylesheet defaults it to. */}
       <span className="log-stream-time" style={{ color: 'var(--ink-5)' }}>
         {record.ts ?? ''}
       </span>
