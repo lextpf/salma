@@ -9,9 +9,12 @@ interface KvEntry {
   k: string
   v: string
   color?: string
-  /** Share of this block's whole, 0..1. Drawn as a bar under the row. */
+  /**
+   * @brief normalized bar share.
+   *
+   * values are in [0, 1].
+   */
   share?: number
-  /** Bar colour when `share` is set. */
   bar?: string
 }
 
@@ -23,14 +26,6 @@ const LABEL: React.CSSProperties = {
   color: 'var(--ink-5)',
 }
 
-/**
- * One k/v row, optionally over a proportion bar.
- *
- * The bar is the reason this tab is worth opening: "propagation 1, csp 3" are
- * two numbers you have to divide in your head, and a bar is the division
- * already done. It is drawn only where a share was supplied, so rows that are
- * counts rather than parts of a whole stay plain.
- */
 function KvRow({ entry }: { entry: KvEntry }) {
   return (
     <div style={{ padding: '4px 0' }}>
@@ -63,8 +58,6 @@ function KvRow({ entry }: { entry: KvEntry }) {
   )
 }
 
-// A tally block: a tracked mono label over its rows. No border and no radius;
-// the label alone carries the grouping.
 function KvBlock({ title, entries }: { title: string; entries: KvEntry[] }) {
   return (
     <div style={{ minWidth: 0 }}>
@@ -76,7 +69,6 @@ function KvBlock({ title, entries }: { title: string; entries: KvEntry[] }) {
   )
 }
 
-/** Section label with the flat 4px signal square the module uses everywhere. */
 function SectionBand({ label, note }: { label: string; note?: string }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px' }}>
@@ -94,14 +86,6 @@ function SectionBand({ label, note }: { label: string; note?: string }) {
   )
 }
 
-/**
- * The full inference breakdown, and the only place that detail appears; the
- * record header carries just a one-line summary.
- *
- * Every figure is read off the diagnostics block. The two derived ones, the
- * reproduction rate and the unaccounted slice of the timing total, are
- * arithmetic on numbers the engine supplied, not estimates.
- */
 export default function DiagnosticsTab({ diagnostics }: DiagnosticsTabProps) {
   if (!diagnostics) {
     return (
@@ -113,9 +97,7 @@ export default function DiagnosticsTab({ diagnostics }: DiagnosticsTabProps) {
 
   const { repro, groups, timings_ms: timings, confidence } = diagnostics
 
-  // Every file the run accounted for, sound or not, and the only honest
-  // denominator for the rate: against `reproduced` alone, a run that also
-  // produced twenty extra files would still read 100%.
+  // include all compared files in the reproduction-rate denominator.
   const accounted =
     repro.reproduced + repro.missing + repro.extra + repro.size_mismatch + repro.hash_mismatch
   const rate = accounted > 0 ? repro.reproduced / accounted : 0
@@ -150,10 +132,7 @@ export default function DiagnosticsTab({ diagnostics }: DiagnosticsTabProps) {
     },
   ]
 
-  // The three measured stages rarely sum to the total, and the remainder is real
-  // work (parse, expand, assemble) that carries no timer of its own. Printing it
-  // as "other" is honest; leaving it out would imply the stages account for
-  // everything.
+  // report time outside measured stages as `other`.
   const measured = timings.list + timings.scan + timings.solve
   const other = Math.max(0, timings.total - measured)
   const denom = Math.max(1, timings.total)
@@ -201,11 +180,7 @@ export default function DiagnosticsTab({ diagnostics }: DiagnosticsTabProps) {
         <KvBlock title="Run" entries={runEntries} />
       </div>
 
-      {/* Known defect. `composite` is in the range [0, 1] (see ConfidenceScore
-          in types.ts), so rounding it without scaling prints "0 composite" or
-          "1 composite" on every record, while the bars just below scale
-          correctly and disagree with it on screen. The fix is `* 100` and a
-          '%' suffix, matching ConfidenceBreakdown's BarRow. */}
+      {/* TODO: scale composite to a percentage before display. */}
       <SectionBand label="Confidence components" note={`${Math.round(confidence.composite)} composite`} />
 
       <div style={{ padding: '8px 10px 16px' }}>
