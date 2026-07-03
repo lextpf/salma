@@ -22,30 +22,26 @@
 #     ----------------------------------------------------------------------
 # 
 #       Repository:   https://github.com/lextpf/salma
-#       License:      MIT
+#       License:      GPL
 # 
 
 [package]
 name = "mo2_salma_rs"
-# Crate metadata only. The shipped version is MO2_SALMA_API_VERSION in src/capi.rs:
-# getApiVersion reports it and cpack names the release zip from it.
+# the ABI constant in src/capi.rs owns the shipped version and package name.
 version = "0.1.0"
 edition = "2024"
-# Floor is the first stable toolchain that supports edition 2024.
+# Rust 1.85 is the first stable toolchain for edition 2024.
 rust-version = "1.85"
-description = "Salma MO2 FOMOD engine, exposing a flat C ABI to mo2-server and the MO2 plugin."
+description = "salma MO2 FOMOD engine with a C ABI for the server and plugin."
 publish = false
 
 [lib]
 name = "mo2_salma_rs"
-# cdylib -> target/release/mo2_salma_rs.dll, which scripts/package.py stages as
-#           mo2-salma.dll, the name the MO2 plugin and mo2-server both load.
-# rlib   -> lets `cargo test` link the boundary helpers as a normal library.
+# `cdylib` ships the engine. `rlib` lets tests link it.
 crate-type = ["cdylib", "rlib"]
 
 [target.'cfg(windows)'.dependencies]
-# Minimal Win32 surface: Foundation + LibraryLoader for utils::module_directory /
-# executable_directory, SystemInformation for the logger's GetLocalTime timestamps.
+# module paths and local timestamps use these Win32 APIs.
 windows-sys = { version = "0.60", features = [
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
@@ -55,7 +51,7 @@ windows-sys = { version = "0.60", features = [
 [dependencies]
 roxmltree = "0.21"
 serde_json = "1.0"
-# Archive backends. Pure-Rust zip + 7z; unrar links the proprietary unRAR C sources.
+# unrar compiles the proprietary unRAR sources.
 zip = "8.6.0"
 sevenz-rust2 = "0.21.3"
 unrar = "0.5.8"
