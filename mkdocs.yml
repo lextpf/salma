@@ -9,7 +9,7 @@ site_author: lextpf
 
 theme:
   name: material
-  custom_dir: overrides
+  custom_dir: docs
   palette:
     - scheme: slate
       primary: deep purple
