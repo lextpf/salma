@@ -111,28 +111,109 @@ static std::string read_installation_file(const fs::path& meta_ini_path)
 // the shared helper.
 
 /// SAX callback that counts the number of objects in the top-level "steps"
-/// array of a FOMOD JSON file without fully parsing the document.
+/// array of a FOMOD JSON file and, in the same pass, captures the overall
+/// inference confidence (diagnostics.confidence.composite + band) and the
+/// diagnostics.exact_match flag, all without fully parsing the document.
+/// Because "diagnostics" is the alphabetically-first top-level key and
+/// "steps" is the last, this captures the confidence en route to the step
+/// count at no extra structural cost.
 struct StepCounter : nlohmann::json_sax<json>
 {
     int depth = 0;
     bool in_steps = false;
     int steps_depth = 0;
     int& count;
-    explicit StepCounter(int& c)
-        : count(c)
+
+    // Confidence capture: diagnostics.confidence.composite / band and
+    // diagnostics.exact_match. Each output has a paired present-flag so the
+    // caller emits nothing for JSONs predating the diagnostics schema.
+    double& confidence;
+    std::string& band;
+    bool& exact_match;
+    bool& has_confidence;
+    bool& has_band;
+    bool& has_exact;
+
+    bool arm_diag = false;  // the next object opened is the diagnostics value
+    bool in_diag = false;
+    int diag_depth = 0;
+    bool arm_conf = false;  // the next object opened is the confidence value
+    bool in_conf = false;
+    int conf_depth = 0;
+
+    enum class Pending : std::uint8_t
+    {
+        None,
+        Composite,
+        Band,
+        ExactMatch
+    };
+    Pending pending = Pending::None;
+
+    StepCounter(int& c,
+                double& conf,
+                std::string& bnd,
+                bool& exact,
+                bool& has_conf,
+                bool& has_bnd,
+                bool& has_exc)
+        : count(c),
+          confidence(conf),
+          band(bnd),
+          exact_match(exact),
+          has_confidence(has_conf),
+          has_band(has_bnd),
+          has_exact(has_exc)
     {
     }
 
     bool key(string_t& key) override
     {
-        if (depth == 1 && key == "steps")
-            in_steps = true;
+        if (depth == 1)
+        {
+            if (key == "steps")
+            {
+                in_steps = true;
+            }
+            else if (key == "diagnostics")
+            {
+                arm_diag = true;
+            }
+        }
+        else if (in_diag && depth == diag_depth)
+        {
+            if (key == "confidence")
+            {
+                arm_conf = true;
+            }
+            else if (key == "exact_match")
+            {
+                pending = Pending::ExactMatch;
+            }
+        }
+        else if (in_conf && depth == conf_depth)
+        {
+            if (key == "composite")
+            {
+                pending = Pending::Composite;
+            }
+            else if (key == "band")
+            {
+                pending = Pending::Band;
+            }
+        }
         return true;
     }
     bool start_array(std::size_t) override
     {
         if (in_steps && !steps_depth)
+        {
             steps_depth = depth + 1;
+        }
+        // diagnostics / confidence are objects, never arrays; drop any pending
+        // arm so a stray array value cannot be mistaken for them.
+        arm_diag = false;
+        arm_conf = false;
         depth++;
         return true;
     }
@@ -141,7 +222,7 @@ struct StepCounter : nlohmann::json_sax<json>
         depth--;
         if (steps_depth && depth < steps_depth)
         {
-            // Finished the steps array -- no need to parse further.
+            // Finished the steps array - no need to parse further.
             // Reset state so a second array at the same depth won't
             // be mistaken for the steps array.
             in_steps = false;
@@ -153,26 +234,89 @@ struct StepCounter : nlohmann::json_sax<json>
     bool start_object(std::size_t) override
     {
         if (steps_depth && depth == steps_depth)
+        {
             count++;
+        }
+        if (arm_diag)
+        {
+            in_diag = true;
+            diag_depth = depth + 1;
+            arm_diag = false;
+        }
+        else if (arm_conf && in_diag)
+        {
+            in_conf = true;
+            conf_depth = depth + 1;
+            arm_conf = false;
+        }
         depth++;
         return true;
     }
     bool end_object() override
     {
         depth--;
+        if (in_conf && depth < conf_depth)
+        {
+            in_conf = false;
+        }
+        if (in_diag && depth < diag_depth)
+        {
+            in_diag = false;
+        }
         return true;
     }
-    // Required overrides that just continue parsing:
+    // Required overrides that capture pending values, else continue parsing:
     bool null() override { return true; }
-    bool boolean(bool) override { return true; }
-    bool number_integer(number_integer_t) override { return true; }
-    bool number_unsigned(number_unsigned_t) override { return true; }
-    bool number_float(number_float_t, const string_t&) override { return true; }
-    bool string(string_t&) override { return true; }
+    bool boolean(bool val) override
+    {
+        if (pending == Pending::ExactMatch)
+        {
+            exact_match = val;
+            has_exact = true;
+            pending = Pending::None;
+        }
+        return true;
+    }
+    bool number_integer(number_integer_t val) override
+    {
+        capture_number(static_cast<double>(val));
+        return true;
+    }
+    bool number_unsigned(number_unsigned_t val) override
+    {
+        capture_number(static_cast<double>(val));
+        return true;
+    }
+    bool number_float(number_float_t val, const string_t&) override
+    {
+        capture_number(val);
+        return true;
+    }
+    bool string(string_t& val) override
+    {
+        if (pending == Pending::Band)
+        {
+            band = val;
+            has_band = true;
+            pending = Pending::None;
+        }
+        return true;
+    }
     bool binary(binary_t&) override { return true; }
     bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override
     {
         return false;
+    }
+
+private:
+    void capture_number(double val)
+    {
+        if (pending == Pending::Composite)
+        {
+            confidence = val;
+            has_confidence = true;
+            pending = Pending::None;
+        }
     }
 };
 
@@ -569,11 +713,18 @@ crow::response Mo2Controller::list_fomods()
         // array and aborts parsing once the array ends, so the cost is proportional to
         // the number of steps, not the total file size.
         int step_count = 0;
+        double confidence = 0.0;
+        std::string band;
+        bool exact_match = false;
+        bool has_confidence = false;
+        bool has_band = false;
+        bool has_exact = false;
         bool parse_ok = true;
         try
         {
             std::ifstream ifs(entry.path());
-            StepCounter counter(step_count);
+            StepCounter counter(
+                step_count, confidence, band, exact_match, has_confidence, has_band, has_exact);
             json::sax_parse(ifs, &counter, json::input_format_t::json, false);
         }
         catch (const std::exception& ex)
@@ -593,6 +744,18 @@ crow::response Mo2Controller::list_fomods()
 
         json item = {
             {"name", name}, {"size", size}, {"modified", epoch}, {"stepCount", step_count}};
+        if (has_confidence)
+        {
+            item["confidence"] = confidence;
+        }
+        if (has_band)
+        {
+            item["confidenceBand"] = band;
+        }
+        if (has_exact)
+        {
+            item["exactMatch"] = exact_match;
+        }
         if (!parse_ok)
         {
             item["parseError"] = true;
