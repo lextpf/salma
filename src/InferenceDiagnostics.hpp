@@ -349,6 +349,18 @@ public:
     void set_cache_hit(std::string source);
 
     /**
+     * @brief Record the target tree's file count for repro scoring.
+     *
+     * When set (> 0), `finalize` scales the repro component of selected
+     * plugins by the fraction of target files actually reproduced
+     * (misses count fully, size/hash mismatches count half), and derives
+     * `repro.reproduced` from the target count instead of the
+     * selected-file-count proxy. When never called, the legacy flat
+     * non-exact score (0.85) is preserved.
+     */
+    void set_target_file_count(int count);
+
+    /**
      * @brief Absorb propagation results into per-plugin and per-group reasons.
      *
      * Reads `PropagationResult.plugin_reasons`, `plugin_reason_details`, and
@@ -390,6 +402,7 @@ public:
 private:
     InferenceDiagnostics diag_;
     bool finalized_ = false;
+    int target_file_count_ = 0;
 };
 
 /**
