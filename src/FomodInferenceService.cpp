@@ -388,6 +388,120 @@ void apply_entry_hashes(AtomIndex& atom_index,
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tier 1 cache validation: exact-reproduction check
+// ---------------------------------------------------------------------------
+
+// Result of comparing a simulated tree against the target tree. Mirrors the
+// counters used by the engine's compare_trees so the "exact" criterion matches
+// the solver's notion of an exact reproduction.
+struct CacheReproResult
+{
+    int missing = 0;        // Target dests not produced by the simulation.
+    int extra = 0;          // Simulated dests absent from the target.
+    int size_mismatch = 0;  // Dests present in both but with differing nonzero sizes.
+    int hash_mismatch = 0;  // Dests size-matched but differing nonzero content hashes.
+
+    bool exact() const
+    {
+        return missing == 0 && extra == 0 && size_mismatch == 0 && hash_mismatch == 0;
+    }
+};
+
+// Compare a simulated install tree against the target tree, respecting the
+// excluded set. This intentionally mirrors compare_trees_impl in
+// FomodCSPSolver.cpp so the cache validation uses the same comparison
+// semantics as the solver: a target dest absent from the simulation is
+// missing; when present, compare size only when both sizes are nonzero, else
+// compare hash only when both hashes are nonzero and the sizes matched; any
+// simulated dest absent from the target (and not excluded) is extra.
+CacheReproResult cache_repro_check(const SimulatedTree& sim,
+                                   const TargetTree& target,
+                                   const std::unordered_set<std::string>& excluded)
+{
+    CacheReproResult m;
+    for (const auto& [dest, tf] : target)
+    {
+        if (excluded.count(dest))
+        {
+            continue;
+        }
+
+        auto it = sim.files.find(dest);
+        if (it == sim.files.end())
+        {
+            m.missing++;
+            continue;
+        }
+
+        if (tf.size != 0 && it->second.file_size != 0 && tf.size != it->second.file_size)
+        {
+            m.size_mismatch++;
+        }
+        else if (tf.hash != 0 && it->second.content_hash != 0 && tf.hash != it->second.content_hash)
+        {
+            m.hash_mismatch++;
+        }
+    }
+
+    for (const auto& [dest, atom] : sim.files)
+    {
+        if (excluded.count(dest))
+        {
+            continue;
+        }
+        if (!target.count(dest))
+        {
+            m.extra++;
+        }
+    }
+    return m;
+}
+
+// Attach the inferred install's virtual output tree to @p out as a flat,
+// path-sorted "outputTree" array of {path, size, source}. The simulation's
+// file map is unordered, so entries are sorted by destination path to keep the
+// cached JSON stable across scans (clean diffs). Large mods are capped at
+// kMaxOutputTreeEntries to bound the cached file size; when capped, the
+// "outputTreeTruncated"/"outputTreeTotal" siblings record the full count.
+// Paths are lowercased by the inference pipeline's normalization.
+void add_output_tree(json& out, const SimulatedTree& sim)
+{
+    constexpr size_t kMaxOutputTreeEntries = 5000;
+
+    std::vector<const FomodAtom*> entries;
+    entries.reserve(sim.files.size());
+    for (const auto& [dest, atom] : sim.files)
+    {
+        entries.push_back(&atom);
+    }
+    std::sort(entries.begin(),
+              entries.end(),
+              [](const FomodAtom* a, const FomodAtom* b) { return a->dest_path < b->dest_path; });
+
+    const size_t total = entries.size();
+    const bool truncated = total > kMaxOutputTreeEntries;
+    if (truncated)
+    {
+        entries.resize(kMaxOutputTreeEntries);
+        Logger::instance().log_warning(std::format(
+            "[infer] Output tree capped at {} of {} entries", kMaxOutputTreeEntries, total));
+    }
+
+    json tree = json::array();
+    for (const FomodAtom* atom : entries)
+    {
+        tree.push_back(
+            {{"path", atom->dest_path}, {"size", atom->file_size}, {"source", atom->source_path}});
+    }
+    out["outputTree"] = std::move(tree);
+    if (truncated)
+    {
+        out["outputTreeTruncated"] = true;
+        out["outputTreeTotal"] = total;
+    }
+}
+
 }  // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -681,113 +795,24 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
         return "";
     }
 
-    // Tier 1: Check for fomod-plus data in meta.ini
+    // Tier 1: Read any fomod-plus data from meta.ini now, but treat it only as
+    // a CANDIDATE. It is validated (forward-simulated + diffed against the
+    // target tree) inside the try block below, after the installer is parsed
+    // and the target tree is built. A stale or hand-edited blob that does not
+    // reproduce the installed tree is discarded so we fall through to the
+    // normal inference path rather than reporting a wrong "exact" replay.
     auto t_step = clock::now();
     auto fomod_plus = try_fomod_plus_json(fs::path(mod_path));
     if (!fomod_plus.is_null() && !fomod_plus.empty())
     {
-        logger.log(std::format("[infer] Tier 1 hit: fomod-plus JSON ({}ms)", ms_since(t_step)));
-
-        // Wrap the cached JSON in schema v2: convert plugin strings to plugin
-        // objects (each with FOMOD_PLUS_CACHE reason and confidence 1.0) and
-        // add the run-level diagnostics block.
-        auto cache_confidence = serialize_confidence(
-            ConfidenceScore{1.0, "high", ConfidenceComponents{1.0, 1.0, 1.0, 1.0}});
-        auto cache_reason = nlohmann::json::array();
-        cache_reason.push_back(serialize_reason(
-            Reason{ReasonCode::FOMOD_PLUS_CACHE, "Cached selection from meta.ini", {}}));
-
-        auto convert_plugin = [&](const nlohmann::json& src, bool selected)
-        {
-            nlohmann::json p;
-            if (src.is_string())
-            {
-                p["name"] = src.get<std::string>();
-            }
-            else if (src.is_object() && src.contains("name"))
-            {
-                p["name"] = src["name"];
-            }
-            else
-            {
-                p["name"] = "";
-            }
-            p["selected"] = selected;
-            p["confidence"] = cache_confidence;
-            p["reasons"] = cache_reason;
-            return p;
-        };
-
-        nlohmann::json out;
-        out["schema_version"] = 2;
-
-        nlohmann::json out_steps = nlohmann::json::array();
-        int total_groups = 0;
-        if (fomod_plus.contains("steps") && fomod_plus["steps"].is_array())
-        {
-            for (const auto& src_step : fomod_plus["steps"])
-            {
-                nlohmann::json out_step;
-                out_step["name"] = src_step.value("name", "");
-                out_step["confidence"] = cache_confidence;
-                out_step["visible"] = true;
-                out_step["reasons"] = nlohmann::json::array();
-
-                nlohmann::json out_groups = nlohmann::json::array();
-                if (src_step.contains("groups") && src_step["groups"].is_array())
-                {
-                    for (const auto& src_group : src_step["groups"])
-                    {
-                        ++total_groups;
-                        nlohmann::json out_group;
-                        out_group["name"] = src_group.value("name", "");
-                        out_group["confidence"] = cache_confidence;
-                        out_group["resolved_by"] = "cache.fomod_plus";
-                        out_group["reasons"] = nlohmann::json::array();
-
-                        nlohmann::json sel_arr = nlohmann::json::array();
-                        nlohmann::json desel_arr = nlohmann::json::array();
-                        if (src_group.contains("plugins") && src_group["plugins"].is_array())
-                        {
-                            for (const auto& p : src_group["plugins"])
-                            {
-                                sel_arr.push_back(convert_plugin(p, true));
-                            }
-                        }
-                        if (src_group.contains("deselected") && src_group["deselected"].is_array())
-                        {
-                            for (const auto& p : src_group["deselected"])
-                            {
-                                desel_arr.push_back(convert_plugin(p, false));
-                            }
-                        }
-                        out_group["plugins"] = std::move(sel_arr);
-                        out_group["deselected"] = std::move(desel_arr);
-                        out_groups.push_back(std::move(out_group));
-                    }
-                }
-                out_step["groups"] = std::move(out_groups);
-                out_steps.push_back(std::move(out_step));
-            }
-        }
-        out["steps"] = std::move(out_steps);
-
-        RunDiagnostics run;
-        run.confidence = ConfidenceScore{1.0, "high", ConfidenceComponents{1.0, 1.0, 1.0, 1.0}};
-        run.exact_match = true;
-        run.phase_reached = "tier1_cache";
-        run.nodes_explored = 0;
-        run.groups.total = total_groups;
-        run.groups.resolved_by_propagation = total_groups;
-        run.groups.resolved_by_csp = 0;
-        run.timings.total_ms = ms_since(t_total);
-        run.cache.hit = true;
-        run.cache.source = "fomod-plus";
-        out["diagnostics"] = serialize_run_diagnostics(run);
-
-        return out.dump(2);
+        logger.log(
+            std::format("[infer] Tier 1 candidate: fomod-plus JSON found, will validate ({}ms)",
+                        ms_since(t_step)));
     }
-    logger.log(std::format("[infer] Tier 1 miss: no fomod-plus data ({}ms)", ms_since(t_step)));
+    else
+    {
+        logger.log(std::format("[infer] Tier 1 miss: no fomod-plus data ({}ms)", ms_since(t_step)));
+    }
 
     try
     {
@@ -956,6 +981,282 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
             }
         }
 
+        // Step 7d: Validate the Tier 1 cache candidate (if any) before the
+        // expensive propagate + solve. Name-match the cached blob against the
+        // parsed installer to build a selection grid, forward-simulate it with
+        // the same atoms/overrides the solver uses, and short-circuit only when
+        // it exactly reproduces the target tree. Any name-resolution failure or
+        // non-exact reproduction discards the cache and falls through.
+        if (!fomod_plus.is_null() && !fomod_plus.empty())
+        {
+            t_step = clock::now();
+
+            // Build [step][group][plugin] selection grid by NAME-matching the
+            // cached JSON against ctx.installer. Tolerant of cached plugin
+            // entries being JSON strings or objects with a "name" field.
+            auto plugin_name_of = [](const nlohmann::json& src) -> std::string
+            {
+                if (src.is_string())
+                {
+                    return src.get<std::string>();
+                }
+                if (src.is_object() && src.contains("name") && src["name"].is_string())
+                {
+                    return src["name"].get<std::string>();
+                }
+                return "";
+            };
+
+            std::vector<std::vector<std::vector<bool>>> grid;
+            grid.resize(ctx.installer.steps.size());
+            for (size_t si = 0; si < ctx.installer.steps.size(); ++si)
+            {
+                grid[si].resize(ctx.installer.steps[si].groups.size());
+                for (size_t gi = 0; gi < ctx.installer.steps[si].groups.size(); ++gi)
+                {
+                    grid[si][gi].assign(ctx.installer.steps[si].groups[gi].plugins.size(), false);
+                }
+            }
+
+            bool cache_resolved = true;
+            std::string stale_what;
+
+            auto find_step = [&](const std::string& name) -> int
+            {
+                for (size_t si = 0; si < ctx.installer.steps.size(); ++si)
+                {
+                    if (ctx.installer.steps[si].name == name)
+                    {
+                        return static_cast<int>(si);
+                    }
+                }
+                return -1;
+            };
+
+            if (fomod_plus.contains("steps") && fomod_plus["steps"].is_array())
+            {
+                for (const auto& src_step : fomod_plus["steps"])
+                {
+                    auto step_name = src_step.value("name", "");
+                    int si = find_step(step_name);
+                    if (si < 0)
+                    {
+                        cache_resolved = false;
+                        stale_what = std::format("step \"{}\"", step_name);
+                        break;
+                    }
+                    const auto& step = ctx.installer.steps[static_cast<size_t>(si)];
+
+                    if (!src_step.contains("groups") || !src_step["groups"].is_array())
+                    {
+                        continue;
+                    }
+                    for (const auto& src_group : src_step["groups"])
+                    {
+                        auto group_name = src_group.value("name", "");
+                        int gi = -1;
+                        for (size_t g = 0; g < step.groups.size(); ++g)
+                        {
+                            if (step.groups[g].name == group_name)
+                            {
+                                gi = static_cast<int>(g);
+                                break;
+                            }
+                        }
+                        if (gi < 0)
+                        {
+                            cache_resolved = false;
+                            stale_what =
+                                std::format("group \"{}\" in step \"{}\"", group_name, step_name);
+                            break;
+                        }
+                        const auto& group = step.groups[static_cast<size_t>(gi)];
+
+                        if (!src_group.contains("plugins") || !src_group["plugins"].is_array())
+                        {
+                            continue;
+                        }
+                        for (const auto& src_plugin : src_group["plugins"])
+                        {
+                            auto plugin_name = plugin_name_of(src_plugin);
+                            int pi = -1;
+                            for (size_t p = 0; p < group.plugins.size(); ++p)
+                            {
+                                if (group.plugins[p].name == plugin_name)
+                                {
+                                    pi = static_cast<int>(p);
+                                    break;
+                                }
+                            }
+                            if (pi < 0)
+                            {
+                                cache_resolved = false;
+                                stale_what =
+                                    std::format("plugin \"{}\" in group \"{}\" of step \"{}\"",
+                                                plugin_name,
+                                                group_name,
+                                                step_name);
+                                break;
+                            }
+                            grid[static_cast<size_t>(si)][static_cast<size_t>(gi)]
+                                [static_cast<size_t>(pi)] = true;
+                        }
+                        if (!cache_resolved)
+                        {
+                            break;
+                        }
+                    }
+                    if (!cache_resolved)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (!cache_resolved)
+            {
+                logger.log_warning(std::format(
+                    "[infer] Tier 1 cache stale: {} not found in installer - falling through",
+                    stale_what));
+            }
+            else
+            {
+                // Forward-simulate the cached selection with the same atoms and
+                // overrides the solver path uses, then diff against the target.
+                auto sim = simulate(ctx.installer, ctx.atoms, grid, nullptr, &ctx.overrides);
+                auto repro = cache_repro_check(sim, ctx.target, ctx.excluded);
+                logger.log(
+                    std::format("[infer] Tier 1 validate: missing={} extra={} size_mismatch={} "
+                                "hash_mismatch={} ({}ms)",
+                                repro.missing,
+                                repro.extra,
+                                repro.size_mismatch,
+                                repro.hash_mismatch,
+                                ms_since(t_step)));
+
+                if (repro.exact())
+                {
+                    logger.log(
+                        std::format("[infer] Tier 1 hit: cache reproduces target exactly, "
+                                    "total: {}ms",
+                                    ms_since(t_total)));
+
+                    // Emit schema v2 for the cached selection (output shape
+                    // unchanged from the previous early-return cache block).
+                    auto cache_confidence = serialize_confidence(
+                        ConfidenceScore{1.0, "high", ConfidenceComponents{1.0, 1.0, 1.0, 1.0}});
+                    auto cache_reason = nlohmann::json::array();
+                    cache_reason.push_back(serialize_reason(Reason{
+                        ReasonCode::FOMOD_PLUS_CACHE, "Cached selection from meta.ini", {}}));
+
+                    auto convert_plugin = [&](const nlohmann::json& src, bool selected)
+                    {
+                        nlohmann::json p;
+                        if (src.is_string())
+                        {
+                            p["name"] = src.get<std::string>();
+                        }
+                        else if (src.is_object() && src.contains("name"))
+                        {
+                            p["name"] = src["name"];
+                        }
+                        else
+                        {
+                            p["name"] = "";
+                        }
+                        p["selected"] = selected;
+                        p["confidence"] = cache_confidence;
+                        p["reasons"] = cache_reason;
+                        return p;
+                    };
+
+                    nlohmann::json out;
+                    out["schema_version"] = 2;
+
+                    nlohmann::json out_steps = nlohmann::json::array();
+                    int cache_total_groups = 0;
+                    if (fomod_plus.contains("steps") && fomod_plus["steps"].is_array())
+                    {
+                        for (const auto& src_step : fomod_plus["steps"])
+                        {
+                            nlohmann::json out_step;
+                            out_step["name"] = src_step.value("name", "");
+                            out_step["confidence"] = cache_confidence;
+                            out_step["visible"] = true;
+                            out_step["reasons"] = nlohmann::json::array();
+
+                            nlohmann::json out_groups = nlohmann::json::array();
+                            if (src_step.contains("groups") && src_step["groups"].is_array())
+                            {
+                                for (const auto& src_group : src_step["groups"])
+                                {
+                                    ++cache_total_groups;
+                                    nlohmann::json out_group;
+                                    out_group["name"] = src_group.value("name", "");
+                                    out_group["confidence"] = cache_confidence;
+                                    out_group["resolved_by"] = "cache.fomod_plus";
+                                    out_group["reasons"] = nlohmann::json::array();
+
+                                    nlohmann::json sel_arr = nlohmann::json::array();
+                                    nlohmann::json desel_arr = nlohmann::json::array();
+                                    if (src_group.contains("plugins") &&
+                                        src_group["plugins"].is_array())
+                                    {
+                                        for (const auto& p : src_group["plugins"])
+                                        {
+                                            sel_arr.push_back(convert_plugin(p, true));
+                                        }
+                                    }
+                                    if (src_group.contains("deselected") &&
+                                        src_group["deselected"].is_array())
+                                    {
+                                        for (const auto& p : src_group["deselected"])
+                                        {
+                                            desel_arr.push_back(convert_plugin(p, false));
+                                        }
+                                    }
+                                    out_group["plugins"] = std::move(sel_arr);
+                                    out_group["deselected"] = std::move(desel_arr);
+                                    out_groups.push_back(std::move(out_group));
+                                }
+                            }
+                            out_step["groups"] = std::move(out_groups);
+                            out_steps.push_back(std::move(out_step));
+                        }
+                    }
+                    out["steps"] = std::move(out_steps);
+
+                    RunDiagnostics run;
+                    run.confidence =
+                        ConfidenceScore{1.0, "high", ConfidenceComponents{1.0, 1.0, 1.0, 1.0}};
+                    run.exact_match = true;
+                    run.phase_reached = "tier1_cache";
+                    run.nodes_explored = 0;
+                    run.groups.total = cache_total_groups;
+                    run.groups.resolved_by_propagation = cache_total_groups;
+                    run.groups.resolved_by_csp = 0;
+                    run.timings.total_ms = ms_since(t_total);
+                    run.cache.hit = true;
+                    run.cache.source = "fomod-plus";
+                    out["diagnostics"] = serialize_run_diagnostics(run);
+
+                    // Reuse the simulation already computed for the repro check
+                    // above to embed the virtual output tree (Files tab data).
+                    add_output_tree(out, sim);
+
+                    return out.dump(2);
+                }
+
+                logger.log_warning(std::format(
+                    "[infer] Tier 1 cache did not reproduce target (missing={} extra={} "
+                    "size_mismatch={} hash_mismatch={}) - falling through to normal inference",
+                    repro.missing,
+                    repro.extra,
+                    repro.size_mismatch,
+                    repro.hash_mismatch));
+            }
+        }
+
         // Step 7c: Constraint propagation pre-pass
         t_step = clock::now();
         ctx.propagation = propagate(ctx.installer,
@@ -1001,8 +1302,14 @@ std::string FomodInferenceService::infer_selections(const std::string& archive_p
         t_step = clock::now();
         auto total_ms = ms_since(t_total);
         diag_builder.set_run_timings(ctx.t_list, ctx.t_scan, ctx.t_solve, total_ms);
+        diag_builder.set_target_file_count(static_cast<int>(ctx.target.size()));
         diag_builder.finalize(result, ctx.propagation, ctx.installer);
         auto json_result = assemble_json(ctx.installer, result, diag_builder.diagnostics());
+        // Embed the inferred install's virtual output tree (Files tab data). The
+        // extra simulation is O(atoms), negligible next to the CSP solve above.
+        auto out_sim =
+            simulate(ctx.installer, ctx.atoms, result.selections, nullptr, &ctx.overrides);
+        add_output_tree(json_result, out_sim);
         auto result_str = json_result.dump(2);
         logger.log(std::format(
             "[infer] Step 9 assemble JSON: {} bytes ({}ms)", result_str.size(), ms_since(t_step)));
