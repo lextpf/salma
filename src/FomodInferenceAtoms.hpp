@@ -39,7 +39,9 @@ bool is_safe_dest(const std::string& dest);
  * For folder entries, performs a prefix search over @p sorted_entries to find
  * all archive members under the source directory, producing one atom per
  * match. For single-file entries, produces exactly one atom. Unsafe
- * destinations (path traversal) are logged and skipped.
+ * destinations (path traversal) are logged and skipped. A top-level
+ * `meta.ini` destination is skipped as well, mirroring build_target_tree's
+ * exclusion of the installed-side MO2 metadata file.
  *
  * @param entry          The FOMOD file/folder mapping to expand.
  * @param sorted_entries Lexicographically sorted list of all archive entry paths,
@@ -57,14 +59,14 @@ bool is_safe_dest(const std::string& dest);
  * @param out            Output vector to which expanded atoms are appended.
  * @throw std::bad_alloc if memory allocation for atoms fails.
  */
-void expand_entry(const FomodFileEntry& entry,
-                  const std::vector<std::string>& sorted_entries,
-                  const std::unordered_map<std::string, uint64_t>& entry_sizes,
-                  int doc_order,
-                  FomodAtom::Origin origin,
-                  int plugin_idx,
-                  int cond_idx,
-                  std::vector<FomodAtom>& out);
+MO2_API void expand_entry(const FomodFileEntry& entry,
+                          const std::vector<std::string>& sorted_entries,
+                          const std::unordered_map<std::string, uint64_t>& entry_sizes,
+                          int doc_order,
+                          FomodAtom::Origin origin,
+                          int plugin_idx,
+                          int cond_idx,
+                          std::vector<FomodAtom>& out);
 
 /**
  * @brief Expand all FOMOD file entries into atoms using three ordered passes.
@@ -94,7 +96,7 @@ ExpandedAtoms expand_all_atoms(const FomodInstaller& installer,
  *         that target it.
  * @throw std::bad_alloc if memory allocation for the index fails.
  */
-AtomIndex build_atom_index(const ExpandedAtoms& atoms);
+MO2_API AtomIndex build_atom_index(const ExpandedAtoms& atoms);
 
 /**
  * @brief Identify destinations that are only targeted by auto-install atoms
