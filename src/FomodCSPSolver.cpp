@@ -328,7 +328,7 @@ std::vector<std::string> collect_mismatched_dests(const SimulatedTree& sim,
 //      The queue doubles as the visited-set worklist, so expansion terminates
 //      when all transitive flag dependencies have been traced.
 //
-// This produces the minimal "repair neighborhood" -- only groups that could
+// This produces the minimal "repair neighborhood" - only groups that could
 // change the mismatched output need to be re-searched.
 std::vector<int> groups_for_mismatches(const Precompute& pre,
                                        const std::vector<std::string>& mismatched)
@@ -441,7 +441,7 @@ static std::unordered_map<int, std::vector<int>> build_repair_plugin_map(
 
     std::unordered_map<int, std::vector<int>> out;
     // Cap at 11 toggle bits per group: 2^11 = 2048 combos is the empirical
-    // sweet spot -- enough to cover typical multi-select groups without making
+    // sweet spot - enough to cover typical multi-select groups without making
     // the repair pass itself combinatorially expensive.
     constexpr int kMaxRepairBits = 11;
     for (int gidx : repair_groups)
@@ -586,6 +586,38 @@ static bool has_remaining_group(const std::unordered_map<std::string, std::vecto
     return false;
 }
 
+// A conditional-only dest is still repairable while any group that sets a
+// needed flag remains unassigned (it could enable the conditional install that
+// produces this dest). The dest_to_* maps are populated from Plugin-origin
+// atoms only, so a dest produced solely by a conditionalFileInstalls pattern
+// has no entry there; without this check the lower bound would count it as an
+// unfixable miss and prune a subtree that can still reach the exact solution.
+// Mirrors the conditional seeding in groups_for_mismatches. This is an
+// over-approximation - it only ever marks a dest fixable, never unfixable --
+// so it strictly loosens the bound and keeps it admissible.
+static bool conditional_repair_remaining(const Precompute& pre,
+                                         const std::string& dest,
+                                         const std::vector<int>& order_pos,
+                                         int next_idx)
+{
+    if (!pre.conditional_dests.count(dest))
+        return false;
+
+    for (const auto& fn : pre.needed_flags)
+    {
+        auto it = pre.flag_to_setter_groups.find(fn);
+        if (it == pre.flag_to_setter_groups.end())
+            continue;
+
+        for (int g : it->second)
+        {
+            if (g >= 0 && g < static_cast<int>(order_pos.size()) && order_pos[g] >= next_idx)
+                return true;
+        }
+    }
+    return false;
+}
+
 static ReproMetrics lower_bound(const SolverState& state,
                                 const Precompute& pre,
                                 const SearchPlan& plan,
@@ -595,14 +627,27 @@ static ReproMetrics lower_bound(const SolverState& state,
     simulate_into(
         scratch_lb, *pre.installer, *pre.atoms, state.search.selections, nullptr, pre.overrides);
 
+    // A remaining flag-setter group can enable a conditional install that fixes
+    // a conditional-only dest, so treat such a dest as still fixable for all
+    // three categories. A different conditional firing can change the produced
+    // size/hash at that dest too, so including it for size/hash only loosens the
+    // bound  which preserves admissibility (the bound never over-counts).
     auto can_fix_missing = [&](const std::string& dest)
-    { return !has_remaining_group(pre.dest_to_groups, dest, plan.order_pos, next_idx); };
+    {
+        return !has_remaining_group(pre.dest_to_groups, dest, plan.order_pos, next_idx) &&
+               !conditional_repair_remaining(pre, dest, plan.order_pos, next_idx);
+    };
     auto can_fix_size = [&](const std::string& dest)
-    { return !has_remaining_group(pre.dest_to_size_match_groups, dest, plan.order_pos, next_idx); };
+    {
+        return !has_remaining_group(
+                   pre.dest_to_size_match_groups, dest, plan.order_pos, next_idx) &&
+               !conditional_repair_remaining(pre, dest, plan.order_pos, next_idx);
+    };
     auto can_fix_hash = [&](const std::string& dest)
     {
         return !has_remaining_group(
-            pre.dest_to_hash_capable_groups, dest, plan.order_pos, next_idx);
+                   pre.dest_to_hash_capable_groups, dest, plan.order_pos, next_idx) &&
+               !conditional_repair_remaining(pre, dest, plan.order_pos, next_idx);
     };
 
     return compare_trees_impl(
@@ -1030,7 +1075,7 @@ static void backtrack(SolverState& state,
         auto& f = stack.back();
 
         // ------------------------------------------------------------------
-        // Phase 1: Initialize frame -- skip single-option groups, run bounds
+        // Phase 1: Initialize frame - skip single-option groups, run bounds
         // ------------------------------------------------------------------
         if (f.branch_idx < 0)
         {
@@ -1149,7 +1194,7 @@ static void backtrack(SolverState& state,
                 continue;
             }
 
-            // All groups processed -- evaluate this leaf.
+            // All groups processed - evaluate this leaf.
             if (ci >= static_cast<int>(plan.order.size()))
             {
                 evaluate_candidate(
@@ -1280,7 +1325,7 @@ static void backtrack(SolverState& state,
 
         if (!found_option)
         {
-            // All options exhausted -- unwind and pop.
+            // All options exhausted - unwind and pop.
             // Ensure flags are at skip-phase state before full unwind.
             if (plan.incremental_flags)
                 undo_flags_to(state.search.flags, flag_undo, f.skip_flag_mark);
