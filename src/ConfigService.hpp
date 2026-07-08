@@ -15,7 +15,7 @@ namespace mo2server
  *
  * Persists the MO2 mods directory path (`mo2ModsPath`) to a
  * `salma.json` file next to the executable.  This is currently the
- * only persisted setting -- the FOMOD output directory is derived at
+ * only persisted setting - the FOMOD output directory is derived at
  * runtime as `{mo2ModsPath}/Salma FOMODs Output/fomods/`.
  *
  * ## :material-content-save-outline: Persistence Model
@@ -37,7 +37,7 @@ namespace mo2server
  *
  * ## :material-microsoft-windows: Platform Note
  *
- * The config file path is resolved via `GetModuleFileNameW` -- this
+ * The config file path is resolved via `GetModuleFileNameW` - this
  * class is Windows-only.
  */
 class ConfigService
@@ -63,7 +63,7 @@ public:
     /**
      * Persist current configuration to salma.json via a write-then-rename
      * so a partial write cannot leave a corrupted file on disk. Write
-     * errors are logged -- the method never throws.
+     * errors are logged - the method never throws.
      *
      * @return `true` if the config was written and renamed atomically,
      *         `false` on any I/O failure (disk full, permissions, etc.).

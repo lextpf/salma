@@ -84,10 +84,10 @@ struct SolverResult
  * branches accordingly.
  *
  * Each element is an `ExternalConditionOverride` tri-state:
- * - `Unknown` -- the solver treats the condition as ambiguous and explores
+ * - `Unknown` - the solver treats the condition as ambiguous and explores
  *   both branches (default when no external context is available).
- * - `ForceTrue` -- the condition is assumed to hold.
- * - `ForceFalse` -- the condition is assumed to not hold.
+ * - `ForceTrue` - the condition is assumed to hold.
+ * - `ForceFalse` - the condition is assumed to not hold.
  */
 struct InferenceOverrides
 {

@@ -14,7 +14,7 @@ namespace mo2core
  * @brief Function pointer type for external log callbacks.
  *
  * The callback receives a null-terminated UTF-8 string containing the
- * raw log message (no timestamp or level prefix -- those are only added
+ * raw log message (no timestamp or level prefix - those are only added
  * to file output). The callback may be invoked from **any** thread that
  * calls a Logger method, and multiple threads may invoke it concurrently
  * without serialization. Implementations **must** be thread-safe.
@@ -69,9 +69,9 @@ using LogCallback = void (*)(const char*);
  * (acquire/release), so log methods snapshot it lock-free.
  *
  * **Caveat:** console output (`std::cout` / `std::cerr`) is not
- * mutex-guarded -- concurrent log calls may produce interleaved
+ * mutex-guarded - concurrent log calls may produce interleaved
  * lines on the terminal.  File output is serialized by `mutex_`.
- * Callback dispatch is **not** serialized -- the atomic snapshot
+ * Callback dispatch is **not** serialized - the atomic snapshot
  * ensures each call sees a consistent pointer, but multiple
  * threads may invoke the callback concurrently.  The callback
  * implementation **must** be thread-safe.
@@ -142,7 +142,7 @@ public:
      * file logging is disabled. Pass `nullptr` to revert to file
      * logging.
      *
-     * The callback **must** be thread-safe -- it may be invoked
+     * The callback **must** be thread-safe - it may be invoked
      * concurrently from multiple threads without serialization.
      *
      * @warning The callback pointer must remain valid until cleared
@@ -219,7 +219,7 @@ public:
      * lookup walks back from the address of a Logger member to the
      * containing module (the `mo2-salma` DLL on Windows), so the
      * `logs/` directory always sits next to the binary that owns this
-     * code -- regardless of the host process's working directory or
+     * code - regardless of the host process's working directory or
      * the host EXE's location. Consumers that derive paths from
      * `current_path()` will disagree with what Logger writes; use this
      * accessor instead.

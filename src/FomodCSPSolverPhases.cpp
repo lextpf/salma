@@ -16,17 +16,17 @@ namespace mo2core
 // Phase functions extracted from solve_fomod_csp
 //
 // Phase ordering rationale:
-//   1. Greedy + local search + targeted repair -- cheap O(N) and O(N*k)
+//   1. Greedy + local search + targeted repair - cheap O(N) and O(N*k)
 //      passes that solve the majority of FOMOD installers outright. Most
 //      installers are linear flag chains with little ambiguity.
-//   2. Component decomposition -- exploit the fact that many groups are
+//   2. Component decomposition - exploit the fact that many groups are
 //      independent (no shared dests or flag links). Solving each component
 //      separately turns an exponential search into a product of smaller ones.
-//   3. Residual repair -- when only 1-2 mismatches remain (size/hash), a
+//   3. Residual repair - when only 1-2 mismatches remain (size/hash), a
 //      narrow targeted search is cheaper than a global pass.
-//   4. Focused search -- re-examine only groups that contribute to remaining
+//   4. Focused search - re-examine only groups that contribute to remaining
 //      mismatches, with increasing exact-mode caps for thorough coverage.
-//   5. Global fallback -- progressively wider backtrack passes (narrow ->
+//   5. Global fallback - progressively wider backtrack passes (narrow ->
 //      medium -> full SelectAny caps) over all groups, used only when earlier
 //      phases leave unresolved mismatches.
 //
@@ -103,7 +103,7 @@ void run_initial_phases(
     }
 }
 
-// Phase 2: Component decomposition -- per-component local search + backtrack.
+// Phase 2: Component decomposition - per-component local search + backtrack.
 void run_component_decomposition(
     SolverState& state,
     const Precompute& pre,
@@ -170,7 +170,7 @@ void run_component_decomposition(
                     state.best.best.hash_mismatch));
 }
 
-// Phase 3: Residual repair -- near-perfect cleanup when m=0, e=0.
+// Phase 3: Residual repair - near-perfect cleanup when m=0, e=0.
 void run_residual_repair(
     SolverState& state,
     const Precompute& pre,
@@ -318,7 +318,7 @@ void run_focused_search(
                     state.best.best.hash_mismatch));
 }
 
-// Phase 5: Global fallback -- widening passes with increasing caps.
+// Phase 5: Global fallback - widening passes with increasing caps.
 void run_global_fallback(
     SolverState& state,
     const Precompute& pre,

@@ -31,7 +31,7 @@ namespace mo2server
  *
  * If the write to disk fails (e.g. disk full, permission denied),
  * the partial temp file is deleted and UploadedFile::temp_path is
- * cleared -- callers receive an empty result identical to "part not
+ * cleared - callers receive an empty result identical to "part not
  * found".  No exception is thrown.
  *
  * ## :material-shield-outline: Filename Handling
@@ -39,7 +39,7 @@ namespace mo2server
  * The original filename from the multipart `Content-Disposition`
  * header is stored in UploadedFile::filename but is **not** used
  * to construct the temp file path (only the extension is reused).
- * No sanitization is performed on the stored filename -- callers
+ * No sanitization is performed on the stored filename - callers
  * should not use it to construct filesystem paths without
  * validation.
  *

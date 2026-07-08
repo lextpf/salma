@@ -143,7 +143,7 @@ struct ArchiveWriteGuard
  * Fallback behavior on bit7z failure varies by method:
  * - **extract**, **list_entries**, **extract_prefix**, **read_entries_batch**:
  *   fall back to libarchive transparently.
- * - **read_entry**: returns empty (no fallback) -- callers should treat
+ * - **read_entry**: returns empty (no fallback) - callers should treat
  *   an empty result as "not found".
  *
  * ## :material-format-letter-case-lower: Path Normalization
@@ -409,7 +409,7 @@ public:
      * On bit7z formats, extracts to an in-memory buffer by item index.
      * On libarchive formats, streams sequentially until the match is
      * found. Unlike other methods, **no libarchive fallback** is
-     * attempted if bit7z fails -- the method returns empty.
+     * attempted if bit7z fails - the method returns empty.
      *
      * @param archivePath Path to the archive file.
      * @param entryName Entry path to read (case-insensitive match).

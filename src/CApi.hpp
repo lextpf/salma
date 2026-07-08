@@ -92,7 +92,7 @@
  * threads. Returned `const char*` strings are independent heap
  * allocations, so there is no shared output buffer.
  *
- * **Caveat -- shared "last install" flag.** `install()` /
+ * **Caveat - shared "last install" flag.** `install()` /
  * `installWithConfig()` write a process-global success flag that
  * `installSucceeded()` reads under a mutex. If two threads run
  * concurrent installs, `installSucceeded()` reflects whichever one
@@ -187,7 +187,7 @@ extern "C"
      *         input the string contains the error message. The caller **must**
      *         call freeResult() to release the returned pointer.
      * @note All C++ exceptions are caught internally and returned as error
-     *       strings -- callers will never see a C++ exception propagate.
+     *       strings - callers will never see a C++ exception propagate.
      */
     MO2_API const char* install(const char* archivePath, const char* modPath);
 
@@ -211,7 +211,7 @@ extern "C"
      *         input the string contains the error message. The caller **must**
      *         call freeResult() to release the returned pointer.
      * @note All C++ exceptions are caught internally and returned as error
-     *       strings -- callers will never see a C++ exception propagate.
+     *       strings - callers will never see a C++ exception propagate.
      */
     MO2_API const char* installWithConfig(const char* archivePath,
                                           const char* modPath,
@@ -244,7 +244,7 @@ extern "C"
      *         pipeline failure; error-message string on null input.
      *         The caller **must** call freeResult() to release the returned pointer.
      * @note All C++ exceptions are caught internally and returned as an
-     *       empty string -- callers will never see a C++ exception propagate.
+     *       empty string - callers will never see a C++ exception propagate.
      */
     MO2_API const char* inferFomodSelections(const char* archivePath, const char* modPath);
 

@@ -117,7 +117,7 @@ namespace mo2server
  * - Errors: 404 test_all.py missing, 409 busy, 500 CreateProcess, 501 non-Windows
  *
  * **`GET /api/test/status`**
- * - Response: `{ "running": bool }` -- when finished includes `"exitCode": int`
+ * - Response: `{ "running": bool }` - when finished includes `"exitCode": int`
  *
  * ## :material-sync: Async Scan Lifecycle
  *
@@ -126,12 +126,12 @@ namespace mo2server
  * iterates every mod folder under the configured MO2 mods path and
  * infers FOMOD selections. The lifecycle is:
  *
- * 1. **Start** -- `scan_job_.try_start(work)` returns 200 immediately.
+ * 1. **Start** - `scan_job_.try_start(work)` returns 200 immediately.
  *    Returns 409 if `scan_job_.is_running()` (a scan is already in progress).
- * 2. **Poll** -- `GET /api/mo2/fomods/scan/status` checks `scan_job_.is_running()`,
+ * 2. **Poll** - `GET /api/mo2/fomods/scan/status` checks `scan_job_.is_running()`,
  *    and once finished, calls `scan_job_.read_result()` for the full summary
  *    (success, counts, duration).
- * 3. **Completion** -- `BackgroundJob` stores the `ScanResult` under its
+ * 3. **Completion** - `BackgroundJob` stores the `ScanResult` under its
  *    internal mutex and clears the running flag automatically.
  *
  * Plugin deploy/purge (`POST /api/plugin/deploy`, `/purge`) follows
@@ -199,7 +199,7 @@ namespace mo2server
  * `cache_mutex_`, `fomods_cache_`, and `status_cache_` are declared
  * **before** `scan_job_` and `plugin_action_job_`. C++ destroys
  * members in reverse declaration order, so the BackgroundJob
- * destructors run -- and join their worker threads -- *before* the
+ * destructors run - and join their worker threads - *before* the
  * cache mutex they may still touch is destroyed. Reordering these
  * fields would introduce a use-after-free at process shutdown.
  *

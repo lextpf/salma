@@ -16,7 +16,7 @@ namespace mo2server
 {
 
 // ---------------------------------------------------------------------------
-// POST /api/test/run   -- spawn test_all.py in background
+// POST /api/test/run   - spawn test_all.py in background
 // ---------------------------------------------------------------------------
 
 crow::response Mo2Controller::run_tests(const crow::request& req)
@@ -42,7 +42,7 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
                 mo2core::Logger::instance().log_warning(std::format(
                     "[server] WaitForSingleObject failed (error {}), cleaning up", GetLastError()));
             }
-            // Process finished or wait failed -- clean up
+            // Process finished or wait failed - clean up
             CloseHandle(test_process_);
             test_process_ = nullptr;
             test_running_ = false;
@@ -158,7 +158,7 @@ crow::response Mo2Controller::get_test_status()
                              {{"running", false}, {"error", "Failed to query process status"}});
     }
 
-    // Process finished -- get actual exit code
+    // Process finished - get actual exit code
     DWORD exit_code = 0;
     GetExitCodeProcess(test_process_, &exit_code);
     CloseHandle(test_process_);

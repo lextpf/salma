@@ -49,13 +49,13 @@ static std::string strip_nexus_suffix(const std::string& stem)
 //      longest-stem-first (greediest match wins). A candidate matches if
 //      its lowercase stem is a prefix of the mod name, archive stem, or
 //      stripped archive base AND:
-//        - Stem length >= 5 chars -- prevents short stems like "a.json"
+//        - Stem length >= 5 chars - prevents short stems like "a.json"
 //          from matching unrelated mods. 5 was chosen as the minimum
 //          meaningful mod name length (e.g. "SkyUI").
-//        - Stem length >= 50% of the target string length -- ensures the
+//        - Stem length >= 50% of the target string length - ensures the
 //          match covers a significant portion, not just a trivial prefix.
 //        - The character immediately after the prefix is a separator
-//          (-, _, space, dot) -- prevents "Sky" from matching "Skyrim".
+//          (-, _, space, dot) - prevents "Sky" from matching "Skyrim".
 static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
                                             const std::string& mod_name,
                                             const std::string& archive_filename)
@@ -341,7 +341,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
                     return job_result;
                 }))
         {
-            // Job could not start -- clean up temp files that won't be used
+            // Job could not start - clean up temp files that won't be used
             try
             {
                 if (!temp_path_cleanup.empty())
@@ -360,7 +360,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
             return json_response(409, {{"error", "An installation is already running"}});
         }
 
-        // Job started -- the lambda now owns temp file cleanup.
+        // Job started - the lambda now owns temp file cleanup.
         // Clear caller's copies so the outer catch block won't double-delete.
         temp_path_cleanup.clear();
         json_path_cleanup.clear();

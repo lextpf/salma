@@ -115,7 +115,7 @@ PropagationResult propagate(const FomodInstaller& installer,
         {
             const auto& step = installer.steps[si];
 
-            // All steps treated as visible -- we cannot determine original visibility.
+            // All steps treated as visible - we cannot determine original visibility.
 
             for (size_t gi = 0; gi < step.groups.size(); ++gi)
             {

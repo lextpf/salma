@@ -460,10 +460,10 @@ static uint64_t option_signature(const OptionProfile& p)
 }
 
 // Tiebreaker for options that produce identical file outputs (same signature).
-// Prefer: (1) higher evidence -- more corroborated by target files,
-// (2) higher unique support -- files only this plugin can explain,
-// (3) more useful dests -- more target coverage,
-// (4) fewer extra dests -- less unwanted output (Occam's razor).
+// Prefer: (1) higher evidence - more corroborated by target files,
+// (2) higher unique support - files only this plugin can explain,
+// (3) more useful dests - more target coverage,
+// (4) fewer extra dests - less unwanted output (Occam's razor).
 static bool better_equivalent_option(const OptionProfile& a, const OptionProfile& b)
 {
     if (a.evidence_score != b.evidence_score)
@@ -479,7 +479,7 @@ static bool better_equivalent_option(const OptionProfile& a, const OptionProfile
 //
 // Three-stage reduction:
 //   1. Drop "extra-only" options that produce no target-matching files and set
-//      no needed flags -- these are dead weight in the search.
+//      no needed flags - these are dead weight in the search.
 //   2. Collapse options with identical output signatures (same produced atoms
 //      + same flags written), keeping the best by evidence/support/coverage.
 //   3. For SelectAny/AtLeastOne groups, cap the option count to select_any_cap

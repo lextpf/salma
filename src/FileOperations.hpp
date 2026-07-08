@@ -24,7 +24,7 @@ namespace mo2core
  * Each FileOperation carries a `priority` field (default 0).
  * When execute() is called, operations are `stable_sort`-ed by
  * ascending priority so that higher-priority files are copied last
- * and win on conflict -- matching MO2's FOMOD behavior.  Among
+ * and win on conflict - matching MO2's FOMOD behavior.  Among
  * equal-priority operations, `stable_sort` preserves insertion
  * order, so callers that add ops in XML document order get the
  * correct tiebreaker for free.  (FomodService uses its own sort
@@ -59,7 +59,7 @@ namespace mo2core
  * `copy_folder()` explicitly **skips** symlinks during recursive
  * traversal (`is_symlink()` entries are `continue`-d). `copy_file()`
  * for individual files delegates to `std::filesystem::copy_file` with
- * `overwrite_existing`, which follows symlinks -- the target file
+ * `overwrite_existing`, which follows symlinks - the target file
  * content is copied, not the link itself. Special files (devices,
  * FIFOs) are not expected in mod archives and their behavior with
  * `std::filesystem::copy_file` is platform-defined.
@@ -91,7 +91,7 @@ public:
      * Stable-sorts the queue by ascending FileOperation::priority,
      * then copies each entry. Files use copy_file(); folders use
      * copy_folder(). Individual failures are caught, logged, and
-     * skipped -- one failure does not abort the remaining operations.
+     * skipped - one failure does not abort the remaining operations.
      *
      * The queue is **always** cleared after execution, even if some
      * operations failed.
@@ -114,7 +114,7 @@ public:
      * Overwrites the destination if it already exists. Logs and
      * returns silently if the source file is missing. All errors --
      * including `create_directories()` failures and file copy errors
-     * -- are caught, logged, and cause the method to return without
+     * - are caught, logged, and cause the method to return without
      * throwing.
      *
      * @param src Source file path (must exist, or the call is a no-op).
@@ -128,8 +128,8 @@ public:
      *
      * Recreates the full directory structure of @p src under @p dst,
      * overwriting existing files. Logs and returns silently if the
-     * source folder is missing. All errors -- including
-     * `create_directories()` failures and iteration errors -- are
+     * source folder is missing. All errors - including
+     * `create_directories()` failures and iteration errors - are
      * caught, logged, and cause the method to return without throwing.
      *
      * @param src Source directory (must exist, or the call is a no-op).
@@ -148,8 +148,8 @@ public:
      * Used by InstallationService to flatten a single-subfolder mod
      * structure into the mod root.
      *
-     * All errors -- including `create_directories()` failures and
-     * iteration errors -- are caught, logged, and cause the method
+     * All errors - including `create_directories()` failures and
+     * iteration errors - are caught, logged, and cause the method
      * to return without throwing.
      *
      * @param src Source directory whose contents are copied (must exist).
