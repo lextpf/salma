@@ -20,6 +20,28 @@
   initial-value: 0.8;
 }
 
+/* Material Symbols support (UI quality pass). MIcon.tsx applies
+   .material-symbols-outlined + .m-icon; color rides currentColor so the
+   existing ink/paper plumbing and parent hover colors apply untouched. */
+.m-icon {
+  display: inline-block;
+  line-height: 1;
+  vertical-align: -0.125em;
+  user-select: none;
+  flex-shrink: 0;
+  transition: color 200ms cubic-bezier(0.21, 0.9, 0.3, 1);
+}
+
+.m-spin {
+  animation: m-spin 1s linear infinite;
+}
+
+@keyframes m-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ================================================================
    ATELIER - editorial paper aesthetic for salma's web UI.
 
@@ -37,53 +59,98 @@
    ================================================================ */
 
 @theme {
-  /* ---------- Atelier palette (cool slate, light default) ------ */
-  --paper:        #eef0f4;
-  --paper-2:      #e6e9ef;
-  --paper-3:      #dadee6;
-  --card:         #f7f8fa;
-  --card-2:       #eef1f5;
+  /* ---------- Field-manual palette (warm paper, light default) ---
+     The v5 "field-manual" direction: ink on warm paper, hairline
+     rules, ochre for warnings/partial and a brick red for errors/low.
+     There is no chromatic brand accent (emphasis is carried by weight
+     and the ink/paper contrast), so --accent is neutralised to ink and
+     the legacy --teal* / --accent-* families track it. */
+  --paper:        #f5f3ef;  /* warm app background */
+  --paper-2:      #efede8;
+  --paper-3:      #e7e5df;
+  --sheet:        #ffffff;  /* white content area / cards */
+  --card:         #fbfbfa;  /* raised panel fill (spec-rail, headers) */
+  --card-2:       #f4f3f1;  /* selected row / zebra */
+  --hover:        #fafaf9;  /* row hover wash */
 
-  --ink:          #181c25;
-  --ink-2:        #363c48;
-  --ink-3:        #5b6373;
-  --ink-4:        #7d8593;
-  --ink-5:        #a4abb8;
+  --ink:          #18181b;  /* primary text / EXACT tier */
+  --ink-2:        #3b3a3f;  /* strong body */
+  --ink-3:        #5b5a60;  /* secondary */
+  --ink-4:        #8e8d93;  /* muted labels */
+  --ink-5:        #a9a8ad;  /* faint */
+  --ink-6:        #b6b5ba;  /* glyphs / dim */
+  --ink-faint:    #c2c1c5;  /* timestamps / disabled */
 
-  --rule:         #cdd2da;
-  --rule-soft:    #dde1e8;
-  --rule-strong:  #7d8593;
+  --rule:         #dcdbd7;  /* default hairline */
+  --rule-soft:    #eae9e6;  /* softer hairline */
+  --rule-faint:   #f0efec;  /* row divider */
+  --rule-strong:  #c9c8c3;  /* hover border */
 
-  --accent:       #1f6e7a;  /* peacock teal - brand anchor */
-  --accent-2:     #2b8e9c;
-  --accent-soft:  #d4e5e9;
-  --accent-ink:   #114049;
+  --ochre:        #9a6b1e;  /* warn / PARTIAL */
+  --danger:       #b83a2a;  /* error / LOW */
+  --moss:         #6f7d52;  /* quiet olive, retained for log/json "ok" */
+  --ink-blue:     var(--ink-2);  /* legacy slot, tracked to ink */
 
-  --danger:       #8a2a1f;  /* retired oxblood - error / destructive only */
-  --danger-2:     #b24a38;
-  --danger-soft:  #e8d4cc;
-  --danger-ink:   #5a1a12;
+  /* Operational color is intentionally more chromatic than the surrounding
+     field-manual UI: streams and archive formats need to scan at a glance. */
+  --log-info:     #2f6f9f;
+  --log-debug:    #7460a9;
+  --log-warn:     #a4640e;
+  --log-error:    #bd3528;
+  --format-7z:    #7860aa;
+  --format-zip:   #2f719b;
+  --format-rar:   #b45d35;
+  --format-fomod: #637e3f;
+  --format-json:  #9a6b1e;
+  --format-tar:   #69717f;
 
-  /* Legacy --teal* slots: now alias the brand accent so .fa-duotone
-     secondary fills, hairline cap dots, log/json info colors and
-     --color-info all track the cooled accent without renames. */
-  --teal:         var(--accent);
-  --teal-2:       var(--accent-2);
-  --teal-soft:    var(--accent-soft);
-  --teal-ink:     var(--accent-ink);
+  /* Neutralised accent: no teal in the field-manual palette. Leftover
+     references to --accent / --teal* / --accent-* render as ink so the
+     surviving Atelier classes read as intentional, not branded. */
+  --accent:       var(--ink);
+  --accent-2:     var(--ink-2);
+  --accent-soft:  var(--card-2);
+  --accent-ink:   var(--ink);
+  --teal:         var(--ink-3);
+  --teal-2:       var(--ink-3);
+  --teal-soft:    var(--card-2);
+  --teal-ink:     var(--ink);
 
-  --ink-blue:     #2a3a5a;
-  --ochre:        #8a7032;
-  --moss:         #3d7a3d;
+  --danger-2:     #c8543f;
+  --danger-soft:  #fbedea;
+  --danger-ink:   #7a2418;
+
+  /* Confidence meter unfilled segment */
+  --meter-empty:  #e4e3e0;
+
+  /* ---------- Confidence tiers (theme-aware) -----------------
+     Consumed via confidence.ts so dark mode auto-flips. EXACT is a
+     filled ink chip, HIGH an ink outline, PARTIAL ochre, LOW red. */
+  --tier-exact:      #18181b;
+  --tier-exact-fg:   #ffffff;
+  --tier-exact-bg:   #18181b;
+  --tier-exact-bd:   #18181b;
+  --tier-high:       #18181b;
+  --tier-high-fg:    #18181b;
+  --tier-high-bg:    var(--sheet);
+  --tier-high-bd:    #18181b;
+  --tier-partial:    #9a6b1e;
+  --tier-partial-fg: #8a5e16;
+  --tier-partial-bg: #fbf3e6;
+  --tier-partial-bd: #e4c98c;
+  --tier-low:        #b83a2a;
+  --tier-low-fg:     #a8331f;
+  --tier-low-bg:     #fbedea;
+  --tier-low-bd:     #e6b6ac;
 
   /* ---------- Typography ------------------------------------- */
-  --font-display: 'EB Garamond', 'Cormorant Garamond', Georgia, serif;
-  --font-body:    'Inter Tight', 'Söhne', -apple-system, system-ui, sans-serif;
+  --font-display: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+  --font-body:    'Hanken Grotesk', system-ui, -apple-system, sans-serif;
   --font-mono:    'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
 
   /* Tailwind 4 picks up font-* vars automatically: text-display, etc. */
-  --font-sans:    'Inter Tight', 'Söhne', -apple-system, system-ui, sans-serif;
-  --font-serif:   'EB Garamond', 'Cormorant Garamond', Georgia, serif;
+  --font-sans:    'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+  --font-serif:   'Hanken Grotesk', system-ui, -apple-system, sans-serif;
 
   /* ---------- Shape ------------------------------------------ */
   --radius-xs:   2px;
@@ -97,6 +164,19 @@
   --shadow-elevation-1: 0 1px 2px 0 rgba(24, 28, 37, 0.06);
   --shadow-elevation-2: 0 4px 12px -4px rgba(24, 28, 37, 0.10), 0 0 0 1px rgba(24, 28, 37, 0.03);
   --shadow-elevation-3: 0 12px 24px -8px rgba(24, 28, 37, 0.14), 0 0 0 1px rgba(24, 28, 37, 0.04);
+
+  /* ---------- Type scale (UI quality pass) -----------------------
+     The only sanctioned font sizes for rendered text. Inline styles
+     reference these as fontSize: 'var(--fs-body)' etc.; raw numeric
+     fontSize values are banned outside MIcon's icon box. */
+  --fs-micro: 10.5px;  /* uppercase kickers, fine print - always tracked */
+  --fs-label: 11.5px;  /* labels, meta rows, mono tags */
+  --fs-body:  12.5px;  /* data rows, body copy, inputs */
+  --fs-title: 14px;    /* card/section titles */
+  --fs-head:  18px;    /* page headers */
+  --fs-display: 26px; /* hero numerals, display headings - the scale's cap */
+  --lh-tight: 1.45;
+  --lh-body:  1.6;
 
   /* ---------- Layout ----------------------------------------- */
   --spacing-sidebar: 236px;
@@ -224,6 +304,20 @@
     0%, 100% { opacity: 0.86; transform: scale(1); }
     50%      { opacity: 1;    transform: scale(1.012); }
   }
+
+  /* Field-manual motion: a live LED blink, the striped progress sweep,
+     and a spin for indeterminate work. */
+  @keyframes salma-blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+  @keyframes salma-stripe {
+    from { background-position: 0 0; }
+    to   { background-position: 30px 0; }
+  }
+  @keyframes salma-spin {
+    to { transform: rotate(360deg); }
+  }
 }
 
 /* ================================================================
@@ -327,6 +421,21 @@
     --fa-primary-color: var(--ink-2);
     --fa-secondary-color: var(--teal-2);
     --fa-secondary-opacity: 0.9;
+  }
+
+  /* Module rail (fm-rail-item): ink-forward icons, darker than the ambient
+     ink-3 duotone so the navigation reads as primary chrome rather than
+     decoration. The active module goes full ink. */
+  .fm-rail-item .fa-duotone {
+    --fa-primary-color: var(--ink-2);
+    --fa-secondary-color: var(--ink-2);
+    --fa-secondary-opacity: 0.55;
+  }
+
+  .fm-rail-item[aria-current="page"] .fa-duotone {
+    --fa-primary-color: var(--ink);
+    --fa-secondary-color: var(--ink);
+    --fa-secondary-opacity: 0.7;
   }
 
   /* Coordinated duotone hover: primary darkens, secondary becomes fully
@@ -1404,44 +1513,80 @@
    ================================================================ */
 
 [data-theme="dark"] {
-  --paper:        #14171f;
-  --paper-2:      #1c1f28;
-  --paper-3:      #232733;
-  --card:         #10131a;
-  --card-2:       #181c24;
+  /* Field-manual, dark: ink and paper swap roles. Warm paper becomes a
+     warm near-black; ink becomes a warm off-white. Ochre and the brick
+     red keep their warning/error semantics, brightened to hold contrast
+     against the dark surfaces. */
+  --paper:        #1a1917;
+  --paper-2:      #211f1c;
+  --paper-3:      #2a2824;
+  --sheet:        #141311;
+  --card:         #1f1e1b;
+  --card-2:       #232220;
+  --hover:        #26241f;
 
-  /* Ink scale: light theme steps ~14 L units between tiers; the original
-     dark scale collapsed to L=24 at --ink-5 (~2.5:1 against --card, fails
-     AA). These values restore even ~14 L stepping so muted text, dim
-     dots, and metadata stay legible on near-black surfaces. */
-  --ink:          #eef0f4;
-  --ink-2:        #c8cdd6;
-  --ink-3:        #a0a8b6;
-  --ink-4:        #7a8290;
-  --ink-5:        #565c69;
+  --ink:          #f2f0ec;
+  --ink-2:        #c9c7c2;
+  --ink-3:        #a7a5a0;
+  --ink-4:        #87857f;
+  --ink-5:        #6b6964;
+  --ink-6:        #565450;
+  --ink-faint:    #48463f;
 
-  --rule:         #353a45;
-  --rule-soft:    #282d37;
-  --rule-strong:  #6a7383;
+  --rule:         #34322e;
+  --rule-soft:    #2a2825;
+  --rule-faint:   #232220;
+  --rule-strong:  #4a4843;
 
-  --accent:       #2b8e9c;
-  --accent-2:     #4cb0bd;
-  --accent-soft:  #1a3a40;
-  --accent-ink:   #a4d6dd;
+  --ochre:        #c79a4e;
+  --danger:       #d6604e;
+  --moss:         #8a9a6a;
+  --ink-blue:     var(--ink-2);
 
-  --danger:       #c45643;
-  --danger-2:     #de7560;
-  --danger-soft:  #3a201a;
-  --danger-ink:   #e8a496;
+  --log-info:     #67b7e8;
+  --log-debug:    #b39be2;
+  --log-warn:     #e1aa4f;
+  --log-error:    #f07868;
+  --format-7z:    #b39be2;
+  --format-zip:   #67b7e8;
+  --format-rar:   #e18a62;
+  --format-fomod: #a9c979;
+  --format-json:  #e1aa4f;
+  --format-tar:   #aeb7c5;
 
-  --teal:         var(--accent);
-  --teal-2:       var(--accent-2);
-  --teal-soft:    var(--accent-soft);
-  --teal-ink:     var(--accent-ink);
+  --accent:       var(--ink);
+  --accent-2:     var(--ink-2);
+  --accent-soft:  var(--card-2);
+  --accent-ink:   var(--ink);
+  --teal:         var(--ink-3);
+  --teal-2:       var(--ink-3);
+  --teal-soft:    var(--card-2);
+  --teal-ink:     var(--ink);
 
-  --ink-blue:     #6a82a8;
-  --ochre:        #b89456;
-  --moss:         #6a9a6a;
+  --danger-2:     #e8917f;
+  --danger-soft:  #2e1b17;
+  --danger-ink:   #e8917f;
+
+  --meter-empty:  #34322e;
+
+  /* Confidence tiers, dark: EXACT flips to a filled off-white chip,
+     HIGH an off-white outline; PARTIAL/LOW keep hue with dark fills. */
+  --tier-exact:      #f2f0ec;
+  --tier-exact-fg:   #141311;
+  --tier-exact-bg:   #f2f0ec;
+  --tier-exact-bd:   #f2f0ec;
+  --tier-high:       #f2f0ec;
+  --tier-high-fg:    #f2f0ec;
+  --tier-high-bg:    var(--sheet);
+  --tier-high-bd:    #f2f0ec;
+  --tier-partial:    #c79a4e;
+  --tier-partial-fg: #d8b070;
+  --tier-partial-bg: #2e2718;
+  --tier-partial-bd: #4a3d20;
+  --tier-low:        #d6604e;
+  --tier-low-fg:     #e8917f;
+  --tier-low-bg:     #2e1b17;
+  --tier-low-bd:     #4a2820;
 
   /* Re-aliases to keep legacy color tokens in sync */
   --color-primary:                var(--accent);
@@ -1561,4 +1706,179 @@
 
 [data-theme="dark"] .queue-ledger[data-active="true"] .queue-ledger-progress {
   box-shadow: 0 0 10px rgba(76, 176, 189, 0.40);
+}
+
+/* ================================================================
+   FIELD-MANUAL (v5) component classes. Hover/active behaviours that
+   need real CSS (inline styles can't express :hover). All colors are
+   tokens, so dark/light flip automatically. Selection backgrounds are
+   set inline on the element (winning over these via specificity), so
+   these rules only paint the resting + hover states.
+   ================================================================ */
+@layer base {
+  /* Left module rail row. Active background is set inline; this paints
+     the inactive hover so the inline `background: undefined` lets it show. */
+  .fm-rail-item {
+    transition: background-color 140ms ease, color 140ms ease;
+  }
+  .fm-rail-item:not([data-active="true"]):hover {
+    background: var(--paper-3);
+    color: var(--ink);
+  }
+
+  /* Generic interactive row (records, tree, facet, file, conflict). */
+  .fm-row {
+    transition: background-color 120ms ease;
+  }
+  .fm-row:not([data-selected="true"]):hover {
+    background: var(--hover);
+  }
+
+  /* Full-bleed dotted dropzone surface. */
+  .fm-dropzone {
+    background-color: color-mix(in srgb, var(--sheet) 92%, var(--paper));
+    background-image: radial-gradient(var(--rule-soft) 1px, transparent 1px);
+    background-size: 22px 22px;
+    transition: background-color 160ms ease;
+  }
+  .fm-dropzone:not([data-disabled="true"]):hover {
+    background-color: var(--card-2);
+  }
+
+  /* Striped, animated progress fill for the install console footer. */
+  .fm-stripe {
+    background-image: repeating-linear-gradient(
+      45deg,
+      var(--ink),
+      var(--ink) 7px,
+      var(--ink-3) 7px,
+      var(--ink-3) 14px
+    );
+    background-size: 30px 30px;
+    animation: salma-stripe 1s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fm-stripe { animation: none; }
+  }
+}
+
+/* ================================================================
+   PREMIUM OPERATIONAL SURFACES
+   Higher-contrast semantics for the log stream and archive intake.
+   ================================================================ */
+
+@layer base {
+  /* Log lines carry meaning through text color only: no per-level chips,
+     left-accent borders, or background tints. A faint row separator and a
+     neutral hover remain as structural/interaction chrome. */
+  .log-stream-row {
+    border-bottom: 1px solid var(--rule-faint);
+    transition: background-color 120ms ease;
+  }
+  .log-stream-row:hover {
+    background: color-mix(in srgb, var(--ink) 7%, var(--sheet));
+  }
+
+  .log-stream-time {
+    width: 92px;
+    color: var(--ink-4);
+    font-size: 10.5px;
+    letter-spacing: -0.02em;
+  }
+  .log-stream-level {
+    width: 56px;
+    font-size: var(--fs-micro);
+    line-height: 1.2;
+    letter-spacing: 0.08em;
+    white-space: nowrap;
+  }
+  .log-stream-subsystem {
+    width: 96px;
+    font-size: var(--fs-micro);
+    line-height: 1.25;
+  }
+
+  .log-level-info    { color: var(--log-info); font-weight: 600; }
+  .log-level-debug   { color: var(--log-debug); font-weight: 600; }
+  .log-level-warning { color: var(--log-warn); font-weight: 700; }
+  .log-level-error   { color: var(--log-error); font-weight: 700; }
+  .log-protocol,
+  .log-method,
+  .log-duration      { color: var(--log-info); }
+  .log-status-ok,
+  .log-string,
+  .log-key           { color: var(--moss); font-weight: 600; }
+  .log-status-err    { color: var(--log-error); font-weight: 700; }
+  .log-path,
+  .log-storage       { color: var(--log-warn); }
+
+  .install-workspace,
+  .install-drop-target,
+  .install-upload-medallion,
+  .install-format-card,
+  .install-browse-button {
+    transition: transform 180ms cubic-bezier(0.21, 0.9, 0.3, 1),
+      box-shadow 180ms ease, border-color 180ms ease;
+  }
+  .fm-dropzone:not([data-disabled='true']) .install-drop-target:hover {
+    background: color-mix(in srgb, var(--format-fomod) 3.5%, var(--sheet));
+  }
+  .fm-dropzone[data-dragging='true'] .install-workspace {
+    border-color: var(--format-fomod);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--format-fomod) 11%, transparent), var(--shadow-elevation-3);
+  }
+  .fm-dropzone[data-dragging='true'] .install-drop-target {
+    background: color-mix(in srgb, var(--format-fomod) 7%, var(--sheet));
+  }
+  .fm-dropzone:not([data-disabled='true']):hover .install-upload-medallion {
+    transform: rotate(0deg) translateY(-2px) !important;
+  }
+  .install-format-card:hover {
+    transform: translateX(2px);
+    box-shadow: var(--shadow-elevation-1);
+  }
+  .install-browse-button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 18px -8px rgba(24, 24, 27, 0.55);
+  }
+  .install-ready-dot {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--moss) 16%, transparent);
+    animation: salma-blink 2.2s infinite;
+  }
+
+  @media (max-width: 980px) {
+    .install-workspace {
+      grid-template-columns: minmax(0, 1fr) 286px !important;
+    }
+    .install-workspace-shell {
+      padding: 12px !important;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .install-workspace {
+      grid-template-columns: 1fr !important;
+    }
+    .install-protocol-rail {
+      border-top: 1px solid var(--rule);
+      border-left: none !important;
+    }
+  }
+
+  @media (max-height: 720px) {
+    .install-drop-target {
+      padding-top: 50px !important;
+      padding-bottom: 50px !important;
+    }
+    .install-upload-medallion {
+      width: 72px !important;
+      height: 72px !important;
+      margin-bottom: 17px !important;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .install-ready-dot { animation: none; }
+  }
 }
