@@ -82,7 +82,7 @@ export function highlightTokens(text: string, parts: HighlightSegment[], depth =
     else if (url) parts.push({ text: full, cls: 'log-url' })
     else if (path) {
       // Trim trailing non-path text after a file extension (e.g. ".dds (priority: 0)")
-      const cleaned = full.replace(/(\.\w{1,10})\s(?!.*[\\\/]).*$/, '$1')
+      const cleaned = full.replace(/(\.\w{1,10})\s(?!.*[\\/]).*$/, '$1')
       if (cleaned.length < full.length) {
         parts.push({ text: cleaned, cls: 'log-path' })
         highlightTokens(full.slice(cleaned.length), parts, depth + 1)
