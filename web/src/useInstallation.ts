@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { getCsrfToken, getInstallStatus } from './api'
 import type { InstallationJob } from './types'
 
@@ -6,12 +6,16 @@ export function useInstallation(pluginInstalled: boolean): {
   jobs: InstallationJob[]
   isInstalling: boolean
   handleFileSelect: (files: FileList) => Promise<void>
+  cancel: () => void
 } {
   const [jobs, setJobs] = useState<InstallationJob[]>([])
   const [isInstalling, setIsInstalling] = useState(false)
   const cancelledRef = useRef(false)
   const xhrRef = useRef<XMLHttpRequest | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Holds the resolver of the in-flight polling promise so cancel()/unmount can
+  // settle it immediately after clearing the timer (otherwise it dangles).
+  const pollResolveRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     return () => {
@@ -23,6 +27,10 @@ export function useInstallation(pluginInstalled: boolean): {
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current)
         pollTimerRef.current = null
+      }
+      if (pollResolveRef.current) {
+        pollResolveRef.current()
+        pollResolveRef.current = null
       }
     }
   }, [])
@@ -101,6 +109,7 @@ export function useInstallation(pluginInstalled: boolean): {
       // Poll for completion using sequential setTimeout (no overlapping fetches).
       // The timer ID is tracked in pollTimerRef so cleanup on unmount can clear it.
       await new Promise<void>((resolve) => {
+        pollResolveRef.current = resolve
         const MAX_RETRIES = 200
         let retries = 0
 
@@ -112,7 +121,7 @@ export function useInstallation(pluginInstalled: boolean): {
           if (retries > MAX_RETRIES) {
             setJobs(prev => prev.map(j =>
               j.id === job.id
-                ? { ...j, status: 'error', error: 'Installation polling timed out after 5 minutes' }
+                ? { ...j, status: 'error', completedAt: Date.now(), error: 'Installation polling timed out after 5 minutes' }
                 : j
             ))
             resolve()
@@ -126,13 +135,13 @@ export function useInstallation(pluginInstalled: boolean): {
               if (status.success) {
                 setJobs(prev => prev.map(j =>
                   j.id === job.id
-                    ? { ...j, status: 'completed', modPath: status.modPath || result.modPath, processingStatus: 'Installation complete' }
+                    ? { ...j, status: 'completed', completedAt: Date.now(), modPath: status.modPath || result.modPath, processingStatus: 'Installation complete' }
                     : j
                 ))
               } else {
                 setJobs(prev => prev.map(j =>
                   j.id === job.id
-                    ? { ...j, status: 'error', error: status.error || 'Installation failed' }
+                    ? { ...j, status: 'error', completedAt: Date.now(), error: status.error || 'Installation failed' }
                     : j
                 ))
               }
@@ -150,10 +159,20 @@ export function useInstallation(pluginInstalled: boolean): {
         if (cancelledRef.current) { resolve(); return }
         pollTimerRef.current = setTimeout(poll, 1500)
       })
+      pollResolveRef.current = null
     } catch (error) {
       setJobs(prev => prev.map(j =>
         j.id === job.id
-          ? { ...j, status: 'error', error: error instanceof Error ? error.message : 'Unknown error' }
+          ? {
+              ...j,
+              status: 'error',
+              completedAt: Date.now(),
+              error: cancelledRef.current
+                ? 'Cancelled'
+                : error instanceof Error
+                  ? error.message
+                  : 'Unknown error',
+            }
           : j
       ))
     }
@@ -161,6 +180,8 @@ export function useInstallation(pluginInstalled: boolean): {
 
   const handleFileSelect = async (files: FileList) => {
     if (!pluginInstalled || isInstalling) return
+    // Re-arm after a prior cancel so a fresh selection can run.
+    cancelledRef.current = false
     setIsInstalling(true)
 
     try {
@@ -182,6 +203,8 @@ export function useInstallation(pluginInstalled: boolean): {
         id: crypto.randomUUID(),
         fileName: file.name,
         status: 'pending' as const,
+        createdAt: Date.now(),
+        sizeBytes: file.size,
       }))
 
       setJobs(prev => [...prev, ...newJobs])
@@ -200,5 +223,30 @@ export function useInstallation(pluginInstalled: boolean): {
     }
   }
 
-  return { jobs, isInstalling, handleFileSelect }
+  // Abort the active install: stop the in-flight upload XHR, clear the poll
+  // timer, settle the dangling poll promise, and flag every non-terminal job as
+  // cancelled. cancelledRef stays true until the next handleFileSelect re-arms.
+  const cancel = useCallback(() => {
+    cancelledRef.current = true
+    if (xhrRef.current) {
+      xhrRef.current.abort()
+      xhrRef.current = null
+    }
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+    if (pollResolveRef.current) {
+      pollResolveRef.current()
+      pollResolveRef.current = null
+    }
+    setJobs(prev => prev.map(j =>
+      j.status === 'pending' || j.status === 'uploading' || j.status === 'processing'
+        ? { ...j, status: 'error', completedAt: Date.now(), error: 'Cancelled' }
+        : j
+    ))
+    setIsInstalling(false)
+  }, [])
+
+  return { jobs, isInstalling, handleFileSelect, cancel }
 }
