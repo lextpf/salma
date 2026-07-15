@@ -1,0 +1,15 @@
+# Cargo workspace for the salma mo2-core Rust port.
+#
+# All Rust code lives under rust/ and builds to cargo's rust/target/, never the
+# C++ build/bin/ tree. The single member crate produces mo2_salma_rs.dll, a
+# drop-in replacement for the C++ mo2-salma.dll.
+[workspace]
+resolver = "2"
+members = ["mo2-salma-rs"]
+
+[workspace.package]
+edition = "2024"
+# Floor is the first stable toolchain that supports edition 2024.
+rust-version = "1.85"
+
+# [profile.release] intentionally left at cargo defaults for Milestone 1.
