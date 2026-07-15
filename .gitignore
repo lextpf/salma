@@ -43,3 +43,7 @@ web/.vite/
 # Rust (cargo build output)
 rust/target/
 
+# Golden vectors: the full-corpus generator output is large and machine-local.
+# Only the curated cases under rust/tests/golden/cases/ are committed.
+rust/tests/golden/full/
+
