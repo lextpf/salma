@@ -378,6 +378,7 @@ def cmd_generate(args) -> int:
               "inferred_non_empty": 0, "inferred_empty": 0,
               "errors": 0, "timeouts": 0}
     fixtures = []
+    inference_elapsed = 0.0
     t_start = time.perf_counter()
 
     for i, (mod_folder, inst) in enumerate(mods, 1):
@@ -392,6 +393,12 @@ def cmd_generate(args) -> int:
             if isinstance(prev, dict) and prev.get("mod_name") == mod_name:
                 _tally(counts, prev.get("status", ""))
                 counts["processed"] += 1
+                # A fixture only exists if its archive resolved when it was
+                # generated, so resumed fixtures count as resolved too;
+                # otherwise batched --resume runs would report processed=N
+                # alongside archives_resolved=0.
+                counts["archives_resolved"] += 1
+                inference_elapsed += float(prev.get("elapsed_s", 0) or 0)
                 fixtures.append({"mod_name": mod_name,
                                  "fixture_file": fixture_path.name,
                                  "status": prev.get("status", "")})
@@ -415,6 +422,7 @@ def cmd_generate(args) -> int:
             dll_path, archive, str(mod_folder), args.timeout, tmp_base)
         counts["processed"] += 1
         _tally(counts, status)
+        inference_elapsed += elapsed
 
         text = ""
         out_sha = ""
@@ -456,7 +464,10 @@ def cmd_generate(args) -> int:
     manifest = {
         "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"),
-        "cpp_dll_git_rev": git_rev,
+        # HEAD of the repo when THIS manifest was written. The DLL may have
+        # been built at an earlier commit; cpp_dll_sha256 is the authoritative
+        # engine identifier.
+        "git_head_at_generation": git_rev,
         "cpp_dll_path": str(dll_path.relative_to(REPO_ROOT))
         if _is_relative_to(dll_path, REPO_ROOT) else str(dll_path),
         "cpp_dll_sha256": dll_sha,
@@ -465,7 +476,11 @@ def cmd_generate(args) -> int:
         "fnv1a": {"offset_basis": FNV_OFFSET_BASIS, "prime": FNV_PRIME,
                   "bits": 64, "note": "matches src/Utils.hpp::fnv1a_hash"},
         "per_mod_timeout_s": args.timeout,
-        "elapsed_total_s": round(total_time, 1),
+        # Wall time of this pass only (a --resume pass can be near-zero).
+        "elapsed_run_s": round(total_time, 1),
+        # Cumulative DLL-measured inference seconds over every fixture in
+        # this manifest, stable across batched/resumed runs.
+        "inference_elapsed_total_s": round(inference_elapsed, 1),
         "counts": counts,
         "fixtures": sorted(fixtures, key=lambda f: f["mod_name"].lower()),
     }
