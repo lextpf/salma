@@ -40,3 +40,6 @@ web/.vite/
 *.log
 .tmp/
 
+# Rust (cargo build output)
+rust/target/
+
