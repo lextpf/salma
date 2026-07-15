@@ -669,15 +669,20 @@ def extract_entry(archive: Path, entry_path: str) -> bytes:
 def scan_target_tree(mod_folder: Path):
     """Scan an installed mod folder into a sorted target-tree list.
 
-    Mirrors FomodInferenceService::scan_installed_files: every regular file,
-    keyed by normalize_path of its mod-relative path, with size and FNV-1a-64
-    content hash. Hashes are computed in Python with the same offset basis and
-    prime as src/Utils.cpp."""
+    Mirrors the engine's effective target tree: scan_installed_files
+    (FomodInferenceService.cpp, every regular file keyed by normalize_path of
+    its mod-relative path) followed by build_target_tree
+    (FomodInferenceAtoms.cpp), whose ONLY exclusion is the root-level
+    "meta.ini" (MO2 metadata, never part of a FOMOD installation). Nested
+    meta.ini files are kept, exactly as in C++. Hashes are FNV-1a-64 computed
+    in Python with the same offset basis and prime as src/Utils.cpp."""
     tree = []
     for p in sorted(mod_folder.rglob("*")):
         if not p.is_file():
             continue
         rel = normalize_path(str(p.relative_to(mod_folder)))
+        if rel == "meta.ini":
+            continue
         try:
             data = p.read_bytes()
         except OSError:
