@@ -13,9 +13,9 @@ export function useViewportShort(thresholdPx = 760): boolean {
     typeof window !== 'undefined' ? window.innerHeight < thresholdPx : false,
   )
   useEffect(() => {
-    const onResize = () => setShort(window.innerHeight < thresholdPx)
+    const onResize = () => { setShort(window.innerHeight < thresholdPx); }
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    return () => { window.removeEventListener('resize', onResize); }
   }, [thresholdPx])
   return short
 }
