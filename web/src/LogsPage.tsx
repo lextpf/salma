@@ -84,7 +84,7 @@ export default function LogsPage() {
       .then(data => {
         if (abortRef.current?.signal.aborted) return
         applyLines(data.lines, src)
-        setLogStats({ errors: data.errors ?? 0, warnings: data.warnings ?? 0, passes: data.passes ?? 0 })
+        setLogStats({ errors: data.errors, warnings: data.warnings, passes: data.passes })
         offsetRef.current = data.nextOffset
         setLoading(false)
         setRetryPending(false)
@@ -119,9 +119,9 @@ export default function LogsPage() {
             src,
           )
           setLogStats(prev => ({
-            errors: prev.errors + (data.errors ?? 0),
-            warnings: prev.warnings + (data.warnings ?? 0),
-            passes: prev.passes + (data.passes ?? 0),
+            errors: prev.errors + data.errors,
+            warnings: prev.warnings + data.warnings,
+            passes: prev.passes + data.passes,
           }))
         }
         setRetryPending(false)
@@ -137,7 +137,7 @@ export default function LogsPage() {
     abortRef.current = new AbortController()
     offsetRef.current = undefined
     resetScroll()
-    loadFull(source)
+    void loadFull(source)
     return () => {
       if (abortRef.current) abortRef.current.abort()
     }
@@ -150,7 +150,7 @@ export default function LogsPage() {
       setRetryPending(false)
       void loadFull(source)
     }, RETRY_DELAY_MS)
-    return () => clearTimeout(tid)
+    return () => { clearTimeout(tid); }
   }, [retryPending, loadFull, source])
 
   useEffect(() => {
@@ -158,7 +158,7 @@ export default function LogsPage() {
     let active = true
     let tid: ReturnType<typeof setTimeout>
     const poll = () => {
-      loadIncremental(source).finally(() => {
+      void loadIncremental(source).finally(() => {
         if (active) tid = setTimeout(poll, 1000)
       })
     }
@@ -214,7 +214,7 @@ export default function LogsPage() {
       offsetRef.current = undefined
       setLogStats({ errors: 0, warnings: 0, passes: 0 })
       resetScroll()
-      loadFull(source)
+      void loadFull(source)
     } catch (e) {
       console.warn(`[logs] failed to clear ${source}.log`, e)
     } finally {
@@ -240,7 +240,7 @@ export default function LogsPage() {
           label="Log source"
           items={SOURCE_TABS}
           active={source}
-          onChange={id => switchSource(id as LogSource)}
+          onChange={id => { switchSource(id as LogSource); }}
         />
 
         <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 152, maxWidth: 290 }}>
@@ -259,7 +259,7 @@ export default function LogsPage() {
           <input
             type="text"
             value={textFilter}
-            onChange={e => setTextFilter(e.target.value)}
+            onChange={e => { setTextFilter(e.target.value); }}
             placeholder="Filter records..."
             aria-label="Filter log records"
             style={{
@@ -284,7 +284,7 @@ export default function LogsPage() {
           label="Refresh"
           compact
           onClick={() => {
-            if (!refreshBusyRef.current) loadFull(source)
+            if (!refreshBusyRef.current) void loadFull(source)
           }}
         />
         <Button
@@ -292,7 +292,7 @@ export default function LogsPage() {
           label="Clear log"
           compact
           disabled={clearing}
-          onClick={handleClearLogs}
+          onClick={() => { void handleClearLogs(); }}
         />
 
         {compactToolbar ? (
@@ -312,7 +312,7 @@ export default function LogsPage() {
             label="Log level"
             items={LEVEL_TABS}
             active={levelFilter}
-            onChange={id => setLevelFilter(id as LevelFilter)}
+            onChange={id => { setLevelFilter(id as LevelFilter); }}
           />
         )}
       </ModuleHeader>
@@ -320,7 +320,7 @@ export default function LogsPage() {
       <VolumeHistogram
         buckets={histogram}
         live={autoRefresh}
-        onToggleLive={() => setAutoRefresh(a => !a)}
+        onToggleLive={() => { setAutoRefresh(a => !a); }}
         errors={logStats.errors}
         warnings={logStats.warnings}
         passes={logStats.passes}
@@ -332,7 +332,7 @@ export default function LogsPage() {
         active={activeSubsystem}
         total={records.length}
         onToggle={toggleSubsystem}
-        onClear={() => setActiveSubsystem(null)}
+        onClear={() => { setActiveSubsystem(null); }}
       />
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
@@ -364,7 +364,7 @@ export default function LogsPage() {
               {records.length === 0 ? (
                 <button
                   type="button"
-                  onClick={() => loadFull(source)}
+                  onClick={() => { void loadFull(source); }}
                   style={textBtnStyle}
                 >
                   refresh
@@ -416,16 +416,18 @@ const RAW_BAR_RE = /^\s*(\d+)%\|[^|]*\|\s*(.*)$/
 
 // use an indeterminate fill only when neither counts nor a raw percentage exists.
 function SolverDock({ bar }: { bar: TqdmBar }) {
+  // bind the optional counts to consts so `known` and `showTiming` narrow them everywhere.
+  const { current, total, elapsedS } = bar
   const raw = bar.rawBar ? RAW_BAR_RE.exec(bar.rawBar) : null
-  const known = bar.current != null && bar.total != null && bar.total > 0
+  const known = current != null && total != null && total > 0
   const pct = known
-    ? Math.min(100, Math.round((bar.current! / bar.total!) * 100))
+    ? Math.min(100, Math.round((current / total) * 100))
     : raw
       ? Math.min(100, parseInt(raw[1], 10))
       : null
-  const showTiming = known && bar.elapsedS != null && bar.elapsedS > 0 && bar.current! > 0
-  const rate = showTiming ? bar.current! / bar.elapsedS! : 0
-  const remain = showTiming && pct != null && pct < 100 ? (bar.total! - bar.current!) / rate : null
+  const showTiming = known && elapsedS != null && elapsedS > 0 && current > 0
+  const rate = showTiming ? current / elapsedS : 0
+  const remain = showTiming && pct != null && pct < 100 ? (total - current) / rate : null
   const detail = bar.detail || raw?.[2] || 'working'
 
   return (
@@ -448,7 +450,7 @@ function SolverDock({ bar }: { bar: TqdmBar }) {
         <span style={{ flex: 1 }} />
         {known ? (
           <span className="tabular-nums" style={{ color: 'var(--ink-6)', flexShrink: 0, whiteSpace: 'nowrap' }}>
-            {bar.current!.toLocaleString()} / {bar.total!.toLocaleString()}
+            {current.toLocaleString()} / {total.toLocaleString()}
             {pct != null ? ` | ${pct}%` : ''}
             {remain != null ? ` | ${fmtDur(remain)} remaining` : ''}
             {showTiming && rate >= 1 ? ` | ${fmtRate(rate)}/s` : ''}
