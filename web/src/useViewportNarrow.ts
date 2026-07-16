@@ -14,9 +14,9 @@ export function useViewportNarrow(thresholdPx = 1100): boolean {
     typeof window !== 'undefined' ? window.innerWidth < thresholdPx : false,
   )
   useEffect(() => {
-    const onResize = () => setNarrow(window.innerWidth < thresholdPx)
+    const onResize = () => { setNarrow(window.innerWidth < thresholdPx); }
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    return () => { window.removeEventListener('resize', onResize); }
   }, [thresholdPx])
   return narrow
 }
