@@ -75,7 +75,7 @@ export function renderTqdmBar(current: number, total: number, detail?: string, e
   const barEmpty = '.'.repeat(Math.max(0, width - filled - 1))
 
   const showTiming = elapsedS != null && elapsedS > 0 && current > 0
-  const rate = showTiming ? current / elapsedS! : 0
+  const rate = showTiming ? current / elapsedS : 0
   const remainS = showTiming && ratio < 1 ? (total - current) / rate : 0
 
   return (
@@ -88,7 +88,7 @@ export function renderTqdmBar(current: number, total: number, detail?: string, e
       {showTiming && (
         <>
           <span className="log-operator">{' ['}</span>
-          <span className="log-duration">{fmtDur(elapsedS!)}</span>
+          <span className="log-duration">{fmtDur(elapsedS)}</span>
           <span className="log-operator">{'<'}</span>
           <span className="log-duration">{fmtDur(remainS)}</span>
           <span className="log-operator">{', '}</span>
@@ -152,10 +152,8 @@ export function parseProgressBars(lines: string[], source: LogSource, cachedScan
         solverDone = true
         continue // keep scanning backward for the completion bar
       }
-      if (!solverRaw) {
-        const m = line.match(/\[solver\]\s+(\d+%\|.+)/)
-        if (m) { solverRaw = m[1]; break }
-      }
+      const m = line.match(/\[solver\]\s+(\d+%\|.+)/)
+      if (m) { solverRaw = m[1]; break }
     }
 
     if (solverRaw) bars.push({ tag: 'solver', rawBar: solverRaw })
