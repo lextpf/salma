@@ -1,5 +1,5 @@
 import { computeInstallProgress } from '../useInstallConsole'
-import { fmtDur, fmtRate, parseProgressBars } from '../progressBarParsing'
+import { fmtDur, fmtRate, parseProgressBars, type TqdmBar } from '../progressBarParsing'
 import { STAGES, segmentFills, stageIndexForOp } from './stages'
 import type { InstallationJob } from '../types'
 
@@ -72,11 +72,17 @@ export default function StageMeter({ job, rawLines, activeOp, errored = false }:
   const numeral = pct != null ? String(pct) : tone === 'error' ? '!' : done ? '100' : '--'
 
   // omit rate and ETA until the same tqdm record provides enough data.
-  const bar = parseProgressBars(rawLines, 'salma')[0]
-  const counted = bar?.current != null && bar.total != null
-  const timed = counted && bar!.elapsedS != null && bar!.elapsedS > 0 && bar!.current! > 0
-  const rate = timed ? bar!.current! / bar!.elapsedS! : 0
-  const remain = timed && bar!.current! < bar!.total! ? (bar!.total! - bar!.current!) / rate : null
+  // the list is empty before the first tqdm line arrives, so there is often no bar.
+  // alias the fields once and let counted and timed narrow them for every use below.
+  const bars = parseProgressBars(rawLines, 'salma')
+  const bar: TqdmBar | undefined = bars.length > 0 ? bars[0] : undefined
+  const current = bar?.current
+  const total = bar?.total
+  const elapsedS = bar?.elapsedS
+  const counted = current != null && total != null
+  const timed = counted && elapsedS != null && elapsedS > 0 && current > 0
+  const rate = timed ? current / elapsedS : 0
+  const remain = timed && current < total ? (total - current) / rate : null
 
   // discard stale rate and ETA after failure.
   const failed = tone === 'error'
@@ -84,7 +90,7 @@ export default function StageMeter({ job, rawLines, activeOp, errored = false }:
     ? (job.error ?? label)
     : [
       label,
-      counted ? `${bar!.current!.toLocaleString()} / ${bar!.total!.toLocaleString()}` : null,
+      counted ? `${current.toLocaleString()} / ${total.toLocaleString()}` : null,
       timed ? (rate >= 1 ? `${fmtRate(rate)}/s` : `${fmtRate(1 / rate)}s each`) : null,
       remain != null ? `eta ${fmtDur(remain)}` : null,
     ].filter(Boolean).join('  |  ')
