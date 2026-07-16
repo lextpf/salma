@@ -36,8 +36,11 @@ export default function InstallPage() {
   // lock intake while unavailable, purged, or installing.
   const locked = !pluginInstalled || systemUnavailable || isInstalling
 
+  // useFileDrop expects a void callback, so drop the install promise here.
+  const onFiles = useCallback((files: FileList) => { void handleFileSelect(files); }, [handleFileSelect])
+
   const { isDragging, inputRef, openPicker, onInputChange, onDragOver, onDragLeave, onDrop } =
-    useFileDrop({ onFiles: handleFileSelect, disabled: locked })
+    useFileDrop({ onFiles, disabled: locked })
 
   // installs run sequentially. the first non-terminal job is active.
   const active = (() => {
@@ -91,7 +94,7 @@ export default function InstallPage() {
         <Button
           icon="science"
           label={testRunning ? 'Running...' : 'Run tests'}
-          onClick={handleRunTests}
+          onClick={() => { void handleRunTests(); }}
           disabled={!pluginInstalled || testRunning || isInstalling}
           running={testRunning}
           compact={compactToolbar}
@@ -99,7 +102,7 @@ export default function InstallPage() {
         <Button
           icon="power"
           label={pluginActionRunning === 'deploy' ? 'Deploying...' : pluginPurged ? 'Deploy plugin' : 'Deploy'}
-          onClick={handleDeployPlugin}
+          onClick={() => { void handleDeployPlugin(); }}
           disabled={systemUnavailable || pluginActionRunning !== null || isInstalling}
           variant={pluginPurged ? 'primary' : 'ghost'}
           running={pluginActionRunning === 'deploy'}
@@ -108,7 +111,7 @@ export default function InstallPage() {
         <Button
           icon="delete"
           label={pluginActionRunning === 'purge' ? 'Purging...' : 'Purge'}
-          onClick={handlePurgePlugin}
+          onClick={() => { void handlePurgePlugin(); }}
           disabled={!pluginInstalled || pluginActionRunning !== null || isInstalling}
           variant="danger"
           running={pluginActionRunning === 'purge'}
