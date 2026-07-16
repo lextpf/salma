@@ -53,7 +53,7 @@ export function useChromeStatus(): ChromeStatus {
         return
       }
       inFlightRef.current = true
-      Promise.all([
+      void Promise.all([
         getMo2Status().catch(() => null),
         getFomodScanStatus().catch(() => null),
         getTestStatus().catch(() => null),
@@ -104,7 +104,7 @@ export function useChromeStatus(): ChromeStatus {
 
   useEffect(() => {
     const id = setInterval(() => { setNow(new Date()); }, 1000)
-    return () => clearInterval(id)
+    return () => { clearInterval(id); }
   }, [])
 
   const engineState: EngineState = installRunning
