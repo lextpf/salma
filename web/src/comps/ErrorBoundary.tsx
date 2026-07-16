@@ -43,7 +43,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           <button
             type="button"
             className="tool-btn tool-btn-ink"
-            onClick={() => this.setState({ hasError: false, error: null })}
+            onClick={() => { this.setState({ hasError: false, error: null }); }}
           >
             <MIcon name="refresh" size={13} />
             <span>Try again</span>
