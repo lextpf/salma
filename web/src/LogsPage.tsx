@@ -73,7 +73,7 @@ export default function LogsPage() {
     if (retryTimerRef.current) return
     retryTimerRef.current = setTimeout(() => {
       retryTimerRef.current = null
-      loadFull(false)
+      void loadFull(false)
     }, RETRY_DELAY_MS)
   }
 
@@ -144,7 +144,7 @@ export default function LogsPage() {
     offsetRef.current = undefined
     setLogStats({ errors: 0, warnings: 0, passes: 0 })
     resetScroll()
-    loadFull(true)
+    void loadFull(true)
     return () => {
       if (abortRef.current) abortRef.current.abort()
     }
@@ -218,7 +218,7 @@ export default function LogsPage() {
       offsetRef.current = undefined
       setLogStats({ errors: 0, warnings: 0, passes: 0 })
       resetScroll()
-      loadFull()
+      void loadFull()
     } catch (e) {
       console.warn(`[logs] failed to clear ${source}.log`, e)
     } finally {
@@ -252,13 +252,13 @@ export default function LogsPage() {
       >
         <Kicker num="03" label="Logs" />
 
-        <Tabs variant="pill" items={SOURCE_TABS} active={source} onChange={id => setSource(id as LogSource)} />
+        <Tabs variant="pill" items={SOURCE_TABS} active={source} onChange={id => { setSource(id as LogSource); }} />
 
         <div style={{ position: 'relative', flex: 1, maxWidth: 300 }}>
           <input
             type="text"
             value={textFilter}
-            onChange={e => setTextFilter(e.target.value)}
+            onChange={e => { setTextFilter(e.target.value); }}
             placeholder="Filter records..."
             aria-label="Filter log records"
             style={{
@@ -280,7 +280,7 @@ export default function LogsPage() {
         <button
           type="button"
           onClick={() => {
-            if (!refreshBusyRef.current) loadFull(false)
+            if (!refreshBusyRef.current) void loadFull(false)
           }}
           aria-label="Refresh log"
           title="Refresh"
@@ -299,14 +299,14 @@ export default function LogsPage() {
           <MIcon name="delete_sweep" size={13} />
         </button>
 
-        <Tabs variant="pill" items={LEVEL_TABS} active={levelFilter} onChange={id => setLevelFilter(id as LevelFilter)} />
+        <Tabs variant="pill" items={LEVEL_TABS} active={levelFilter} onChange={id => { setLevelFilter(id as LevelFilter); }} />
       </div>
 
       {/* Volume strip */}
       <VolumeHistogram
         buckets={histogram}
         live={autoRefresh}
-        onToggleLive={() => setAutoRefresh(a => !a)}
+        onToggleLive={() => { setAutoRefresh(a => !a); }}
         errors={logStats.errors}
         warnings={logStats.warnings}
         passes={logStats.passes}
@@ -320,7 +320,7 @@ export default function LogsPage() {
           active={activeSubsystem}
           total={records.length}
           onToggle={toggleSubsystem}
-          onClear={() => setActiveSubsystem(null)}
+          onClear={() => { setActiveSubsystem(null); }}
         />
 
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
