@@ -32,7 +32,7 @@ function EditableField({ value, onChange, placeholder, ariaLabel }: EditableFiel
       placeholder={placeholder}
       spellCheck={false}
       autoComplete="off"
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(e) => { onChange(e.target.value); }}
       style={{
         fontFamily: MONO,
         fontSize: 'var(--fs-body)',
