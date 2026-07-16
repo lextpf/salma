@@ -154,8 +154,8 @@ export default function DiagnosticsTab({ diagnostics }: DiagnosticsTabProps) {
     { k: 'nodes', v: diagnostics.nodes_explored.toLocaleString() },
     {
       k: 'cache',
-      v: diagnostics.cache?.hit ? diagnostics.cache.source || 'hit' : 'miss',
-      color: diagnostics.cache?.hit ? 'var(--moss)' : 'var(--ink-5)',
+      v: diagnostics.cache.hit ? diagnostics.cache.source || 'hit' : 'miss',
+      color: diagnostics.cache.hit ? 'var(--moss)' : 'var(--ink-5)',
     },
   ]
 
