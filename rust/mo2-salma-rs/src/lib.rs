@@ -9,7 +9,12 @@
 //! Ported so far:
 //! - [`utils`] - shared helpers, mirror of `src/Utils.hpp`/`src/Utils.cpp`
 //! - [`types`] - shared types from `src/Types.hpp` (currently `PluginType`)
+//! - [`fomod_ir`] - the FOMOD IR structs, mirror of `src/FomodIR.hpp`
+//! - [`fomod_ir_parser`] - XML -> IR, mirror of `src/FomodIRParser.hpp`/`.cpp`
+//!   plus the pugixml document-load (encoding autodetection) semantics
 
 pub mod capi;
+pub mod fomod_ir;
+pub mod fomod_ir_parser;
 pub mod types;
 pub mod utils;
