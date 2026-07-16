@@ -83,7 +83,7 @@ export default function InstallPage() {
 
   const pluginInstalled = status?.pluginInstalled === true
   const systemUnavailable = statusLoading || !status
-  const pluginPurged = !systemUnavailable && status?.pluginInstalled === false
+  const pluginPurged = !systemUnavailable && status.pluginInstalled === false
 
   const { jobs, isInstalling, handleFileSelect, cancel } = useInstallation(pluginInstalled)
   const { testRunning, testError, handleRunTests } = useTestRunner(pluginInstalled)
