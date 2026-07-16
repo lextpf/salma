@@ -63,11 +63,11 @@ export function useChromeStatus(): ChromeStatus {
     }
     check()
     const id = setInterval(check, 8000)
-    return () => clearInterval(id)
+    return () => { clearInterval(id); }
   }, [])
 
   useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 1000)
+    const id = setInterval(() => { setNow(new Date()); }, 1000)
     return () => clearInterval(id)
   }, [])
 
@@ -85,7 +85,7 @@ export function useChromeStatus(): ChromeStatus {
     backendUp,
     engineState,
     now,
-    mo2On: backendUp === true && status?.configured === true && status?.pluginInstalled === true,
+    mo2On: backendUp === true && status?.configured === true && status.pluginInstalled === true,
     serverOn: backendUp === true,
     dllLoaded: status?.pluginInstalled === true,
     pluginPurged: backendUp === true && status?.pluginInstalled === false,
