@@ -33,8 +33,8 @@ export function usePolling(
       }
     };
 
-    poll();
+    void poll();
     const id = setInterval(poll, intervalMs);
-    return () => clearInterval(id);
+    return () => { clearInterval(id); };
   }, [intervalMs, enabled]);
 }
