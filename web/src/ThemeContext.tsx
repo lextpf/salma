@@ -9,7 +9,7 @@ function storedMode(): ThemeMode {
 }
 
 function systemTheme(): Theme {
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
 /**
@@ -23,11 +23,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [system, setSystem] = useState<Theme>(systemTheme)
 
   useEffect(() => {
-    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
-    if (!mq) return
-    const onChange = (e: MediaQueryListEvent) => setSystem(e.matches ? 'dark' : 'light')
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const onChange = (e: MediaQueryListEvent) => { setSystem(e.matches ? 'dark' : 'light'); }
     mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
+    return () => { mq.removeEventListener('change', onChange); }
   }, [])
 
   const theme: Theme = mode === 'system' ? system : mode
