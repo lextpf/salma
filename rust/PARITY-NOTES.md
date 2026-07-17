@@ -469,8 +469,10 @@ behavior below was read from that exact source, not from docs.
   content.
 - `compile_condition` (`FomodIRParser.cpp:52`): operator attr
   `as_string("And")` -> `parse_condition_op` (miss -> And); depth > 32
-  (`MAX_DEPENDENCY_DEPTH`, mirrored from `FomodDependencyEvaluator.hpp:16`
-  as a `pub const` in `fomod_ir_parser.rs` until Task 5 re-homes it) returns
+  (`MAX_DEPENDENCY_DEPTH`, mirrored from `FomodDependencyEvaluator.hpp:16`;
+  it lived in `fomod_ir_parser.rs` during Task 4 and Task 5 re-homed it to
+  `fomod_dependency_evaluator.rs`, matching the C++ header that owns it - the
+  parser now imports it from there) returns
   Composite/op=Or with NO children (always-false); more than 10000 element
   children truncate, and the counter increments BEFORE dispatch so unknown
   (skipped) elements consume cap slots exactly as in C++; only element
@@ -816,3 +818,289 @@ each, naming the C++ ground truth, the Rust site, and the validation used.
   return `TooDeep`), and `depth_guard_counts_only_real_element_nesting`
   (comment/CDATA/PI bodies, DOCTYPE subset, quoted `>` in attribute
   values, siblings, and self-closing elements add no depth).
+
+## Task 5 - Dependency evaluator + atom expansion
+
+Port of `src/FomodDependencyEvaluator.hpp`/`.cpp` to
+`rust/mo2-salma-rs/src/fomod_dependency_evaluator.rs`, `src/FomodAtom.hpp` to
+`fomod_atom.rs`, and `src/FomodInferenceAtoms.hpp`/`.cpp` to
+`fomod_inference_atoms.rs`, plus `FomodDependencyContext` (`src/Types.hpp:85`)
+added to `types.rs`. 67 new tests: 38 evaluator micro-tests, 4 atom-datatype
+tests, 17 expansion micro-tests, 8 fixture integration tests
+(`tests/fomod_atoms_fixtures.rs`).
+
+### Scoping decision: assemble_json deferred to Task 10
+
+`FomodInferenceAtoms.cpp` also contains `assemble_json` and its
+anonymous-namespace helpers (`build_plugin_object`, `lookup_plugin_diag`,
+`lookup_group_diag`, `lookup_step_diag`). They depend on `SolverResult`
+(Task 8/9) and `InferenceDiagnostics` (Task 10) and are therefore ported in
+Task 10, not here. Everything else in the file - `is_safe_dest`,
+`expand_entry`, `expand_all_atoms`, `build_atom_index`,
+`compute_excluded_dests`, and `build_target_tree` - is ported now.
+
+### API mapping (C++ -> Rust)
+
+- `evaluate_condition(cond, flags, const FomodDependencyContext*)` ->
+  `fomod_dependency_evaluator::evaluate_condition(&FomodCondition,
+  &HashMap<String, String>, Option<&FomodDependencyContext>)`. The C++
+  default argument `context = nullptr` becomes an explicit `None`.
+- `evaluate_condition_inferred(cond, flags, override, ctx)` ->
+  `evaluate_condition_inferred(..., ExternalConditionOverride,
+  Option<&FomodDependencyContext>)`. The ctx parameter is kept for signature
+  parity and named `_context`: the C++ `LeafEvaluator<Inferred>` stores ctx
+  and NEVER reads it, so inferred mode ignores any context entirely (pinned
+  by `inferred_mode_ignores_context_entirely`).
+- `evaluate_plugin_type(plugin, flags, ctx)` -> same name. The deliberate
+  ctx asymmetry is replicated exactly: `Some(ctx)` evaluates each type
+  pattern in NORMAL mode, `None` evaluates it in INFERRED mode with the
+  `Unknown` override (so external leaves are false). The CSP callers all
+  pass nullptr/None and always get inferred-Unknown semantics. The Some
+  branch is pinned by
+  `plugin_type_ctx_presence_selects_normal_vs_inferred_unknown`; the None
+  branch (inferred dispatch, NOT Normal-with-null-ctx) is pinned by
+  `plugin_type_none_ctx_dispatches_inferred_not_normal_with_null_ctx` via a
+  state="Missing"/"Inactive" File leaf, the only leaf shape whose value
+  differs between the two dispatches without a context.
+- `ExternalConditionOverride` -> same name, `#[repr(u8)]`,
+  Unknown=0/ForceFalse=1/ForceTrue=2 (pinned by a repr test), plus
+  `#[derive(Default)]` = Unknown (the C++ default at every call site).
+- `MAX_DEPENDENCY_DEPTH` re-homed from `fomod_ir_parser.rs` (its temporary
+  Task 4 location) to `fomod_dependency_evaluator.rs`, matching
+  `FomodDependencyEvaluator.hpp:16`; the parser imports it from there. The
+  Task 4 bullet above was updated.
+- The C++ `LeafEvaluator<EvalMode>` template becomes two private leaf
+  functions (`eval_leaf_normal`, `eval_leaf_inferred`) selected by the
+  public entry points; `evaluate_condition_core` takes a
+  `&dyn Fn(&FomodCondition) -> bool`. Compile-time vs runtime dispatch is
+  unobservable; behavior is identical.
+- `eval_plugin_dep` returns plain `bool` in Rust: the C++ `PluginDepResult`
+  struct carries `is_active`/`file_exists` members that NO caller reads
+  (only `.met` is consumed, `FomodDependencyEvaluator.cpp:267`); porting the
+  dead fields would only trip dead-code lints.
+- `FomodAtom`/`TargetFile`/`AtomIndex`/`TargetTree`/`ExpandedAtoms` ->
+  `fomod_atom.rs`, identical fields and defaults (`plugin_index` /
+  `conditional_index` default to -1, so `Default` is hand-implemented; enum
+  `FomodAtom::Origin` becomes module-level `Origin` since Rust has no nested
+  enum). The two C++ `for_each` overloads (const/mutable template) become
+  `for_each(&self, impl FnMut(&FomodAtom))` and `for_each_mut`, preserving
+  the iteration order required -> per_plugin (flat order) -> per_conditional.
+- `expand_entry`/`expand_all_atoms`/`build_atom_index`/
+  `compute_excluded_dests`/`build_target_tree`/`is_safe_dest` ->
+  `fomod_inference_atoms.rs`, same names. `std::lower_bound` over the sorted
+  entry list becomes `slice::partition_point` (identical first->=prefix
+  semantics, including the empty-prefix "match everything" identity).
+- `FomodDependencyContext` -> `types.rs`, `HashSet<String>` fields with the
+  C++ field-semantics comments (installed_files normalized lowercase
+  forward-slash; installed_plugins lowercase; installed_fomods matched
+  case-sensitively - the asymmetry with plugins is intentional and pinned by
+  `fomod_dep_matches_exactly_without_lowercasing`).
+
+### C++ fs::path semantics helpers
+
+Rust `Path::extension()`/`file_name()` have different edge rules than MSVC
+`fs::path` (`extension()` here EXCLUDES the dot; `.gitignore` has extension
+"gitignore" in Rust but none in C++; `"file."` has none in Rust but "." in
+C++), so the evaluator uses two private helpers instead of `std::path`:
+
+- `cpp_path_filename`: everything after the last '/' or '\\' (both are
+  separators on Windows); empty for a trailing separator. When NO separator
+  is present, a leading drive root-name is stripped, matching MSVC's
+  decomposition: "C:foo.esp" -> "foo.esp", "C:" -> "" (the drive prefix is
+  exactly one ASCII letter + ':', so "CC:foo" and "1:foo" are returned
+  whole). Root-names only exist at the start of a path, so the strip never
+  applies after a separator ("dir/C:bar" -> "C:bar", as in MSVC). MSVC's UNC
+  root-name rule is also replicated: EXACTLY two leading separators followed
+  by a non-separator extend the root-name to the next separator, so when no
+  further separator exists the whole path is the root-name and filename() is
+  "" ("//server.esp", "\\\\server", "\\\\?", "//C:" -> ""). With a further
+  separator the generic last-separator rule already agrees with MSVC
+  ("//server/share.esp" -> "share.esp"), three or more leading separators
+  form no root-name ("///foo" -> "foo"), and the device prefixes
+  ("\\\\?\\", "\\\\.\\", "\\??\\") need no dedicated parsing for filename
+  purposes because they always carry a separator at index 3
+  ("\\\\?\\foo" -> "foo" either way).
+- `cpp_path_extension`: INCLUDES the leading dot; "." and ".." have no
+  extension; a filename whose only dot is leading (".gitignore") has no
+  extension; "file." has extension ".". Via the root-name strip, "C:.esp"
+  has NO extension (filename ".esp", leading-dot-only), matching MSVC.
+
+Pinned by `cpp_path_helpers_mirror_msvc_fs_path`; every drive/UNC/device
+expectation in that test was verified against an MSVC 2022 fs::path probe
+program. Only ".esp"/".esm"/".esl" comparisons consume these in practice,
+but the edge rules are locked so the helper can be reused verbatim later.
+
+History: round 1 shipped without the UNC rule, justified as "unreachable
+because every filename() call is gated on a plugin extension". Round 2
+review showed that argument is circular (the extension gate is computed by
+the same helper) and the divergence WAS reachable: the C++ parser stores
+file_path raw (`FomodIRParser.cpp:94`), so a crafted
+`<fileDependency file="//server.esp"/>` reaches `eval_file_dep`, where MSVC
+sees filename ""/extension "" (no installed_plugins fallback, non-plugin
+"Inactive" semantics) while the old helper saw "server.esp"/".esp".
+Implementing the two-leading-separator rule removed the divergence;
+`file_dep_unc_root_name_is_not_a_plugin` pins the evaluator-level behavior
+("Active" -> false and "Inactive" -> true for an active plugin named by a
+UNC-root-name-only path, fallback restored below a real UNC share).
+
+### Version parsing: std::getline semantics
+
+`parse_version_parts` replicates the C++ strip-then-split exactly, including
+the getline-on-'.' quirk: a TRAILING '.' produces NO trailing empty token
+("1.2." -> [1,2,0] after padding), while consecutive dots and a leading dot
+DO produce empty tokens ("1..2" -> [1,0,2], ".1" -> [0,1,0]). Empty tokens
+and i32-overflow tokens map to 0 (`std::stoi` throw -> catch -> 0 in C++;
+`parse::<i32>().unwrap_or(0)` here; C++ logs a warning per malformed token,
+dropped until Task 17). The cleaned string keeps only ASCII digits and '.'
+(C++ `isdigit` is ASCII under the "C" locale). Tail-pad to length 3.
+`compare_version_parts` iterates to max(len) with missing components read as
+0, so "1.2" == "1.2.0" < "1.2.1". Pinned by `parse_version_parts_table`
+(includes "v1.2.3-beta", "1.2.3.99 (custom)", "99999999999999999999" -> 0)
+and `compare_version_parts_pads_missing_with_zero`. The FOMM check compares
+required <= actual against the hardcoded "0.13.21"
+(`fomm_dep_boundary_at_hardcoded_version` pins the exact boundary).
+
+### Evaluator behaviors replicated (each test-pinned)
+
+- Composite: empty And -> true, empty Or -> false (this is how the parser's
+  depth-truncation bail, an empty Or, is always-false, and a
+  pattern-without-dependencies, an empty And, is always-true);
+  short-circuiting; depth guard `depth > 32` with depth incremented only
+  when recursing into a Composite child (innermost node at depth 32 still
+  evaluates, at 33 is unmet).
+- Flag leaves are handled in the shared core BEFORE leaf dispatch, so they
+  evaluate identically in both modes: missing flag -> `flag_value.empty()`,
+  present -> exact case-sensitive equality, no trimming.
+- File dep (Normal mode): empty path -> false; existence checked in order
+  installed_files (normalized path) -> installed_plugins (lowercased
+  filename, only for .esp/.esm/.esl of the ORIGINAL path) -> archive_root
+  join -> game_path join (both probes non-throwing; `Path::exists()` matches
+  the C++ `fs::exists(p, ec)` error->false semantics); no ctx -> not
+  existing. States are case-sensitive literals: "Missing" -> !exists;
+  "Inactive" -> for existing plugin files !active, else !exists; anything
+  else (unknown strings log a warning in C++, dropped until Task 17) ->
+  treated as "Active" -> exists.
+- Plugin dep: empty name -> false; active = lowercased name in
+  installed_plugins; file_exists fallback probes `game_path/Data/<RAW name>`
+  (raw, not lowered, as in the C++ join; exercised by
+  `plugin_dep_inactive_uses_game_data_dir_with_raw_name` but NOT pinned:
+  NTFS is case-insensitive, so a lowered-name probe would still hit the same
+  file and no test can observe the difference on the only supported
+  platform); type "Inactive" -> exists && !active; ANY other type string
+  (including default "Active" and garbage) -> active.
+- Fomod dep: exact case-sensitive name match, no ctx -> false.
+- Game dep: no ctx or empty game_path -> true (standalone); version compare
+  only when both required and ctx.game_version are non-empty.
+- Fose: unconditionally true in BOTH modes (the C++ returns true before the
+  mode branch); the unreachable default switch arm is also true.
+- Inferred mode: File/Plugin/Fomod -> `override == ForceTrue` (Unknown and
+  ForceFalse both false); Game/Fomm/Fose -> true. Full 3x6 matrix pinned by
+  `inferred_mode_override_matrix`.
+
+### Atom expansion behaviors replicated (each test-pinned)
+
+- Folder branch: prefix = source, "/"-anchored unless empty (path-boundary:
+  "foo" does not match "foobar.esp"; empty source matches every entry via
+  the lower_bound("")/starts_with("") identities); dest = raw
+  `destination + "/" + rel` concatenation (or bare rel when destination is
+  empty) BEFORE `normalize_path`; top-level `meta.ini` (exact
+  post-normalization match) skipped; unsafe destinations skipped;
+  source_path is the sorted entry string AS-IS; file_size from the sizes map
+  (missing -> 0); content_hash 0.
+- File branch: meta.ini check on `normalize_path(destination)` but BOTH the
+  is_safe_dest check and the stored dest_path use the RAW
+  `entry.destination` unchanged (the parser already normalized it; pinned by
+  `file_branch_keeps_destination_unchanged`).
+- Unsafe-destination reality check: the task brief's example "../evil" is
+  actually SAFE - `is_safe_destination` normalizes first and
+  `normalize_path` strips ".." segments, so "../evil" -> "evil". After
+  normalization the only reachable unsafe class is a drive-letter/absolute
+  path; the skip tests use "C:/evil" and the "../evil" acceptance is pinned
+  explicitly. This matches C++ exactly (same normalize-first order).
+- `expand_all_atoms`: doc_order increments once per file-ENTRY expansion
+  call (all atoms of one folder entry share one document_order; an entry
+  matching ZERO archive files still consumes a slot - pinned by cbbe_3ba's
+  pattern 95/96). Pass order required -> normal plugin entries -> auto
+  (always_install/install_if_usable) plugin entries with flat_idx recomputed
+  from 0 -> conditional patterns; per_plugin sized from
+  `total_flat_plugins` BEFORE the walk; per_conditional sized from the
+  pattern count.
+- `build_atom_index` preserves the for_each order within each destination's
+  Vec (required first, then plugins by flat index, then conditionals -
+  pinned by the racecompat contested-destination test).
+- `compute_excluded_dests` truth table: Required-origin atoms set
+  all_auto=false (intentional - lets the solver detect incomplete installs);
+  normal plugin atoms set all_auto=false; conditional atoms set
+  has_conditional and do NOT touch all_auto; excluded iff !has_conditional
+  && all_auto && distinct sources <= 1.
+- `build_target_tree` skips the exact key "meta.ini" only; TargetFile hash
+  starts 0.
+
+### No-logging-until-Task-17 sites (C++ log_warning calls silently dropped)
+
+- `FomodDependencyEvaluator.cpp:69` malformed version component (per token).
+- `FomodDependencyEvaluator.cpp:157` unknown file dependency state.
+- `FomodDependencyEvaluator.cpp:329` condition tree exceeds maximum depth.
+- `FomodInferenceAtoms.cpp:70` and `:105` unsafe atom destination (folder
+  and file branches).
+
+Each site carries a source comment naming the dropped C++ log line.
+
+### Fixture-test derivation record (tests/fomod_atoms_fixtures.rs)
+
+- Input prep replicates `FomodInferenceService.cpp:833-886`:
+  sorted_norm_entries skips trailing-"/"/"\\" directory markers, normalizes
+  (keeping post-normalization duplicates), byte-wise sorts;
+  norm_entry_sizes is keyed by normalized path with values looked up by the
+  ORIGINAL path, last-write-wins on collisions (synthetic pin:
+  `prep_entries_skips_dir_markers_and_last_write_wins`). The fomod prefix is
+  derived from the archive listing with the exact is_candidate boundary
+  (`== "fomod/moduleconfig.xml"` or `.ends_with("/fomod/moduleconfig.xml")`,
+  so "xfomod/..." is not a candidate), shallowest-by-'/'-count first, ties
+  by shorter length keeping the first otherwise, then the suffix and its
+  joining slash are stripped (synthetic pin:
+  `derive_prefix_boundary_and_shallowest_rules`; cross-check against the
+  case.json `module_config_entry` derivation for all 15 fixtures).
+- Expected counts (per-origin atom counts, atom_index size, excluded size
+  for all 15 fixtures) were derived with a throwaway scratchpad Python
+  script (NOT committed) that mirrors the C++ rules - normalize_path,
+  resolve_file_destination, parse_file_entry, get_ordered_nodes ordering,
+  the 3-pass expansion, index/exclusion - directly from each fixture's
+  ModuleConfig.xml + archive_entries.json. Three diverse fixtures were then
+  HAND-VERIFIED against the raw XML and archive entries before freezing the
+  literals: zip_exactlyone_mu_joint_fix (all 8 atoms checked by hand),
+  zip_exactlyone_racecompat (group Ascending re-sort, flat indices 0-9, the
+  full doc_order sequence 0-25, priorities 0/1/2/3, the
+  destination-fallback-to-source readme file entry), and zip_11step_cbbe_3ba
+  (stress: 100 plugins, 97 conditional patterns; independent grep-level
+  counts confirmed 123 plugin-side entries -> first conditional at doc 123,
+  35 archive files under the plugin-0 folder, and pattern 95's
+  zero-match folder consuming doc 221 so pattern 96 lands on 222).
+  Sample dest-mapping assertions (source, dest, priority, document_order,
+  origin, plugin_index, conditional_index, file_size) cover ~5 atoms in each
+  of the three fixtures, mixing folder-expanded and single-file entries.
+- excluded_dests is 0 for every fixture because NO committed fixture uses
+  alwaysInstall/installIfUsable (grep-verified over the corpus); the
+  exclusion truth table is therefore exercised synthetically in the
+  `compute_excluded_dests_truth_table` unit test, and the fixture suite only
+  guards the zero case. Flagged for Task 16's wider corpus.
+- Reachability property test: every destination in target_tree.json (except
+  MO2's meta.ini) must be present in the atom index. Holds for 14 of 15
+  fixtures. DOCUMENTED EXCEPTION, investigated before touching anything:
+  rar_exactlyone_heel_volume's archive contains only 8 entries (3 esp
+  variants + fomod metadata + screenshots), while its installed mod folder
+  holds 36 files including 34 base-mod .wav files and a readme that are NOT
+  in the archive at all - the FOMOD patch was installed into an existing mod
+  folder. This is a fixture-data property, not an implementation divergence:
+  the authoritative C++ output (expected.json ->
+  diagnostics.repro.missing/reproduced) records exactly 35 missing / 1
+  reproduced for this case, and the test asserts THOSE numbers (read from
+  expected.json at test time) instead of weakening the property.
+
+### Accepted divergences (Task 5)
+
+- None behavioral. Representational only: `Option<&ctx>` for nullable
+  pointers, `bool` instead of the dead-field `PluginDepResult`, two leaf
+  functions instead of the `LeafEvaluator` template, `for_each`/`for_each_mut`
+  instead of const/non-const overloads, and dropped log lines (Task 17), all
+  documented above.

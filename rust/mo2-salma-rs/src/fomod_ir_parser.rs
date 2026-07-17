@@ -36,6 +36,7 @@ use std::fmt;
 
 use roxmltree::{Document, Node, ParsingOptions};
 
+use crate::fomod_dependency_evaluator::MAX_DEPENDENCY_DEPTH;
 use crate::fomod_ir::{
     FomodCondition, FomodConditionOp, FomodConditionType, FomodConditionalPattern, FomodFileEntry,
     FomodGroup, FomodInstaller, FomodPlugin, FomodStep, FomodTypePattern, parse_condition_op,
@@ -45,12 +46,6 @@ use crate::utils::{
     get_ordered_nodes, normalize_path, parse_plugin_type_string, resolve_file_destination,
     xml_bool_attribute_true,
 };
-
-/// Maximum depth for recursive condition compilation/evaluation. Mirror of
-/// `mo2core::MAX_DEPENDENCY_DEPTH` in `src/FomodDependencyEvaluator.hpp`
-/// (guards against malformed XML). Task 5 (dependency evaluator) shares this
-/// constant.
-pub const MAX_DEPENDENCY_DEPTH: i32 = 32;
 
 /// Guard against malicious/malformed XML: depth bounds the
 /// `compile_condition_impl` recursion, breadth prevents CPU-bound DoS from
