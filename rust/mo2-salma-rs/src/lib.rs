@@ -26,6 +26,11 @@
 //!   metrics, mirror of `src/FomodForwardSimulator.hpp`/`.cpp` plus the
 //!   `compare_trees`/`collect_mismatched_dests` helpers from
 //!   `src/FomodCSPSolver.cpp`
+//! - [`fomod_propagator`] - the deterministic constraint-propagation pre-pass,
+//!   mirror of `src/FomodPropagator.hpp`/`.cpp`
+//! - [`inference_diagnostics`] - the `ReasonCode` enum + `ReasonDetail`, a
+//!   partial mirror of `src/InferenceDiagnostics.hpp`/`.cpp` (the confidence
+//!   scoring, accumulator, and schema-v2 JSON helpers arrive in Task 10)
 
 pub mod capi;
 pub mod fomod_atom;
@@ -35,5 +40,7 @@ pub mod fomod_forward_simulator;
 pub mod fomod_inference_atoms;
 pub mod fomod_ir;
 pub mod fomod_ir_parser;
+pub mod fomod_propagator;
+pub mod inference_diagnostics;
 pub mod types;
 pub mod utils;

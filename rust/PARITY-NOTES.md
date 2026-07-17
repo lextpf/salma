@@ -1336,3 +1336,205 @@ nothing was dropped from it. `compare_trees_impl`/`compare_trees`/
   `load_expected`/`committed_cases`). The Task 5 `fomod_atoms_fixtures.rs` still
   carries its own inline copies to avoid churning a passing test; de-duplicating
   it onto `common` is a safe follow-up.
+
+## Task 7 - Constraint propagator
+
+Ported `src/FomodPropagator.hpp`/`.cpp` (the deterministic fixpoint pre-pass
+that narrows plugin domains and can short-circuit the CSP solver) and, as its
+first consumer, the WHOLE `ReasonCode` enum + `reason_code_to_string` from
+`src/InferenceDiagnostics.hpp`/`.cpp` lines 43-93/236-290. The rest of
+`InferenceDiagnostics.hpp` (the `Reason` struct, confidence types, the
+`InferenceDiagnosticsBuilder` accumulator, the `serialize_*` helpers) is Task 10.
+
+### API mapping
+
+| C++ (mo2core)                                  | Rust                                                        |
+|------------------------------------------------|-------------------------------------------------------------|
+| `struct PropagationResult`                     | `fomod_propagator::PropagationResult`                       |
+| `propagate(installer, atoms, atom_index, target, excluded, overrides, context*)` | `fomod_propagator::propagate(&installer, &atoms, &atom_index, &target, &excluded, &overrides, Option<&ctx>)` |
+| `enum class ReasonCode : int`                  | `inference_diagnostics::ReasonCode` (`#[repr(i32)]`)        |
+| `reason_code_to_string(ReasonCode)`            | `inference_diagnostics::reason_code_to_string -> &'static str` |
+| (no C++ analogue - typed detail)               | `inference_diagnostics::ReasonDetail` (one variant so far)  |
+
+`PropagationResult` field mapping (all sized to the installer hierarchy):
+
+| C++ field                                             | Rust field                                     |
+|-------------------------------------------------------|-------------------------------------------------|
+| `vector<vector<vector<bool>>> narrowed_domains`       | `Vec<Vec<Vec<bool>>> narrowed_domains`          |
+| `vector<tuple<int,int>> resolved_groups`              | `Vec<(i32, i32)> resolved_groups`               |
+| `bool fully_resolved`                                 | `bool fully_resolved`                           |
+| `vector<vector<vector<int>>> plugin_reasons`          | `Vec<Vec<Vec<ReasonCode>>> plugin_reasons`      |
+| `vector<vector<vector<json>>> plugin_reason_details`  | `Vec<Vec<Vec<Option<ReasonDetail>>>>`           |
+| `vector<vector<string>> resolved_by`                  | `Vec<Vec<String>> resolved_by`                  |
+
+- `plugin_reasons`: the C++ stores `int` ONLY to avoid pulling
+  `InferenceDiagnostics.hpp` into `FomodPropagator.hpp` (documented in the C++
+  header). The Rust port has no such include cycle and stores the `ReasonCode`
+  enum directly; read the numeric value with `code as i32`.
+- `plugin_reason_details`: the C++ uses a nullable `nlohmann::json` (null =
+  "no detail"). The port uses `Option<ReasonDetail>` where `ReasonDetail` is a
+  typed enum whose ONLY current variant is `UniqueFileEvidence { files, count }`
+  (the only detail the propagator emits). Tasks 8-10 add variants; Task 10 maps
+  each to schema-v2 JSON. No JSON model is introduced now.
+
+### The two unused parameters (`atom_index`, `overrides`)
+
+`propagate` keeps both to match the call signature the CSP solver and inference
+orchestrator (Tasks 8/12) use, but the C++ BODY never reads either. Verified by
+grep over `FomodPropagator.cpp`: `atom_index` appears only on the parameter line
+(53) and `overrides` only on the parameter line (56); neither `atom_index.` nor
+`overrides.` occurs anywhere in the body. Why they are unread:
+
+- `overrides` (step-visibility / conditional tri-state) is irrelevant because
+  the propagator treats ALL steps as visible (the load-bearing C++ comment "All
+  steps treated as visible"); it never evaluates `FomodStep::visible`, so there
+  is nothing for a visibility override to affect.
+- `atom_index` (reverse dest -> atoms map) is unused because the file-evidence
+  rule reads `atoms.per_plugin[flat_start + pi]` directly (forward, per-plugin),
+  not the reverse index.
+
+Rust does NOT warn on unused function parameters, so both are kept un-prefixed
+(NOT `_atom_index` / `_overrides`) to preserve the exact call signature. A
+`let _ = (atom_index, overrides);` line documents the intent at the top of the
+body.
+
+### Doc-vs-code gap: `Required` is NOT pinned
+
+`FomodPropagator.hpp`'s Doxygen (rule P) says "`Required` and `NotUsable`
+plugins are pinned". The CODE does NOT pin Required: for `eff == Required` the
+plugin-type rule only calls `record_plugin_reason(..., FORCED_REQUIRED)` - it
+never sets `domain[pi]`, never eliminates siblings, and never resolves the
+group. Only `NotUsable` mutates the domain. The port reproduces the CODE
+(record-only), and `rule1_required_records_reason_but_does_not_pin_or_eliminate_sibling`
+proves it via a `SelectExactlyOne` group with a Required + Optional pair that
+stays unresolved (usable_count 2). This is a C++ doc-vs-code gap; per the
+read-only-C++ rule it is logged here, not fixed.
+
+### The three rules and the 16-iteration fixpoint
+
+Per group (skipping already-resolved groups), rules 1-3 run in sequence on the
+SAME domain so rule 2 sees rule 1's eliminations and rule 3 sees both:
+
+1. **Plugin type** - `eff = evaluate_plugin_type(plugin, &flags, context)`
+   (reused from Task 5). `NotUsable` eliminates ONLY when NOT
+   `dynamic_without_context` (`context.is_none() && !type_patterns.is_empty()`):
+   a dynamic `dependencyType` outcome during context-free inference is not
+   definitive enough to prune. `Required` records `FORCED_REQUIRED` (no domain
+   change; see the gap above).
+2. **File evidence** - for each usable plugin, its group-unique NON-auto,
+   non-excluded dests: if `has_any_unique && all_unique_miss` eliminate
+   (`NO_FILE_EVIDENCE`); else if any unique dest hits the target record
+   `UNIQUE_FILE_EVIDENCE` with up to 4 example files and the full hit `count`.
+   Auto atoms (`always_install` / `install_if_usable`) and `excluded_dests`
+   never enter the evidence sets.
+3. **Cardinality** - `group_resolved` per group type: `SelectAll` always;
+   `SelectExactlyOne`/`SelectAtLeastOne` at `usable_count == 1`;
+   `SelectAtMostOne`/`SelectAny` at `usable_count == 0` ONLY (a `SelectAtMostOne`
+   with one survivor keeps "select zero" valid, left for the CSP). On resolve:
+   mark `resolved[si][gi]`, push `resolved_groups`, bump `total_resolved`, set
+   `changed`, attribute `resolved_by`, stamp kept-plugin reasons, then accumulate
+   the selected plugins' `condition_flags` into `flags` (last-write-wins).
+
+The outer loop runs `0..MAX_ITERATIONS` (16), setting `changed = false` each
+pass and breaking early when a full step/group walk makes no change. Fixpoint
+iteration (not topological or single-pass) is required because FOMOD flag
+dependencies can form cycles; the cap guards malformed installers, not
+non-termination (each rule is monotone).
+`fixpoint_flag_set_by_later_group_resolves_earlier_group_next_iteration`
+proves a group ordered BEFORE the group that sets its trigger flag can only
+resolve on a later iteration (a single pass would miss it).
+
+`resolved_by` attribution: `SelectAll -> "propagation.select_all"`; else if any
+plugin reason in the group is `UNIQUE_FILE_EVIDENCE`/`NO_FILE_EVIDENCE` ->
+`"propagation.unique_evidence"`; else `"propagation.cardinality"`. (Note: the
+C++ header doc lists a `"propagation.required"` string in the value set, but the
+CODE never emits it - Required does not resolve a group. The port matches the
+CODE.)
+
+### Determinism pin on the `unordered_set` detail ordering
+
+Rule 2's C++ builds `plugin_dests[pi]` as a `std::unordered_set<std::string>`
+and, for a positive hit, pushes `unique_target_hits` in that set's iteration
+order, then records the FIRST 4 as the detail `files`. That order is
+nondeterministic across runs/platforms. The port pins it: `plugin_dests` is a
+`BTreeSet<String>` and `unique_target_hits` is sorted byte-ascending before
+taking the first 4. This is DIAGNOSTIC-ONLY and never changes a selection,
+because the two decision booleans are order-independent reductions:
+`has_any_unique = OR over (unique?)` and `all_unique_miss = AND over (unique ->
+miss)` are commutative/associative, so the eliminate-vs-record branch is fixed
+regardless of iteration order; only the example `files` list (and its ordering)
+depends on it. The full `count` is taken BEFORE truncation to 4, so it can
+exceed `files.len()`.
+`rule2_unique_hit_detail_is_sorted_first_four_with_full_count` and the fixture
+`propagation_is_deterministic` test lock this down.
+
+### `fully_resolved` predicate
+
+`fully_resolved = (total_resolved == total_groups)` where `total_groups` is the
+sum of group counts over all steps. When true the CSP solver is skipped by the
+caller (`FomodInferenceService.cpp` passes `&propagation` only when
+`resolved_groups` is non-empty; `FomodCSPOptions.cpp` then prunes each group's
+option space to the narrowed domain). For a fully-resolved installer the
+narrowed domain IS the selection, so the fixture test
+`fully_resolved_fixtures_match_the_selection_grid` asserts
+`narrowed_domains == expected.json` selection grid for each such fixture. Over
+the 15 committed cases, propagation fully resolves exactly 2
+(`sevenz_selectall_hh_walk`, `sevenz_3step_tk_dodge`); the count is pinned (the
+identities are derived at runtime, not hardcoded).
+
+### `record_plugin_reason` first-wins + bounds
+
+Mirror of the C++ file-scoped helper: overwrites the reason only when the
+current code is `IMPLICIT_DEFAULT`, and sets the (moved) detail at the same
+index. The C++ guards `s`/`g`/`p` against negative values AND upper bounds; in
+Rust the indices are unsigned loop counters so the negative guard is vacuous -
+only the upper-bound guard is kept (documented in the fn doc).
+`record_plugin_reason_keeps_first_code` proves first-wins: a plugin that earns
+`UNIQUE_FILE_EVIDENCE` in rule 2 and would earn `FORCED_EXACTLY_ONE` in rule 3
+keeps the former.
+
+### ReasonCode ported in full now
+
+The entire enum (24 codes: `IMPLICIT_DEFAULT`, `FORCED_*`, `*_FILE_EVIDENCE`,
+`CARDINALITY_FORCED`, `CSP_PHASE_*`, `CONDITION_*`/`STEP_*`,
+`EXTRA_FILE_PRODUCED`, `FOMOD_PLUS_CACHE`) is ported with the EXACT C++ integer
+values (`#[repr(i32)]`), even though the propagator only emits 8 of them, so
+Tasks 8-10 (which reference the CSP/condition/step/penalty/cache codes) inherit
+stable values. `reason_code_to_string` is an exhaustive match returning the C++
+SCREAMING_SNAKE enumerator text; the C++ `"UNKNOWN"` miss-branch is UNREACHABLE
+under a closed Rust enum and is therefore encoded as the absence of a wildcard
+arm (same pattern as `fomod_ir::group_type_to_string`). Variant identifiers are
+Rust UpperCamelCase (`ForcedRequired`); the wire names come from
+`reason_code_to_string`. `ReasonCode` derives `Default = ImplicitDefault` to
+match the C++ zero-value default.
+
+### Dropped logger site (Task 17)
+
+The C++ `propagate` ends with `logger.log("[propagate] resolved N/M groups,
+fully_resolved=...")`. There is no Rust `Logger` until Task 17, so the log site
+is dropped (a comment marks it in the body). No behavior depends on it. (The
+`FomodInferenceService.cpp` `[infer] Step 7c` log is a separate caller-side site
+in Task 12, not part of `propagate`.)
+
+### Test-harness reuse
+
+`build_selection_grid` (the positional `expected.json` -> `[step][group][plugin]`
+reconstructor) was hoisted from `tests/fomod_forward_simulator_fixtures.rs` into
+`tests/common/mod.rs` so both the Task 6 and Task 7 fixture suites share one
+copy; the Task 6 file now imports it. No behavior change.
+
+### Accepted divergences (Task 7)
+
+- Representational only. The C++ holds `auto& domain = result.narrowed_domains
+  [si][gi]` (an alias into `result`) while `record_plugin_reason(result, ...)`
+  also mutates `result`; Rust forbids that aliasing, so the port `std::mem::take`s
+  the group domain into a local `Vec<bool>`, works on it, and writes it back at
+  the end of the group. The reason arrays are disjoint fields, so recording
+  reasons while the domain is checked out is sound and observably identical.
+- The three `for pi in 0..n` loops that ONLY index `domain` were rewritten as
+  `domain.iter().enumerate()` / `iter_mut().enumerate()` to satisfy clippy
+  `needless_range_loop`; `pi` still indexes `group.plugins`. Semantically
+  identical.
+- The C++ `assert(group_resolved, ...)` before flag accumulation is trivially
+  true inside the `if group_resolved` block; the port drops it (a comment notes
+  why) rather than emit a vacuous `debug_assert!`.
