@@ -19,10 +19,19 @@
 //! - [`fomod_inference_atoms`] - atom expansion/indexing/target tree, mirror
 //!   of `src/FomodInferenceAtoms.hpp`/`.cpp` (`assemble_json` lands with the
 //!   diagnostics port in Task 10)
+//! - [`fomod_csp_types`] - `ReproMetrics` + `InferenceOverrides`, partial
+//!   mirror of `src/FomodCSPTypes.hpp` and `src/FomodCSPSolver.hpp` (the rest
+//!   of the CSP datatypes arrive in Tasks 8-9)
+//! - [`fomod_forward_simulator`] - the forward install simulator and repro
+//!   metrics, mirror of `src/FomodForwardSimulator.hpp`/`.cpp` plus the
+//!   `compare_trees`/`collect_mismatched_dests` helpers from
+//!   `src/FomodCSPSolver.cpp`
 
 pub mod capi;
 pub mod fomod_atom;
+pub mod fomod_csp_types;
 pub mod fomod_dependency_evaluator;
+pub mod fomod_forward_simulator;
 pub mod fomod_inference_atoms;
 pub mod fomod_ir;
 pub mod fomod_ir_parser;
