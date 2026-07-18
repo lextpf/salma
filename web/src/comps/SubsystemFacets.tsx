@@ -126,7 +126,7 @@ export default function SubsystemFacets({ facets, active, total, onToggle, onCle
             count={f.count}
             share={f.count / facetMax}
             on={active === f.tag}
-            onClick={() => onToggle(f.tag)}
+            onClick={() => { onToggle(f.tag); }}
           />
         ))
       )}
