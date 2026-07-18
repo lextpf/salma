@@ -219,8 +219,8 @@ export default function Inspector({ name, priority, entry, detail, error, onRetr
 
   const tree = detail.outputTree ?? []
   const fileCount = detail.outputTreeTotal ?? tree.length
-  const installedBytes = tree.reduce((sum, f) => sum + (f.size ?? 0), 0)
-  const pluginCount = tree.filter(f => /\.(esp|esm|esl)$/i.test(f.path ?? '')).length
+  const installedBytes = tree.reduce((sum, f) => sum + f.size, 0)
+  const pluginCount = tree.filter(f => /\.(esp|esm|esl)$/i.test(f.path)).length
   const truncated = detail.outputTreeTruncated === true
   const shortTime = formatClockShort(stamp)
 
@@ -305,7 +305,7 @@ export default function Inspector({ name, priority, entry, detail, error, onRetr
             label="Record detail"
             items={TAB_ITEMS}
             active={tab}
-            onChange={id => setTab(id as TabId)}
+            onChange={id => { setTab(id as TabId); }}
           />
         </div>
 
