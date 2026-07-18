@@ -292,7 +292,7 @@ export default function RecordsList({
                 key={row.key}
                 className="fm-row"
                 data-selected={selected ? 'true' : undefined}
-                onClick={() => onSelect(entry.name)}
+                onClick={() => { onSelect(entry.name); }}
                 title={entry.name}
                 style={{
                   display: 'grid',
