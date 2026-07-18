@@ -28,6 +28,9 @@
 //!   flag/condition helpers, mirror of `src/FomodCSPPrecompute.hpp`/`.cpp`
 //! - [`fomod_csp_options`] - per-group option enumeration, reduction, and the
 //!   SelectAny caps, mirror of `src/FomodCSPOptions.hpp`/`.cpp`
+//! - [`fomod_csp_solver`] - the CSP solve entry point plus greedy/local-search/
+//!   repair and the iterative memoized backtracker across the five phases,
+//!   mirror of `src/FomodCSPSolver.cpp`/`src/FomodCSPSolverPhases.cpp`
 //! - [`fomod_forward_simulator`] - the forward install simulator and repro
 //!   metrics, mirror of `src/FomodForwardSimulator.hpp`/`.cpp` plus the
 //!   `compare_trees`/`collect_mismatched_dests` helpers from
@@ -42,6 +45,7 @@ pub mod capi;
 pub mod fomod_atom;
 pub mod fomod_csp_options;
 pub mod fomod_csp_precompute;
+pub mod fomod_csp_solver;
 pub mod fomod_csp_types;
 pub mod fomod_dependency_evaluator;
 pub mod fomod_forward_simulator;
