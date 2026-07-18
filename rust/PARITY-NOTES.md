@@ -1912,3 +1912,188 @@ subset, count pinned at 12 with the two propagation-resolved fixtures asserted b
 name; the inconsistent 3 diverge only on the size split; solver coverage on the 2
 fast inconsistent fixtures via size-independent invariants; determinism over
 `zip_exactlyone_racecompat` + `rar_7step_sos`).
+
+## Task 10 - Diagnostics + assemble_json (schema-v2 byte parity)
+
+Ports the confidence scoring + reason accumulation (`src/InferenceDiagnostics.hpp`
+/ `.cpp`), the schema-v2 `assemble_json` (`src/FomodInferenceAtoms.cpp:306-467`),
+`add_output_tree` (`src/FomodInferenceService.cpp:468-503`), and a hand-written
+`nlohmann::json::dump(2)`-faithful JSON serializer. The acceptance bar is
+BYTE-IDENTICAL output to the golden `expected.json` files (each of which IS the
+C++ DLL's `assemble_json -> add_output_tree -> dump(2)` output).
+
+### The JSON value model + serializer (`src/json.rs`)
+
+No `serde` / `serde_json` (forbidden, and unnecessary): a small owned
+`Value { Null, Bool, Int(i64), Double(f64), Str, Array(Vec), Object(BTreeMap) }`
+plus a `dump(indent)` that reproduces `nlohmann::json::dump(2)` byte for byte.
+The rules replicated, each verified against the golden fixtures:
+
+- **Sorted object keys.** `nlohmann::json` is `std::map`-backed (NOT
+  `ordered_json`), so members serialize in `std::string operator<` order ==
+  unsigned-byte lexicographic == Rust `str` `Ord`. `Value::Object` stores a
+  `BTreeMap<String, Value>`, which iterates in exactly that order (all keys are
+  ASCII). The C++ builders insert in a different order everywhere (e.g.
+  `serialize_reason` inserts code, message, detail but emits code, detail,
+  message); the Rust code can insert in any order because `dump` sorts.
+- **Pretty layout (indent 2).** Two spaces per nesting level; `\n` newlines; an
+  object member line is `<indent>"key": value` (colon + single space); an array
+  element line is `<indent>value`; members/elements are joined with `,\n`;
+  `{`/`[` are immediately followed by `\n`; the closing `}`/`]` sits on its own
+  line at the PARENT indent. No BOM.
+- **No trailing newline.** The document ends in `}` (verified: golden files end
+  `... 5d 0a 7d`).
+- **Empty containers inline.** `[]` and `{}` render on a single line with no
+  interior whitespace even in pretty mode (`"reasons": []`, `"deselected": []`,
+  `"plugins": []`).
+- **Int vs Double is load-bearing.** `Value::Int` prints a plain decimal (`0`,
+  `2`, `802816`); `Value::Double` always carries a decimal point (`0.0`, `1.0`,
+  `0.54`). The same zero renders `"0"` (a count/size/schema_version/nodes/
+  timing/detail.count/outputTree.size) or `"0.0"` (every confidence field)
+  depending on the C++ static type. The assembler constructs the correct variant
+  per field and never unifies them.
+- **The float `.0` rule.** nlohmann's `dtoa` and Rust's `f64` `Display` both emit
+  the SHORTEST decimal that round-trips to the same IEEE-754 double, so for
+  identical bits the digit sequence is identical. The one systematic gap is that
+  Rust prints an integer-valued double as `1`/`0` while nlohmann prints
+  `1.0`/`0.0`. `format_double` appends `.0` exactly when the shortest string
+  contains none of `.`, `e`, `E` (and the value is finite; non-finite -> `null`,
+  matching nlohmann). The float oracle test pins the hard values (0.6, 0.54,
+  0.58, 0.8950000000000001, 0.9176215277777777 and its adjacent double
+  0.9176215277777778, 0.9999999999999999, 0.9250000000000002) and every one
+  reproduces the golden bytes. Latent risk (documented, NOT exercised): a
+  magnitude outside ~`[1e-5, 1e16]` would switch nlohmann to an exponent format
+  this simple rule does not replicate - no confidence value (all in `[0, 1]`) or
+  fixture size falls there.
+- **String escaping** matches nlohmann's default (`ensure_ascii=false`): `"` ->
+  `\"`, `\` -> `\\`, the C0 shortcuts `\b \f \n \r \t`, any other control byte
+  `< 0x20` as `\u00XX` with LOWERCASE hex; `/` is NOT escaped; non-ASCII UTF-8
+  passes through as raw bytes.
+
+### Confidence math - NO rounding on the JSON path
+
+The four-component weighted composite (evidence 0.40, propagation 0.30, repro
+0.20, ambiguity 0.10), `clamp01`, `weighted_mean` (weight <= 0 -> 1.0),
+`band_for` (>=0.85 high, >=0.50 medium, else low), the per-plugin / per-group
+(all-forced short-circuit to composite 1.0, else file-count weighted mean) /
+per-step / run aggregation, the run penalties (extra capped at 5 * 0.05;
+csp.fallback -0.10), and the `reproduced` backfill (target-derived or
+selected-file-count proxy) are ported verbatim. Confidence doubles are stored
+and serialized WITHOUT rounding - the wire value is the raw `f64`. The
+`composite_from` multiply-add expression order is preserved EXACTLY so the bits
+match: an all-ones plugin yields `0.9999999999999999` (not `1.0`), which every
+fixture emits for propagation-forced plugins; the all-forced GROUP short-circuit
+writes a literal `1.0`. No FMA contraction happens in either language for
+`a * b + c` (MSVC without `/fp:fast`, Rust without `mul_add`), so the two produce
+identical doubles. `clamp01` is expressed as `f64::clamp(0.0, 1.0)`, which is
+behaviorally identical to the C++ branch form for every value the formula
+produces (below-range -> 0.0, above-range -> 1.0, in-range unchanged, and the
+never-occurring NaN -> NaN); the finite constant bounds mean it cannot panic.
+
+### Reason accumulation order (must be same codes, same order)
+
+`set_cache_hit` (Tier-1) first when applicable -> `absorb_propagation` (walks
+`[s][g][p]` ascending, one reason per non-`IMPLICIT_DEFAULT`
+`plugin_reasons[s][g][p]`, message by code, detail from
+`plugin_reason_details`; copies `resolved_by` per group) -> `absorb_solver`
+(per group with non-empty `phase_per_group`, a `CSP_PHASE_*` reason on each
+SELECTED plugin with detail `{nodes, phase}`; sets `resolved_by` only if still
+empty; mirrors `selected`; computes group counts: propagation if `resolved_by`
+starts `propagation` or == `cache.fomod_plus`, csp if starts `csp.`) ->
+`set_step_visibility` (one step reason) -> `finalize`. `serialize_reason` always
+emits `code` + `message` and emits `detail` only when present (`Some(_)`),
+sorted-emitting `code, detail, message`.
+
+### Added `ReasonDetail::CspPhase { nodes: i32, phase: String }`
+
+Task 7 shipped `ReasonDetail` with only `UniqueFileEvidence { files, count }`.
+`absorb_solver` needs a second variant for the CSP-phase detail
+(`InferenceDiagnostics.cpp:612-614` builds `{phase, nodes}`), so a
+`CspPhase { nodes, phase }` variant was added; it serializes to sorted keys
+`nodes` then `phase`. Without it every CSP-selected plugin would lose its
+`reasons[].detail` and the bytes would not match.
+
+### `add_output_tree` ported here though its C++ home is FomodInferenceService.cpp
+
+`add_output_tree` lives in the (Task 12) inference-service TU in C++, but the
+byte oracle needs it, so it is ported into `fomod_inference_atoms.rs` alongside
+`assemble_json`. It sorts the simulated tree by `dest_path` (byte order), caps at
+`kMaxOutputTreeEntries = 5000` (setting `outputTreeTruncated`/`outputTreeTotal`
+when capped; no fixture triggers it), and emits `{path, size, source}`
+(sorted keys) with `size` an `Int` (`atom.file_size`). Task 12's inference
+orchestrator will call it.
+
+### `timings_ms` non-determinism + inject-from-fixture strategy
+
+`diagnostics.timings_ms.{list,scan,solve,total}` are wall-clock (`FomodInference
+Service.cpp:1304`) and non-reproducible. For the byte tests the four integers are
+parsed from `expected.json` and fed to `set_run_timings`, exactly as the task
+prescribes; timing VALUES are never asserted from a live clock.
+
+### Step visibility injected from the fixture (compute_overrides is Task 12)
+
+15/16 committed fixtures carry a per-step visibility reason
+(`STEP_VISIBILITY_FORCED` when `visible`, or `STEP_VISIBILITY_UNKNOWN`; never
+`STEP_NOT_VISIBLE` in the corpus - both keep `visible: true`). These come from
+`FomodInferenceService::compute_overrides` (step-unique-dest evidence), which is
+Task 12 orchestration and NOT ported here. Following the same principle as the
+timings injection, the byte tests read each step's visibility CODE and `visible`
+flag from `expected.json` and feed `set_step_visibility`; the Rust builder then
+produces the reason MESSAGE + ordering, so the message mapping and serialization
+are still validated end to end. Only the `compute_overrides` OUTPUT (a 3-valued
+code per step) is borrowed. Step reasons do not feed the confidence math, so this
+injection does not affect any confidence value.
+
+### Two C++ non-determinisms that block FULL byte parity (NOT fixed - logged)
+
+1. **`outputTree[].size` size-0 discrepancy.** `atom.file_size` came, in the
+   golden run, from a LIVE archive listing that returned 0 for many entries (see
+   "Task 6" above), whereas the committed `archive_entries.json` snapshots carry
+   populated sizes. A Rust run over the fixture atoms therefore emits the
+   populated size where the golden run emitted 0 (e.g. `base files/condhhw.esp`:
+   fixture 193, golden 0). Fixture-data issue, not a serializer bug.
+2. **`UNIQUE_FILE_EVIDENCE` `files` example order.** The C++ propagator builds
+   the up-to-4 example list by iterating a `std::unordered_set<std::string>`
+   (`FomodPropagator.cpp:170,206-215`) - MSVC hash order. Both the ORDER and,
+   when `count > 4` (20 of 42 details in the corpus), the chosen 4-of-N SUBSET
+   are unreproducible. The Rust propagator (Task 7) sorts byte-ascending for
+   determinism. This is a C++ nondeterminism (unordered-container iteration
+   leaking into output); per the task rules the C++ is left untouched and the
+   Rust deterministic order stands.
+
+Neither is fixable without corrupting the port (option 1 would need the golden
+listing; option 2 would need to replicate MSVC's STL hash). Both are isolated by
+the tests rather than papered over.
+
+### Byte-exact fixture subset (count PINNED = 1)
+
+- `full_byte_parity_over_consistent_fixtures` asserts, over all 12
+  archive-consistent fixtures, that the ENTIRE document is byte-identical AFTER
+  collapsing the two nondeterministic regions above (every bare `"size": N`
+  outputTree line, and every `"files": [ ... ]` example block). Passing this
+  proves confidence, reasons, codes, messages, `count`, `nodes`, resolved_by,
+  timings, cache, step visibility, key ordering, indentation, escaping, and the
+  float format ALL match byte-for-byte. It then counts fixtures whose UNnormalized
+  document is byte-identical (sizes and files included) and PINS that count at
+  **1** (`rar_exactlyone_heel_volume` - the only consistent fixture with no
+  size-0 outputTree atom AND no multi-hit `UNIQUE_FILE_EVIDENCE` example list).
+- `unique_file_evidence_content_matches_over_consistent_fixtures` recovers the
+  coverage the `files` normalization drops: `count` matches at every position,
+  and where `count <= 4` (the full hit set fits) the file SET matches C++ - so
+  the normalization hides only ORDER, never content.
+- `skeleton_and_output_tree_over_all_fixtures` asserts, for EVERY committed
+  fixture (consistent, the 3 size-split inconsistent, and the non-terminating
+  `zip_11step_cbbe_3ba`, all driven from the KNOWN expected grid so the solver is
+  never run on the non-terminating case), that `schema_version`, the
+  step/group/plugin skeleton (names + selected/deselected split), and the
+  `outputTree` (path, source) pairs byte-match. The size-split fixtures are ONLY
+  skeleton/outputTree comparable because their `diagnostics.repro` counters (and
+  thus the repro confidence component) diverge from `expected.json` on the
+  documented size split, so a full-document comparison is not meaningful for them.
+
+Tests added: `src/json.rs` (11 serializer + float-oracle + introspection
+micro-tests), `src/inference_diagnostics.rs` (confidence-formula boundary tables,
+the mu_joint_fix worked example, all-forced short-circuit, run penalties, the
+reproduced backfill both branches, and serialize_* key-order/detail-shape tests),
+`tests/inference_diagnostics_test.rs` (the 9 ported GoogleTest cases 1:1), and
+`tests/inference_diagnostics_fixtures.rs` (the 4 byte-parity fixture tests).

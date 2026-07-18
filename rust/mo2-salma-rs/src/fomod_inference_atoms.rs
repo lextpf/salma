@@ -1,19 +1,28 @@
 //! Atom expansion for inference - Rust port of `src/FomodInferenceAtoms.hpp`
-//! / `.cpp`, EXCEPT `assemble_json` and its anonymous-namespace helpers
-//! (`build_plugin_object`, `lookup_*_diag`), which depend on `SolverResult` /
-//! `InferenceDiagnostics` and are ported in Task 10 (see PARITY-NOTES
-//! "Task 5").
+//! / `.cpp`, plus the schema-v2 [`assemble_json`] and its anonymous-namespace
+//! helpers (`build_plugin_object`, `lookup_*_diag`) added in Task 10, and
+//! [`add_output_tree`] (whose C++ home is `FomodInferenceService.cpp`; it is
+//! ported here so this module owns the full byte oracle - see PARITY-NOTES
+//! "Task 10").
 //!
 //! Resolves IR file entries into concrete [`FomodAtom`]s by matching against
 //! the archive entry list, builds the destination index and exclusion set the
-//! solver scores against, and builds the [`TargetTree`] from the installed
-//! files. C++ log_warning call sites (unsafe destinations) emit nothing until
-//! the Task 17 logger lands; each is marked with a comment.
+//! solver scores against, builds the [`TargetTree`] from the installed files,
+//! and assembles the schema-v2 inference response. C++ log_warning call sites
+//! (unsafe destinations, out-of-bounds selection indices, output-tree cap) emit
+//! nothing until the Task 17 logger lands; each is marked with a comment.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::fomod_atom::{AtomIndex, ExpandedAtoms, FomodAtom, Origin, TargetFile, TargetTree};
+use crate::fomod_csp_types::SolverResult;
+use crate::fomod_forward_simulator::SimulatedTree;
 use crate::fomod_ir::{FomodFileEntry, FomodInstaller, total_flat_plugins};
+use crate::inference_diagnostics::{
+    GroupDiagnostics, InferenceDiagnostics, PluginDiagnostics, StepDiagnostics,
+    serialize_confidence, serialize_reason, serialize_run_diagnostics,
+};
+use crate::json::Value;
 use crate::utils::{is_safe_destination, normalize_path};
 
 /// Inference-side wrapper for path-traversal validation. Thin forwarder to
@@ -343,6 +352,177 @@ pub fn build_target_tree(installed_files: &HashMap<String, u64>) -> TargetTree {
         );
     }
     target
+}
+
+// ---------------------------------------------------------------------------
+// Assemble the schema-v2 JSON from a solver result + diagnostics
+// (mirror of `assemble_json` and its anonymous-namespace helpers in
+// `src/FomodInferenceAtoms.cpp:306-467`).
+// ---------------------------------------------------------------------------
+
+/// Maximum number of `outputTree` entries emitted before truncation. Mirror of
+/// the C++ `kMaxOutputTreeEntries` (`src/FomodInferenceService.cpp:470`).
+const MAX_OUTPUT_TREE_ENTRIES: usize = 5000;
+
+/// Build a plugin JSON object from name + diagnostic fields. Mirror of the C++
+/// `build_plugin_object`. Always carries `name` and `selected`; `confidence` and
+/// `reasons` ride along when the diagnostic record exists for this position.
+fn build_plugin_object(name: &str, selected: bool, diag: Option<&PluginDiagnostics>) -> Value {
+    let mut j = Value::object();
+    j.insert("name", Value::string(name));
+    j.insert("selected", Value::Bool(selected));
+    if let Some(diag) = diag {
+        j.insert("confidence", serialize_confidence(&diag.confidence));
+        let mut reasons = Value::array();
+        for r in &diag.reasons {
+            reasons.push(serialize_reason(r));
+        }
+        j.insert("reasons", reasons);
+    }
+    j
+}
+
+/// Look up the per-plugin diagnostic record, or `None` if any index is out of
+/// range. Mirror of the C++ `lookup_plugin_diag`.
+fn lookup_plugin_diag(
+    diag: &InferenceDiagnostics,
+    s: usize,
+    g: usize,
+    p: usize,
+) -> Option<&PluginDiagnostics> {
+    diag.steps
+        .get(s)
+        .and_then(|step| step.groups.get(g))
+        .and_then(|group| group.plugins.get(p))
+}
+
+/// Look up the per-group diagnostic record. Mirror of `lookup_group_diag`.
+fn lookup_group_diag(diag: &InferenceDiagnostics, s: usize, g: usize) -> Option<&GroupDiagnostics> {
+    diag.steps.get(s).and_then(|step| step.groups.get(g))
+}
+
+/// Look up the per-step diagnostic record. Mirror of `lookup_step_diag`.
+fn lookup_step_diag(diag: &InferenceDiagnostics, s: usize) -> Option<&StepDiagnostics> {
+    diag.steps.get(s)
+}
+
+/// Convert a [`SolverResult`] + [`InferenceDiagnostics`] into the schema-v2 JSON
+/// response object. Mirror of `mo2core::assemble_json`.
+///
+/// Walks the installer's step/group/plugin hierarchy and cross-references the
+/// solver's 3-D boolean selection grid to classify each plugin as selected or
+/// deselected. Out-of-bounds selection indices default to `false` (deselected);
+/// the C++ logs a warning there, which the port omits until the Task 17 logger
+/// lands.
+///
+/// The returned object carries `schema_version`, `steps`, and `diagnostics`;
+/// [`add_output_tree`] adds the `outputTree` sibling afterward (its C++ home is
+/// `FomodInferenceService.cpp`, but it is ported here so this module owns the
+/// full byte oracle - see PARITY-NOTES "Task 10").
+pub fn assemble_json(
+    installer: &FomodInstaller,
+    result: &SolverResult,
+    diagnostics: &InferenceDiagnostics,
+) -> Value {
+    let mut j_steps = Value::array();
+    for (si, step) in installer.steps.iter().enumerate() {
+        let mut j_step = Value::object();
+        j_step.insert("name", Value::string(&step.name));
+
+        if let Some(step_diag) = lookup_step_diag(diagnostics, si) {
+            j_step.insert("confidence", serialize_confidence(&step_diag.confidence));
+            j_step.insert("visible", Value::Bool(step_diag.visible));
+            let mut reasons = Value::array();
+            for r in &step_diag.reasons {
+                reasons.push(serialize_reason(r));
+            }
+            j_step.insert("reasons", reasons);
+        }
+
+        let mut j_groups = Value::array();
+        for (gi, group) in step.groups.iter().enumerate() {
+            let mut j_group = Value::object();
+            j_group.insert("name", Value::string(&group.name));
+
+            if let Some(group_diag) = lookup_group_diag(diagnostics, si, gi) {
+                j_group.insert("confidence", serialize_confidence(&group_diag.confidence));
+                j_group.insert("resolved_by", Value::string(&group_diag.resolved_by));
+                let mut reasons = Value::array();
+                for r in &group_diag.reasons {
+                    reasons.push(serialize_reason(r));
+                }
+                j_group.insert("reasons", reasons);
+            }
+
+            let mut j_selected = Value::array();
+            let mut j_deselected = Value::array();
+            for (pi, plugin) in group.plugins.iter().enumerate() {
+                let sel = result
+                    .selections
+                    .get(si)
+                    .and_then(|g| g.get(gi))
+                    .and_then(|p| p.get(pi))
+                    .copied()
+                    .unwrap_or(false);
+                let plugin_diag = lookup_plugin_diag(diagnostics, si, gi, pi);
+                let j_plugin = build_plugin_object(&plugin.name, sel, plugin_diag);
+                if sel {
+                    j_selected.push(j_plugin);
+                } else {
+                    j_deselected.push(j_plugin);
+                }
+            }
+            j_group.insert("plugins", j_selected);
+            j_group.insert("deselected", j_deselected);
+            j_groups.push(j_group);
+        }
+        j_step.insert("groups", j_groups);
+        j_steps.push(j_step);
+    }
+
+    let mut out = Value::object();
+    out.insert(
+        "schema_version",
+        Value::Int(diagnostics.schema_version as i64),
+    );
+    out.insert("steps", j_steps);
+    out.insert("diagnostics", serialize_run_diagnostics(&diagnostics.run));
+    out
+}
+
+/// Attach the inferred install's virtual output tree to `out` as a flat,
+/// path-sorted `outputTree` array of `{path, size, source}`. Mirror of the C++
+/// `add_output_tree` (`src/FomodInferenceService.cpp:468-503`).
+///
+/// The simulation's file map is unordered, so entries are sorted by destination
+/// path (byte order) for a stable diff. Large trees are capped at
+/// [`MAX_OUTPUT_TREE_ENTRIES`]; when capped, the `outputTreeTruncated` /
+/// `outputTreeTotal` siblings record the full count. `out` must be a
+/// [`Value::Object`] (panics otherwise, mirroring the C++ `json&` contract).
+pub fn add_output_tree(out: &mut Value, sim: &SimulatedTree) {
+    let mut entries: Vec<&FomodAtom> = sim.files.values().collect();
+    entries.sort_by(|a, b| a.dest_path.cmp(&b.dest_path));
+
+    let total = entries.len();
+    let truncated = total > MAX_OUTPUT_TREE_ENTRIES;
+    if truncated {
+        entries.truncate(MAX_OUTPUT_TREE_ENTRIES);
+        // The C++ logs a cap warning here; no logger until Task 17.
+    }
+
+    let mut tree = Value::array();
+    for atom in entries {
+        let mut entry = Value::object();
+        entry.insert("path", Value::string(&atom.dest_path));
+        entry.insert("size", Value::Int(atom.file_size as i64));
+        entry.insert("source", Value::string(&atom.source_path));
+        tree.push(entry);
+    }
+    out.insert("outputTree", tree);
+    if truncated {
+        out.insert("outputTreeTruncated", Value::Bool(true));
+        out.insert("outputTreeTotal", Value::Int(total as i64));
+    }
 }
 
 #[cfg(test)]
