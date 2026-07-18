@@ -19,9 +19,15 @@
 //! - [`fomod_inference_atoms`] - atom expansion/indexing/target tree, mirror
 //!   of `src/FomodInferenceAtoms.hpp`/`.cpp` (`assemble_json` lands with the
 //!   diagnostics port in Task 10)
-//! - [`fomod_csp_types`] - `ReproMetrics` + `InferenceOverrides`, partial
-//!   mirror of `src/FomodCSPTypes.hpp` and `src/FomodCSPSolver.hpp` (the rest
-//!   of the CSP datatypes arrive in Tasks 8-9)
+//! - [`fomod_csp_types`] - the CSP solver datatypes: `ReproMetrics` +
+//!   `InferenceOverrides` (Task 6) plus the full `Precompute`/option-cache/
+//!   solver-state type set (Task 8), mirror of `src/FomodCSPTypes.hpp`,
+//!   `src/FomodCSPSolver.hpp`, and `src/FomodCSPSolverInternal.hpp` (the solve
+//!   phases that consume these arrive in Task 9)
+//! - [`fomod_csp_precompute`] - `compute_evidence` + `build_precompute` + the
+//!   flag/condition helpers, mirror of `src/FomodCSPPrecompute.hpp`/`.cpp`
+//! - [`fomod_csp_options`] - per-group option enumeration, reduction, and the
+//!   SelectAny caps, mirror of `src/FomodCSPOptions.hpp`/`.cpp`
 //! - [`fomod_forward_simulator`] - the forward install simulator and repro
 //!   metrics, mirror of `src/FomodForwardSimulator.hpp`/`.cpp` plus the
 //!   `compare_trees`/`collect_mismatched_dests` helpers from
@@ -34,6 +40,8 @@
 
 pub mod capi;
 pub mod fomod_atom;
+pub mod fomod_csp_options;
+pub mod fomod_csp_precompute;
 pub mod fomod_csp_types;
 pub mod fomod_dependency_evaluator;
 pub mod fomod_forward_simulator;
