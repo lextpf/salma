@@ -2097,3 +2097,285 @@ the mu_joint_fix worked example, all-forced short-circuit, run penalties, the
 reproduced backfill both branches, and serialize_* key-order/detail-shape tests),
 `tests/inference_diagnostics_test.rs` (the 9 ported GoogleTest cases 1:1), and
 `tests/inference_diagnostics_fixtures.rs` (the 4 byte-parity fixture tests).
+
+## Task 11 - Archive layer
+
+Ports `src/ArchiveService.hpp` / `.cpp` (the libarchive + bit7z facade) onto a
+pure-crate stack chosen by a prior empirical corpus evaluation. `src/archive_service.rs`
+provides `EntryListing`, `use_bit7z` / format routing, `list_entries_with_sizes`
++ `list_entries`, `read_entry` + `read_entries_batch` (256 MiB cap, solid-batch
+strategy), `extract` + `extract_filtered` + `extract_prefix` (traversal
+rejection), and `create_zip`. The acceptance bar is BYTE parity of
+`list_entries_with_sizes` against the golden `archive_entries.json` corpus.
+
+### Evaluated crate stack (the only sanctioned new dependencies)
+
+- `zip = "8.6.0"`           - ZIP; native central-directory order, forward-slash paths.
+- `sevenz-rust2 = "0.21.3"` - 7z (and `.001` routing); solid-block aware, header-only listing.
+- `unrar = "0.5.8"`         - RAR; links the proprietary unRAR C sources via `unrar_sys`.
+
+Transitively this pulls `flate2` (zip inflate/deflate), `lzma-rust2` (7z LZMA),
+and `unrar_sys` (the `cc`-compiled unRAR vendor sources). No other deps added,
+the stack is not swapped.
+
+### Corpus byte-parity result: 16/16
+
+`tests/archive_service_fixtures.rs` opens each committed case's REAL source
+archive (from `case.json:source_archive_path`) and asserts the produced
+`[{path, size}]` list equals `archive_entries.json` EXACTLY (ordered, byte-exact
+path bytes + sizes) across all three formats. On this dev machine all 16
+archives are present and all 16 match. The test counts run-vs-skipped cases and,
+when any ran, asserts every one matched (never a subset / set-compare).
+
+### Per-format list normalization that reproduces the golden
+
+The golden `archive_entries.json` = the C++ `list_entries_with_sizes` serialized
+as `[{path, size}]`, where `path` keeps original casing and `size` is the
+uncompressed byte count. bit7z (and the `7z.exe`/`zipfile` tools that generated
+the golden) echo 7-Zip / WinRAR case-insensitive stored order. Reproduced
+per format:
+
+- ZIP (`zip` crate): iterate `by_index(0..len())` in native central-directory
+  order, NO sort; skip `is_dir()` entries; keep the stored forward-slash
+  `name()`. `size()` is the uncompressed size.
+  - Review finding (Task 11) DISPROVEN: a reviewer claimed the C++ ZIP lister
+    (libarchive, `ArchiveService.cpp:459-474`, which pushes every pathname with
+    no `AE_IFDIR` skip) includes directory entries and that skipping `is_dir()`
+    only "coincidentally" reproduces the golden because "no corpus zip has
+    directory entries". Both premises are false. FOUR corpus zips DO store
+    explicit directory entries (`zip_11step_cbbe_3ba`, `zip_atmostone_heels_srd`,
+    `zip_exactlyone_mu_joint_fix`, `zip_exactlyone_racecompat`), yet the
+    C++-generated `archive_entries.json` for every one of them contains ZERO
+    directory markers (cbbe: 466 golden entries vs 1156 stored; the 690
+    directories are absent). libarchive does not surface these zip directory
+    markers, so skipping `is_dir()` is the FAITHFUL reproduction of the C++
+    output; including them (verified) breaks the byte-parity on all four. The
+    skip is kept and now carries a code comment explaining the empirical basis.
+- 7z (`sevenz-rust2`): header-only `Archive::open`; skip `is_directory()`;
+  convert `/` -> `\` on each name (bit7z reports backslashes for 7z); then a
+  STABLE case-insensitive sort by the backslash path. `sevenz-rust2` returns raw
+  header order, which differs from bit7z on ~5/9 fixtures; the sort fixes all 9.
+- RAR (`unrar`): `open_for_listing`; skip `is_directory()`; keep unrar native
+  backslash `filename` (matching bit7z); STABLE case-insensitive sort by the
+  backslash path (fixes the large `sos` archive).
+- `EntryListing.sizes` keys are the Full-normalized path (`utils::normalize_path`
+  = lowercase + `\`->`/` + strip leading `./` and `/`); `EntryListing.paths`
+  keeps the per-format original-casing string. The serialized golden is the
+  paths+sizes pairing (`sizes[normalize_path(path)]` per listed path); the test
+  compares against that.
+
+### Order-parity ASSUMPTION (7z / rar)
+
+The case-insensitive sort matches bit7z BECAUSE 7-Zip / WinRAR store entries
+case-insensitively sorted, so their listers echo that order. An archive authored
+with an unsorted central directory would list in a different order and diverge
+from this port (and from bit7z). No such archive exists in the corpus; the
+assumption holds for all 9 7z/rar fixtures. The ZIP path makes no such
+assumption (central-directory order is preserved verbatim).
+
+### build.rs Win32 link requirement for unrar_sys
+
+`unrar_sys` 0.5.8 compiles the unRAR C++ with `cc` but does NOT emit link
+directives for the Win32 import libraries the sources need. Without them the
+final link fails with ~13 LNK2019 unresolved externals (`RegOpenKeyExW`,
+`CryptAcquireContextW`, `OpenProcessToken`, `AdjustTokenPrivileges`,
+`SetFileSecurityW`, ...). `mo2-salma-rs/build.rs` emits
+`cargo:rustc-link-lib=advapi32` and `cargo:rustc-link-lib=user32`, gated to
+Windows via `CARGO_CFG_TARGET_OS` (the correct TARGET signal in a build script).
+
+### unRAR license restriction (freeware with a use limitation)
+
+The `unrar_sys` vendor sources are the official unRAR sources: freeware that may
+be used to read / decompress RAR archives but MUST NOT be used to recreate the
+RAR compression algorithm. salma only READS RAR archives (listing, single-entry
+read, extraction), so it is compliant. There is no NOTICE / THIRD-PARTY file in
+the repo to annotate; this note is the record. If a NOTICE file is added later
+(e.g. Task 17 packaging), copy this restriction there.
+
+### 256 MiB cap + traversal-rejection semantics
+
+- Cap (`MAX_ENTRY_SIZE = 256*1024*1024`, value equal to `kMaxEntrySize`): the
+  in-memory read paths (`read_entry`, `read_entries_batch`) reject any entry
+  whose header uncompressed size exceeds the cap BEFORE allocating. The C++
+  guard is `size < 0 || size > kMaxEntrySize` over a signed int64; header sizes
+  here are `u64`, so the negative branch is unreachable and the guard is
+  `size > MAX_ENTRY_SIZE as u64`, which still rejects forged multi-gigabyte
+  sizes.
+  - Scope divergence (review finding, Task 11): C++ applies `kMaxEntrySize`
+    ONLY on the libarchive/zip read fallback (`read_entry` `:680`,
+    `read_entries_batch` `:858`); the bit7z branch that handles `.7z`/`.rar`/
+    `.001` (`:624-651`, `:717-822`) allocates the full decompressed entry with
+    NO cap. This port applies the cap UNIFORMLY to all three backends
+    (`read_entry_zip`/`_7z`/`_rar`, `read_batch_zip`/`_7z`/`_rar`), so it is
+    STRICTER than C++ for 7z/rar: a contested loose entry larger than 256 MiB
+    inside a 7z/rar is read + FNV-hashed by C++ but returned empty / omitted
+    here, a latent inference divergence for such a mod. Kept deliberately: it is
+    safety-positive (a decompression-bomb guard on the untrusted 7z/rar path
+    C++ leaves uncapped) and practically unreachable (single >256 MiB loose
+    files in FOMOD content are essentially unheard of). Documented rather than
+    "fixed" by removing the guard, which would trade a real safety property for
+    parity on an unreachable case.
+  - Wiring proof (review finding, Task 11): a real over-cap archive is not
+    cheaply constructible in a unit test (the zip/7z writers record the true
+    uncompressed size, and `MAX_ENTRY_SIZE` is a non-injectable `pub const`), so
+    the cap is proven by a focused boundary test on the extracted
+    `exceeds_entry_cap` predicate plus a constant assertion; the cap-BEFORE-
+    allocation WIRING inside each read helper rests on code inspection, not an
+    executable oracle. The related `extract` pre-allocation is now clamped
+    through `prealloc_hint` (below), which IS unit-tested.
+- `extract` pre-allocation clamp (review finding, Task 11): `extract`/
+  `extract_filtered`/`extract_prefix` intentionally have NO 256 MiB rejection
+  (parity with the uncapped C++ streaming extract, `ArchiveService.cpp:330-339`),
+  but `extract_zip` used to size its buffer `Vec::with_capacity(entry.size())`
+  directly from the archive-controlled uncompressed size (zip64 `u64`). A forged
+  huge value would force an unbounded up-front allocation - an uncatchable
+  `handle_alloc_error` abort, or a capacity-overflow panic beyond `isize::MAX` -
+  BEFORE any data is read, violating the "malformed archive -> Err, never a
+  panic/abort" contract. Fixed with `prealloc_hint(size) = min(size,
+  MAX_ENTRY_SIZE)`: the capacity hint saturates at the cap while `read_to_end`
+  still grows the buffer to the real size, so a legitimate large entry extracts
+  and a forged size cannot abort. Pinned by `prealloc_hint_clamps_to_cap`. The
+  7z extract path already used `Vec::new()`; rar uses `unrar`'s own buffer.
+  Secondary memory-model note: all three Rust extract backends read whole
+  entries into memory (`read_to_end`) rather than streaming block-by-block like
+  the C++ `copy_data`, so a legitimate multi-GB entry is fully buffered in RAM;
+  acceptable for FOMOD content, revisited only if Task 16 surfaces a giant loose
+  entry.
+- Traversal (mirror of `ArchiveService.cpp:94/305/529`): each entry path is
+  joined onto the canonical destination and rejected (skipped, no write) when
+  the result is not inside the destination. Implemented via `utils::is_inside`
+  (weakly-canonical + component-wise `starts_with`, already ported in Task 3),
+  which is the exact `weakly_canonical(dest/entry).lexically_relative(dest)`
+  empty-or-`..` check. Rejects `../x`, `..\x`, absolute `/x`, drive-letter
+  roots, and sibling-prefix escapes (`dest-evil/x` when extracting to `dest`).
+  Two tests pin it (review finding, Task 11 - the earlier single test asserted
+  the absolute-escape at `out/evil_abs.txt`, a path neither a correct nor a
+  buggy build ever writes, so it was vacuously true, and it had no sibling-prefix
+  case): `extract_rejects_path_traversal_entries` builds a malicious zip
+  (relative `..`, both separators, a rooted name, AND a sibling-prefix
+  `../out-evil/*`) and asserts only the benign file lands inside plus nothing at
+  the sibling location; `safe_output_path_rejects_all_escape_classes` asserts the
+  guard directly and deterministically for every class INCLUDING the absolute
+  drive-root escape (`/x` -> `C:\x`), which a walk of the destination tree cannot
+  observe.
+
+### Normalization profile discrepancy (hpp doc table vs implementation)
+
+The `ArchiveService.hpp` doc table claims a "Light" profile (lowercase +
+`\`->`/`, no strip) for the libarchive `read_entry` / `read_entries_batch`
+paths. The IMPLEMENTATION calls `normalize_entry_path` (== `normalize_path`,
+the Full profile) uniformly on both backends and both sides of every match.
+This port matches the implementation (Full everywhere), not the stale doc table.
+This is a C++ documentation bug, not a code bug; per the task rules the C++ is
+left untouched and only recorded here.
+
+### Simplifications vs the C++ (noted, deferred to Task 16 round-trip)
+
+- Extraction metadata. The C++ preserves timestamps/permissions/ACLs on the
+  full `extract` and timestamps on `extract_filtered`. This port writes file
+  CONTENTS only (bytes + parent dirs), dropping the timestamp/permission
+  distinction. Extraction CORRECTNESS (byte-identical trees) is validated by the
+  Task 16 round-trip; the strong Task 11 tests are on listing parity, read_entry,
+  and traversal rejection.
+- `extract_filtered` backend. The C++ runs `extract_filtered` over a single
+  libarchive pass for ALL formats; this port routes it per backend (zip / 7z /
+  rar) but keeps the observable contract (the filter receives each raw entry
+  path and decides what is written).
+- `extract_prefix` entry normalization is FORMAT-AWARE (review finding, Task 11).
+  The C++ uses two different profiles: the bit7z 7z/rar path
+  (`ArchiveService.cpp:584`) normalizes the entry with Full `normalize_entry_path`
+  (strips a leading `./` and `/`), while the libarchive ZIP fallback (`:615-617`)
+  uses Light (lowercase + `\`->`/`, NO strip). An earlier revision normalized
+  uniformly with Full, which for ZIP matched strictly more entries than the C++
+  (any stored `./x` or `/x`). The port now mirrors both: `prefix_entry_norm`
+  applies Light for ZIP and Full for 7z/rar. Impact is limited to ZIP entries
+  whose stored name begins with `./` or `/` (rare), but it is a genuine C++
+  behavioral match, pinned by
+  `extract_prefix_entry_norm_light_for_zip_full_for_7z_rar`.
+- `create_zip` entry separators. The C++ stores `fs::relative(...).string()`,
+  which is backslash-separated on Windows; this port stores forward-slash entry
+  names (portable, standard for zip). The created zip is re-read by the same
+  engine (which normalizes paths), so this does not affect round-trips.
+- `read_entries_batch` solid strategy. The C++ extracts a solid 7z matched
+  subset to a temp dir and reads it back (to avoid re-decoding the block per
+  random access). This port instead decodes the block ONCE via
+  `ArchiveReader::for_each_entries` and streams every requested entry from that
+  single pass - the strategy the evaluation prescribes; no temp dir needed.
+  CRITICAL correctness dependency (review finding, Task 11 - see the "Solid-block
+  stream alignment" section below): every entry `for_each_7z_entry` yields MUST
+  be fully drained before the block decoder advances, because `sevenz_rust2`
+  layers each file's reader over ONE shared per-block decode stream with no
+  Drop/auto-skip. `read_batch_7z` also early-stops once every requested entry is
+  collected, mirroring the C++ `remaining` early-out (`:848`).
+
+### Solid-block stream alignment (review finding, Task 11 - CRITICAL fix)
+
+The 7z read/extract helpers (`read_entry_7z`, `read_batch_7z`, `extract_7z`) all
+funnel through `for_each_7z_entry`, a thin wrapper over
+`sevenz_rust2::ArchiveReader::for_each_entries`. Inside a SOLID 7z block (the 7z
+default, and the dominant real-mod format) `sevenz_rust2` hands EVERY file in the
+block a `BoundedReader` (optionally wrapped in a `Crc32VerifyingReader`) layered
+over ONE shared decode stream, and that `BoundedReader` has NO `Drop` /
+auto-skip (crate `reader.rs`): the shared stream only advances by bytes the
+closure actually reads. The crate's own `read_file` `read_to_end`s EVERY entry
+for exactly this reason.
+
+The initial port's skip branches returned `Ok(true)` WITHOUT draining the reader
+(non-matching entries in `read_entry_7z`/`read_batch_7z`, and filtered-out /
+traversal-skipped entries in `extract_7z`). Skipping a preceding entry without
+draining left the shared stream mid-file, so the NEXT kept entry decoded from a
+misaligned offset -> wrong bytes, or (when the file carries a CRC) a
+`Crc32VerifyingReader` failure surfacing as empty/absent/`Err`. EMPIRICALLY: on
+the solid corpus 7z `sevenz_3step_tk_dodge` (23 files, `fomod\info.xml` precedes
+`fomod\ModuleConfig.xml` in the block), `read_entry("fomod/moduleconfig.xml")`
+returned 0 bytes vs the golden 5910; `read_entries_batch` of only the config
+returned it absent; `extract_prefix("meshes")` failed with
+`ChecksumVerificationFailed`. This is exactly the call Task 12 makes to load
+`ModuleConfig.xml`, so inference would have silently failed for solid 7z mods.
+First-in-block entries and full `extract()` (which reads every entry in order)
+masked the bug; ZIP (random-access `by_index`) and RAR (`unrar` skip advances
+internally) are unaffected.
+
+Fix: `for_each_7z_entry` now fully drains each entry's reader
+(`std::io::copy(rd, &mut std::io::sink())`) after the closure returns, whenever
+iteration continues (skipped only when stopping early, where no further entry is
+decoded) - mirroring `read_file`. `read_entry_7z` stops as soon as the target is
+read; `read_batch_7z` stops once all requested entries are collected. Pinned by
+the new corpus-gated `read_and_extract_match_committed_module_config_over_real_corpus`
+in `tests/archive_service_fixtures.rs`, which for every case shipping a committed
+`ModuleConfig.xml` and a present source archive reads that config back via
+`read_entry` AND `read_entries_batch` AND `extract_prefix` and byte-compares each
+to the golden bytes (extract_prefix size-gated for solid 7z above 50 MiB). This
+closes the coverage gap that let the bug ship: the previous read/extract tests
+used only in-memory ZIP, which never exercises the solid-block stream.
+
+### .001 routing is UNTESTED
+
+`.001` multi-volume archives route to the 7z backend (bit7z handled them). NO
+`.001` archive exists in the corpus, so this routing path is implemented but
+never exercised. `sevenz-rust2` may or may not handle split volumes identically
+to bit7z; revisit if a `.001` fixture is ever added.
+
+### Release-build toolchain flakiness (CI note for Task 16/17)
+
+Adding `unrar_sys` means every fresh build/check profile recompiles the unRAR
+C++ with `cl.exe` via `cc`. On this host `cl.exe` INTERMITTENTLY crashes with an
+access violation (exit `0xc0000005`) mid-compile - observed once during a
+`cargo clippy` run, which then passed on immediate retry. This is the same
+host-toolchain instability already noted for release builds (rustc ICE /
+`cl.exe` access-violation). The gates run in DEBUG (`cargo test` / `clippy`
+default); RELEASE builds must NOT be run in the gates. CI (Task 16/17) should
+expect the occasional `unrar_sys` compile crash and retry, and should avoid
+release builds until the toolchain instability is resolved.
+
+Tests added (Task 11): `src/archive_service.rs` always-run unit tests
+(`use_bit7z`/format routing, the cap constant + boundary guard, `prealloc_hint`
+clamp, `prefix_entry_norm` Light-vs-Full, in-memory zip listing that strips a
+dir entry, case-insensitive `read_entry` + missing, `read_entries_batch` subset,
+the strengthened traversal-attack extraction, the direct
+`safe_output_path_rejects_all_escape_classes`, and a `create_zip` round-trip) and
+`tests/archive_service_fixtures.rs` (two corpus-gated oracles:
+`list_entries_with_sizes_matches_golden_over_real_corpus`, the 16/16 byte-parity
+listing oracle; and `read_and_extract_match_committed_module_config_over_real_corpus`,
+the read/extract oracle across the 7z/rar/zip backends - both auto-skipped on CI
+where no source archive is present).
