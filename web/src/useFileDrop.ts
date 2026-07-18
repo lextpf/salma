@@ -53,7 +53,7 @@ export function useFileDrop({ onFiles, disabled = false }: UseFileDropOptions): 
     if (disabled) return
     setIsDragging(false)
     const files = e.dataTransfer.files
-    if (files && files.length > 0) onFiles(files)
+    if (files.length > 0) onFiles(files)
   }, [disabled, onFiles])
 
   return { isDragging, inputRef, openPicker, onInputChange, onDragOver, onDragLeave, onDrop }
