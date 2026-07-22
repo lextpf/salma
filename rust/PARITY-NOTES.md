@@ -2670,3 +2670,112 @@ bytes / signed `\u`, and the depth cap (at the cap, past it, a 100k-deep hostile
 blob, and a wide-but-shallow document proving depth is per-path).
 `tests/fomod_inference_service_fixtures.rs` drives the whole orchestration over
 the committed corpus cases. The real gate remains `rust/tools/compare_infer.py`.
+
+## Task 13 - Port the fomod_inference GoogleTest suite
+
+`tests/fomod_inference_test.cpp` (1107 LOC, 15 cases) ->
+`tests/fomod_inference_test.rs`. All 15 ported 1:1, each keeping the C++ behavior
+name in snake_case (`SelectAll_Deterministic` -> `select_all_deterministic`) and
+appearing in the C++ file's order.
+
+### Scope: which remaining C++ suites are in this task
+
+`tests/` holds four GoogleTest files. `utils_test.cpp` and
+`inference_diagnostics_test.cpp` were already ported (Tasks 3 and 10).
+`security_context_test.cpp` is OUT of scope: `SecurityContext` lives in mo2-core
+only so the tests can link it without Crow, but it is consumed exclusively by the
+HTTP server layer, and no `security_context` module appears in the port's
+architecture target. The DLL being replaced does not export it. That leaves
+`fomod_inference_test.cpp` as the whole of Task 13.
+
+### Fixtures stay inline
+
+The C++ suite builds every fixture inline from an XML string and never reads
+`tests/`; the port does the same, so the file runs on CI with no corpus present.
+The three C++ file-static helpers are ported at the top of the Rust file:
+
+| C++ helper | Rust |
+| --- | --- |
+| `parse_xml(xml, prefix = "")` | `parse_xml(xml: &str, prefix: &str)` |
+| `build_atoms(installer, file_size = 100)` | `build_atoms(&FomodInstaller, u64)` |
+| `build_target(paths, file_size = 100)` | `build_target(&[&str], u64)` |
+
+`build_atoms` is deliberately NOT the production `expand_all_atoms`: it fabricates
+one atom per file entry at a uniform size, walking required -> per-plugin (flat)
+-> per-conditional with `document_order` drawn from a SINGLE counter across all
+three passes. Several cases assert on conflict resolution, which depends on that
+exact ordering. C++ default arguments have no Rust equivalent, so call sites spell
+out the defaults via the `DEFAULT_SIZE = 100` const and an explicit `""` prefix.
+
+### Mechanical mappings applied throughout
+
+- `EXPECT_*` and `ASSERT_*` both become `assert!` / `assert_eq!`. Rust has no
+  non-fatal assertion, so every `EXPECT_` is STRENGTHENED to fatal. This can only
+  turn a multi-failure report into a first-failure report; it can never let a
+  failing assertion pass.
+- `ASSERT_EQ(x.size(), 3u)` -> `assert_eq!(x.len(), 3)`; both sides are `usize`,
+  so the `u` suffix is dropped.
+- `EXPECT_TRUE(sim.files.count(d))` -> `assert!(sim.files.contains_key(d))`
+  (`count` on a `std::unordered_map` is 0/1).
+- Raw pointers for optional arguments (`nullptr` context, `&overrides`) become
+  `Option<&T>` (`None` / `Some(&overrides)`).
+- `InferenceOverrides` is default-constructed then `.assign(n, Unknown)`-ed in
+  C++; the port uses a struct literal with `vec![ExternalConditionOverride::Unknown; n]`.
+  Struct-literal field order is not semantically meaningful, so the literals keep
+  the C++ STATEMENT order (`step_visible` first) even though the Rust struct
+  declares `conditional_active` first.
+- The gtest `<<` streamed failure message becomes the `assert!` message argument,
+  text preserved.
+
+### Verification that nothing was weakened
+
+Two mechanical checks, both run against the committed files:
+
+- **Assertion count per case**: 63 assertions in the C++ suite, 63 in the Rust
+  suite, and every one of the 15 cases matches its counterpart EXACTLY (no case
+  gained or lost an assertion).
+- **XML fixtures**: the suite has 10 XML literals; all 10 are identical between
+  `R"(...)"` and `r#"..."#` after whitespace normalization, with no literal
+  present on only one side. (The other 5 cases build IR structs directly or call
+  `expand_entry`, so they carry no XML.)
+
+### `PropagatorFlagPropagation` documents a mechanism the code does not implement
+
+Worth recording because the suite is otherwise readable as documentation of
+propagator behavior. The C++ case's comment block states that `BasicPatch`
+"becomes NotUsable" via flag propagation and the group therefore resolves on
+iteration 2. It does not. Rule 1 of `propagate` carries the guard
+
+```cpp
+bool dynamic_without_context = (!context && !plugin.type_patterns.empty());
+if (eff == PluginType::NotUsable) { if (!dynamic_without_context) { ... } }
+```
+
+(`FomodPropagator.cpp:140-143`, ported verbatim at
+`fomod_propagator.rs:230-233`), and `BasicPatch` has non-empty `type_patterns`
+with `context == nullptr`, so the NotUsable outcome is explicitly NOT allowed to
+prune. What actually eliminates `BasicPatch` is rule 2 (file evidence): its unique
+dest `basic.esp` is absent from the target tree, so it takes `NoFileEvidence` and
+the `SelectExactlyOne` group resolves on `usable_count == 1`.
+
+Confirmed empirically during the port by adding `basic.esp` to the target tree:
+the run then yields `fully_resolved == false` with domains `[[[true]], [[true,
+true]]]`, i.e. the flag-driven NotUsable never prunes. Both languages carry the
+same guard, so the assertions hold identically on both sides; the port keeps the
+C++ case and its comment verbatim rather than rewriting either.
+
+### Overlap with existing Rust tests (intentional, not redundant)
+
+Some cases restate behavior already covered by earlier tasks' unit tests, e.g.
+`ExpandEntry_FolderSkipsArchiveShippedMetaIni` overlaps
+`fomod_inference_atoms.rs`'s `folder_branch_skips_top_level_meta_ini_only`, and
+`ConditionalDest_FlagSetByLaterGroup_ReachesExact` overlaps the solver's
+`lower_bound_skips_a_dest_a_later_group_can_still_produce`. The duplicates are
+kept: the task's contract is a 1:1 port of the C++ suite, and keeping the C++
+case names makes it possible to diff the two suites case-by-case when the C++
+side changes.
+
+### Test-suite delta
+
+`cargo test`: 470 -> 485 (the 15 new cases). `cargo clippy --all-targets
+-- -D warnings` and `cargo fmt --check` clean.
