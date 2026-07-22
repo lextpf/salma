@@ -2379,3 +2379,294 @@ the strengthened traversal-attack extraction, the direct
 listing oracle; and `read_and_extract_match_committed_module_config_over_real_corpus`,
 the read/extract oracle across the 7z/rar/zip backends - both auto-skipped on CI
 where no source archive is present).
+
+## Task 12 - Target-tree scan + inference orchestration (tier-1 meta.ini)
+
+Milestone 6. `src/FomodInferenceService.hpp`/`.cpp` (1333 LOC) ->
+`src/fomod_inference_service.rs`. This is the integration capstone: it owns the
+stages no earlier task covered (installed-file scan, contested-file hashing with
+the bounded cache, the Tier-1 `meta.ini` shortcut, `compute_overrides`) and
+sequences every previously ported stage behind `infer_selections`. The
+`inferFomodSelections` export in `capi.rs` now calls it instead of returning the
+Milestone-1 stub.
+
+### API mapping (C++ -> Rust)
+
+| C++ | Rust |
+| --- | --- |
+| `FomodInferenceService::infer_selections` | `FomodInferenceService::infer_selections` |
+| `FomodInferenceService::scan_installed_files` (static) | `scan_installed_files` (free fn) |
+| `FomodInferenceService::hash_contested_files` | `FomodInferenceService::hash_contested_files` |
+| `FomodInferenceService::try_fomod_plus_json` (static) | `try_fomod_plus_json` (free fn) |
+| `FomodInferenceService::compute_overrides` (static) | `compute_overrides` (free fn) |
+| anon-ns `find_contested_dests` | `find_contested_dests` |
+| anon-ns `build_archive_signature` | `build_archive_signature` |
+| anon-ns `fetch_entry_hashes` | `FomodInferenceService::fetch_entry_hashes` (method: needs the cache) |
+| anon-ns `apply_entry_hashes` | `apply_entry_hashes` |
+| the inline Tier-1 block (`:984-1258`) | `try_tier1_cache` + `build_tier1_json` |
+| `InferenceContext` | locals in `infer_selections` (no context struct needed) |
+
+The statics become free functions so the fixture tests can drive each stage
+directly; `fetch_entry_hashes` stays a method because the C++ passes the mutex
+and map in by reference, which a `Mutex<HashMap>` field expresses directly.
+
+### Exceptions-return-empty contract
+
+The C++ wraps the whole pipeline in `try { ... } catch (const std::exception&)
+{ return ""; }` (`:1325-1330`), and every ABI caller adds `catch (...)` on top.
+The Rust has no exceptions: each failure point (archive missing, mod missing, not
+a FOMOD, XML read miss, XML parse error) returns `String::new()` directly, and
+`capi::inferFomodSelections`' `guard()` supplies the panic firewall. No `Result`
+crosses FFI. The two `fs::exists` checks are OUTSIDE the C++ `try` (`:787-794`)
+and are correspondingly the first two statements of the Rust fn.
+
+### `fully_resolved` is solver-internal (NOT a service branch)
+
+The plan text says "If fully resolved, the CSP solve is skipped", but the C++
+service does not branch on `propagation.fully_resolved` at all - it always calls
+`solve_fomod_csp`, and the fully-resolved skip/seed logic lives INSIDE the solver
+(Task 9). The only service-level use of the propagation result is which argument
+to pass: `None` vs `Some(&propagation)`, decided by
+`propagation.resolved_groups.is_empty()`. The port matches the code, not the
+plan prose.
+
+### The entry-size lookup under-population (a C++ bug, faithfully reproduced)
+
+`infer_selections` builds `norm_entry_sizes` with (`:836-848`):
+
+```cpp
+auto sz_it = entry_sizes.find(entry);   // `entry` is the ORIGINAL archive path
+if (sz_it != entry_sizes.end())
+    ctx.norm_entry_sizes[norm] = sz_it->second;
+```
+
+The inline comment claims "Look up size using the original archive path (how
+listing.sizes is keyed)", but that comment is WRONG: `ArchiveService` keys
+`listing.sizes` by `normalize_entry_path(path)` (`ArchiveService.cpp:424,469`),
+i.e. by the NORMALIZED path, while `listing.paths` keeps the original strings.
+So the lookup only succeeds for entries whose raw path already equals its
+normalized form - any entry carrying an uppercase letter or a backslash silently
+gets NO size, and its atoms keep `file_size == 0`.
+
+That is not cosmetic: `find_contested_dests` treats a zero `file_size` as a
+size-compatibility WILDCARD (`a.file_size == 0 || target_file.size == 0 || ...`),
+so the under-population widens the contested set. The port reproduces the same
+lookup against the same normalized-keyed map (`fomod_inference_service.rs:133-144`)
+rather than "fixing" it, because the corpus gate demands the C++ result. Do NOT
+correct this without re-baselining the whole corpus.
+
+### Per-stage timing windows (review finding - FIXED)
+
+`diagnostics.timings_ms.{list,scan,solve}` each measure ONE stage in the C++,
+which resets a shared `t_step` immediately before each (`:824` list, `:945` scan,
+`:1283` solve) and only `total_ms` runs from `t_total`. The `t_scan` window
+covers `scan_installed_files` AND `build_target_tree`, not just the walk.
+
+The initial port derived `t_list` and `t_scan` from `t_total.elapsed()`, making
+both CUMULATIVE: `list_ms` also counted the two existence checks and the whole
+Tier-1 `meta.ini` read+parse, and `scan_ms` additionally counted listing, the XML
+read, the XML parse and atom expansion. On a large archive that reported e.g.
+`{list: 3200, scan: 3600}` where the C++ reports `{list: 3200, scan: 180}`.
+`compare_infer.py` ZEROES all four timings before comparing, so the corpus gate
+could never have caught this. Fixed: each stage now times from its own
+`Instant::now()`.
+
+### Tier-1 `meta.ini` shortcut
+
+`try_fomod_plus_json` reproduces the INI quirks exactly, each test-pinned:
+10000-LINE cap (`++line_count > 10000`, so a key on line 10000 is read and one on
+10001 aborts); `[Settings]` gating that is case-insensitive AND turns tracking
+back off on any other `[...]` header; whole-line trim of `" \t\r\n"` but
+key/value trim of only `" \t"`; a single outer quote-pair peel; the
+`""` / `{}` / `"{}"` rejects; first-matching-key-wins whether or not the value
+parses; and the `steps` must be a non-empty array.
+
+Two byte-level details drove the reader to raw bytes rather than a decoded
+string:
+
+- **Line splitting is `std::getline`, not `str::lines()`.** `getline` yields one
+  line per `\n`-terminated segment plus a final unterminated segment only when
+  non-empty; a plain `bytes.split(b'\n')` adds a spurious trailing empty line for
+  the usual newline-terminated file and would shift the 10000-line cap by one.
+  `getline_split` implements the `getline` rule; the existing cap-boundary test
+  pins it.
+- **Strict UTF-8 (review finding - FIXED).** The C++ hands raw bytes to
+  `nlohmann::json::parse`, which REJECTS ill-formed UTF-8 (parse_error 316), and
+  the surrounding catch turns that into a Tier-1 MISS. The initial port decoded
+  the whole file with `String::from_utf8_lossy`, so a Windows-1252 byte became
+  U+FFFD and the blob PARSED - flipping a miss into a hit and emitting a
+  completely different document. The value is now strict-validated with
+  `std::str::from_utf8` before parsing.
+
+`try_tier1_cache` name-resolves the cached blob against the IR into a
+`[step][group][plugin]` grid, forward-simulates it with the same atoms and
+overrides the solver path uses, and accepts it only on an EXACT reproduction
+(`compare_trees(...).exact()`). `build_tier1_json` then emits a BESPOKE schema-v2
+document (`phase_reached: "tier1_cache"`, `cache.hit: true`,
+`cache.source: "fomod-plus"`, every confidence 1.0, `resolved_by:
+"cache.fomod_plus"`), NOT `assemble_json`'s.
+
+#### `Tier1Outcome::Abort` - malformed names fail the WHOLE call (review finding - FIXED)
+
+The C++ reads step and group names with `src_step.value("name", "")`. That call is
+NOT total: `nlohmann::basic_json::value(key, default)` throws `type_error 306`
+when the receiver is not an object, and `type_error 302` when the key IS present
+but is not a string (only an ABSENT key uses the default). Those throws escape to
+`infer_selections`' outer catch, so `inferFomodSelections` returns `""` for the
+whole call. Note the asymmetry: PLUGIN names go through the `plugin_name_of`
+lambda, which guards with explicit `is_string()`/`is_object()` checks and is
+therefore fully tolerant.
+
+The initial port flattened both into `.get("name").and_then(as_str).unwrap_or("")`
+and returned a full inference document where the C++ returns nothing. `name_field`
+now reproduces `value()`'s exact tri-state and `try_tier1_cache` returns a
+three-way `Tier1Outcome` (`Hit` / `Miss` / `Abort`) instead of an `Option`, with
+`Abort` mapping to `""` at the call site. Ordering matters and is preserved: the
+C++ evaluates the step name BEFORE the `find_step` lookup that may break the
+loop, so every step up to and including the first unresolvable one is
+name-checked; group names are only reached for a step that already resolved.
+
+### `json::parse` hardened to nlohmann's grammar (review findings - FIXED)
+
+`json::parse` has exactly ONE production call site - the `meta.ini` fomod-plus
+blob - so every leniency in it is a Tier-1 hit/miss flip, which changes the
+entire emitted document. It was a permissive hand-rolled parser; it is now strict:
+
+- **Depth cap `MAX_PARSE_DEPTH = 512` (CRITICAL).** nlohmann's parser is
+  ITERATIVE (a heap `std::vector<bool> states`; `destroy()` is iterative too), so
+  it parses arbitrarily deep input and simply returns a value or a clean
+  parse_error. The Rust parser is recursive descent with no bound. Measured on
+  this host, a release build survived depth 2000 and died at depth 3000 with
+  `STATUS_STACK_OVERFLOW` (exit `0xC0000FD`). A Windows stack overflow is an SEH
+  exception, NOT a Rust panic, so `capi`'s `catch_unwind` cannot contain it: the
+  HOST process (MO2, or `mo2-server.exe`) would be killed where the C++ DLL
+  returns a normal document - and the input is a file in the mods tree. The cap
+  turns that into an `Err` -> Tier-1 miss, which is the same OBSERVABLE outcome
+  the C++ reaches for any such blob (a real fomod-plus document nests ~5 levels;
+  anything deeper can never name-resolve). Same guard class as the ported
+  `MAX_ELEMENT_DEPTH` (XML, 48) and `MAX_DEPENDENCY_DEPTH` (condition trees, 32).
+  This also removes the secondary hazard that `Value`'s derived `Drop` and
+  `write_pretty` are recursive: a value that deep can no longer be built.
+- **Strict number grammar.** The old scanner accepted any run of `-+.eE0-9` and
+  deferred to Rust's `FromStr`, which accepts a leading `+`, leading zeros, `.5`
+  and `1.` - all parse_error 101 in nlohmann. The parser now implements RFC 8259
+  directly (`-? (0 | [1-9][0-9]*) ('.' [0-9]+)? ([eE] [+-]? [0-9]+)?`).
+- **`u64` integers.** nlohmann stores an integer above `i64::MAX` as
+  `number_unsigned_t` and dumps the exact digits; the port degraded to `f64` and
+  printed a mangled float. Added `Value::UInt(u64)`, produced ONLY by `parse` (the
+  assembly path still builds `Value::Int` everywhere, so no existing output can
+  shift). This is reachable: the Tier-1 emitter echoes a cached `deselected`
+  entry's RAW `name` value into the output, and `deselected` is never
+  name-resolved.
+- **Raw control bytes rejected.** A byte `< 0x20` inside a string is parse_error
+  101 in nlohmann; it must be escaped.
+- **`\uXXXX` requires four hex digits.** `u32::from_str_radix(s, 16)` accepts a
+  leading `+`, so `\u+123` used to decode.
+
+### Accepted divergences (Task 12)
+
+Each of these was confirmed against the C++ and deliberately NOT "fixed":
+
+- **Hash-cache signature encoding.** `build_archive_signature` is
+  `<canonical_path>|<size>|<mtime>`. The C++ uses `weakly_canonical` +
+  `last_write_time().time_since_epoch()` (filesystem-clock ticks); the port uses
+  `fs::canonicalize` (falling back to the raw path) and nanoseconds since the Unix
+  epoch. Only the self-invalidate-on-size-or-mtime property is required, and the
+  signature NEVER reaches the output - it is a per-instance cache key. The cache
+  itself is byte-faithful: bound `kMaxCacheEntries = 100000`, clear-all (not LRU)
+  when exceeded, with the check and the clear under ONE lock.
+- **Directory-walk error recovery.** The C++ uses
+  `recursive_directory_iterator` with `skip_permission_denied` AND the
+  `error_code` overload, so an I/O error mid-walk does NOT throw: the iterator
+  ends, a warning is logged, and `scan_installed_files` returns whatever it
+  collected so far (the inference then continues with a PARTIAL target tree). The
+  Rust walk uses an explicit stack and skips only the unreadable directory,
+  continuing with its siblings. Both yield a partial scan on error; they differ in
+  WHICH files survive. Exact parity here is unattainable anyway - the two walks
+  visit directories in different orders, so "what was collected before the error"
+  could not match even with identical stop semantics. Requires a real I/O error
+  (e.g. a path over MAX_PATH in a non-long-path-aware host) to observe.
+- **Symlink relativization.** The C++ relativizes with `fs::relative`, which
+  routes through `weakly_canonical` and therefore RESOLVES symlinks; the Rust
+  strips the prefix lexically (`strip_prefix`). For a mod dir containing a file
+  symlink that points outside the mod root, the C++ derives a key from the
+  resolved target (often escaping the root) while the Rust derives it from the
+  lexical path. No corpus mod uses symlinks; MO2 deploys real files.
+- **MSVC text-mode CTRL+Z.** The C++ opens `meta.ini` with a default
+  `std::ifstream` (TEXT mode on MSVC), so a `0x1A` byte TRUNCATES the read and any
+  fomod-plus key after it is invisible -> Tier-1 miss. The Rust reads raw bytes and
+  reads past it. Reproducing this would mean emulating MSVC text-mode translation
+  for a byte no real `meta.ini` contains.
+- **Timing VALUES are wall-clock** and can never be byte-equal; `compare_infer.py`
+  zeroes `diagnostics.timings_ms.*` on both sides. The per-stage WINDOWS now match
+  (see above), which is the part that was actually portable.
+
+### `compute_overrides` determinism
+
+Both C++ containers here are unordered, but neither ordering leaks: the
+conditional rule tests `producers.size() == 1 && producers.count(ci)`, a
+set-cardinality predicate, and the step rule tests `dest_step_count[d] == 1`, a
+per-dest counter - both order-independent. The one order-sensitive detail is the
+FLAT per-plugin walk (`step -> group -> plugin`, incrementing `flat_idx`), which
+must match `expand_all_atoms`' per-plugin index order; the port walks the IR in
+the same nesting order and BOUNDS-CHECKS `flat_idx` against `atoms.per_plugin.len()`
+(skipping, never panicking) where the C++ would index out of range on an
+IR/atom desync.
+
+### Gate results
+
+- `compare_infer.py --curated` (16 committed cases): 1 EXACT, 15 METRICS_EQUAL,
+  0 DIVERGE, 0 SKIP.
+- `compare_infer.py` full corpus (197 fixtures): 153 EXACT, 44 METRICS_EQUAL,
+  0 DIVERGE, 0 SKIP.
+
+The split is structural, not a quality signal: the 153 EXACT cases are the
+inferences that return `""` on both sides, and the 44 METRICS_EQUAL cases are
+every NON-EMPTY inference - each carrying wall-clock `timings_ms` plus the
+`UNIQUE_FILE_EVIDENCE` `reasons[].detail.files` set (the documented Task-7
+`unordered_set` ordering divergence). Byte-equality is unreachable for a
+non-empty output BY CONSTRUCTION; METRICS_EQUAL is the strongest attainable
+result for those, and both sanctioned divergences are the only ones
+`compare_infer.py` will tolerate before reporting DIVERGE.
+
+### Review findings and fixes (Task 12 review pass)
+
+An adversarial review (6 dimensions x parallel reviewers, each finding then
+attacked by 3 independent refuters on correctness / reachability / C++-fidelity
+lenses; 25 raw findings, 16 surviving, 9 refuted) produced the fixes recorded
+above. Grouped by root cause:
+
+1. CRITICAL - unbounded `json::parse` recursion -> host-process stack overflow.
+   Empirically reproduced at depth 3000 in a release build. Fixed with
+   `MAX_PARSE_DEPTH`.
+2. IMPORTANT - `timings_ms.list` / `.scan` cumulative instead of per-stage.
+   Fixed; invisible to the corpus gate, which zeroes timings.
+3. IMPORTANT - Tier-1 non-string / non-object step and group `name` coerced to
+   `""` instead of failing the call. Fixed with `Tier1Outcome::Abort`.
+4. IMPORTANT - `json::parse` number and string leniency (leading zeros, `+`,
+   `.5`, `1.`, raw control bytes, signed `\u`). Fixed.
+5. MINOR - `u64`-range integers degraded to floats. Fixed with `Value::UInt`.
+6. MINOR - `meta.ini` decoded lossily instead of strict UTF-8. Fixed.
+7. The scan walk-error, symlink and CTRL+Z findings were confirmed as real but
+   deliberately accepted; see "Accepted divergences" above.
+
+Refuted (recorded so they are not re-raised): the Tier-1 `total_ms` capture point
+(the C++ also stamps it before the emitter runs); the "10000-line cap no longer
+bounds anything" claim (the cap is a LINE cap in both, and neither language caps
+line length); allocation-failure recovery (the C++ `std::bad_alloc` path is
+equally fatal in practice); and five test-coverage findings that named branches
+already covered by the corpus-gated fixtures.
+
+### Tests added (Task 12)
+
+`src/fomod_inference_service.rs` unit tests: `compute_overrides` (4 cases:
+conditional unique/shared, step unique/shared, excluded+absent dests); the
+`meta.ini` INI quirks (9 cases incl. the 10000-line cap boundary, `[Settings]`
+gating, quote peel, empty-form rejects, first-match-wins); the new
+strict-UTF-8, strict-grammar and depth-cap rejections; the four
+`Tier1Outcome::Abort` / miss cases; and `scan_installed_files` recursion +
+missing-dir. `src/json.rs`: strict number grammar, `u64` round-trip, raw control
+bytes / signed `\u`, and the depth cap (at the cap, past it, a 100k-deep hostile
+blob, and a wide-but-shallow document proving depth is per-path).
+`tests/fomod_inference_service_fixtures.rs` drives the whole orchestration over
+the committed corpus cases. The real gate remains `rust/tools/compare_infer.py`.
