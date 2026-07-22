@@ -46,6 +46,10 @@
 //! - [`archive_service`] - the archive I/O facade (zip / 7z / rar backends),
 //!   mirror of `src/ArchiveService.hpp`/`.cpp`, reproducing
 //!   `list_entries_with_sizes` byte-for-byte against the golden corpus
+//! - [`fomod_inference_service`] - the `infer_selections` orchestration that
+//!   drives every stage, plus the installed-file scan, lazy contested-file
+//!   hashing, the Tier-1 `meta.ini` fomod-plus shortcut, and `compute_overrides`,
+//!   mirror of `src/FomodInferenceService.hpp`/`.cpp`
 
 pub mod archive_service;
 pub mod capi;
@@ -57,6 +61,7 @@ pub mod fomod_csp_types;
 pub mod fomod_dependency_evaluator;
 pub mod fomod_forward_simulator;
 pub mod fomod_inference_atoms;
+pub mod fomod_inference_service;
 pub mod fomod_ir;
 pub mod fomod_ir_parser;
 pub mod fomod_propagator;

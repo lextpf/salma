@@ -248,9 +248,15 @@ pub unsafe extern "C" fn inferFomodSelections(
             (ArgStr::Null, _) | (_, ArgStr::Null) => {
                 owned_cstring("archivePath and modPath must not be null")
             }
-            // Both non-null: the not-yet-implemented placeholder is "", which
-            // is also the caught-exception (invalid-UTF-8) contract, so both
-            // remaining cases return "".
+            // Both non-null and valid UTF-8: run the orchestrator. It returns ""
+            // on ANY internal failure (mirror of the C++ outer try/catch), so no
+            // Result crosses FFI.
+            (ArgStr::Str(archive), ArgStr::Str(modp)) => {
+                let service = crate::fomod_inference_service::FomodInferenceService::new();
+                owned_cstring(&service.infer_selections(archive, modp))
+            }
+            // Invalid UTF-8 is handled like a caught exception -> "" (the C++
+            // treats a bad path as a throw caught by the outer handler).
             _ => owned_cstring(""),
         },
         || owned_cstring(""),

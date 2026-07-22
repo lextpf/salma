@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use mo2_salma_rs::fomod_atom::{AtomIndex, ExpandedAtoms, TargetTree};
+use mo2_salma_rs::fomod_atom::{AtomIndex, ExpandedAtoms, TargetFile, TargetTree};
 use mo2_salma_rs::fomod_inference_atoms::{
     build_atom_index, build_target_tree, compute_excluded_dests, expand_all_atoms,
 };
@@ -295,6 +295,32 @@ pub fn load_installed_files(case_dir: &Path) -> HashMap<String, u64> {
             )
         })
         .collect()
+}
+
+/// Build a [`TargetTree`] from `target_tree.json` INCLUDING the committed FNV-1a
+/// hashes (`{path, size, fnv1a}`), the size+hash target the C++ produces after
+/// `scan_installed_files` + `hash_contested_files`. Task 12's fixture test uses
+/// this to SUBSTITUTE for the mod-dir scan (the installed files are absent in the
+/// committed corpus). The `fnv1a` field is a lowercase hex u64.
+///
+/// Mirror of `build_target_tree`'s top-level `meta.ini` skip so the substituted
+/// tree matches the engine's (no committed case ships a `meta.ini` row, but the
+/// rule is kept for faithfulness).
+pub fn load_target_tree_with_hashes(case_dir: &Path) -> TargetTree {
+    let text =
+        fs::read_to_string(case_dir.join("target_tree.json")).expect("target_tree.json readable");
+    let mut target = TargetTree::new();
+    for e in minijson::parse(&text).as_array() {
+        let path = e.member("path").expect("path").as_str().to_string();
+        if path == "meta.ini" {
+            continue;
+        }
+        let size = e.member("size").expect("size").as_u64();
+        let hash_hex = e.member("fnv1a").expect("fnv1a").as_str();
+        let hash = u64::from_str_radix(hash_hex, 16).expect("fnv1a is hex u64");
+        target.insert(path, TargetFile { size, hash });
+    }
+    target
 }
 
 /// Load and parse a fixture's `expected.json` (the authoritative C++ output).
