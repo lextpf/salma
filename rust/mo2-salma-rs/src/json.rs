@@ -63,9 +63,17 @@ pub enum Value {
     Null,
     /// JSON boolean.
     Bool(bool),
-    /// JSON integer (C++ `int` / `int64_t` / `uint64_t`); prints without a
-    /// decimal point.
+    /// JSON integer (C++ `int` / `int64_t`); prints without a decimal point.
     Int(i64),
+    /// JSON integer above `i64::MAX` (C++ `uint64_t` / nlohmann
+    /// `number_unsigned_t`); prints without a decimal point.
+    ///
+    /// Only [`parse`] ever produces this variant - the assembly path builds
+    /// [`Value::Int`] for every counter and size, exactly as the C++ does. It
+    /// exists so a cached `meta.ini` blob carrying an integer in
+    /// `(i64::MAX, u64::MAX]` round-trips through the Tier-1 emitter with the
+    /// same digits nlohmann emits, instead of degrading to a float.
+    UInt(u64),
     /// JSON double; always prints with a decimal point for integer values.
     Double(f64),
     /// JSON string.
@@ -130,10 +138,10 @@ impl Value {
         matches!(self, Value::Array(_))
     }
 
-    /// True if this is a number ([`Value::Int`] or [`Value::Double`]), matching
-    /// nlohmann `is_number`.
+    /// True if this is a number ([`Value::Int`], [`Value::UInt`] or
+    /// [`Value::Double`]), matching nlohmann `is_number`.
     pub fn is_number(&self) -> bool {
-        matches!(self, Value::Int(_) | Value::Double(_))
+        matches!(self, Value::Int(_) | Value::UInt(_) | Value::Double(_))
     }
 
     /// True if this is a [`Value::Bool`].
@@ -167,20 +175,24 @@ impl Value {
         }
     }
 
-    /// The integer payload, or `None` if not an integer.
+    /// The integer payload, or `None` if not an integer. A [`Value::UInt`] above
+    /// `i64::MAX` does not fit and yields `None`, mirroring nlohmann's
+    /// `get<int64_t>` range check.
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::Int(n) => Some(*n),
+            Value::UInt(n) => i64::try_from(*n).ok(),
             _ => None,
         }
     }
 
-    /// The numeric payload as `f64` (an [`Value::Int`] is widened), or `None` if
-    /// not a number.
+    /// The numeric payload as `f64` (an [`Value::Int`] / [`Value::UInt`] is
+    /// widened), or `None` if not a number.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Double(d) => Some(*d),
             Value::Int(n) => Some(*n as f64),
+            Value::UInt(n) => Some(*n as f64),
             _ => None,
         }
     }
@@ -240,6 +252,11 @@ impl Value {
             Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             Value::Int(n) => {
                 // i64 Display is plain decimal, matching nlohmann integer output.
+                let _ = write!(out, "{n}");
+            }
+            Value::UInt(n) => {
+                // u64 Display is plain decimal, matching nlohmann's
+                // number_unsigned_t output.
                 let _ = write!(out, "{n}");
             }
             Value::Double(d) => out.push_str(&format_double(*d)),
@@ -311,6 +328,372 @@ pub fn format_double(v: f64) -> String {
         s
     } else {
         format!("{s}.0")
+    }
+}
+
+/// Parse a JSON document into a [`Value`], the read counterpart of [`Value::dump`].
+///
+/// Used only on the Tier-1 inference path to decode the cached `fomod-plus` blob
+/// stored in `meta.ini`, mirroring the C++ `nlohmann::json::parse(value)` call in
+/// `FomodInferenceService::try_fomod_plus_json`. That call is wrapped in a
+/// `try/catch(json::parse_error)` that discards the candidate on any failure, so
+/// this parser reports errors via `Err(String)` and NEVER panics on malformed
+/// input; the caller treats `Err` exactly as the C++ treats a caught parse error.
+///
+/// The grammar is RFC 8259 as nlohmann implements it, NOT a lenient superset:
+/// leading zeros (`01`), a leading `+`, and a bare `.5` / `1.` are rejected;
+/// raw control bytes below `0x20` inside a string are rejected; a `\uXXXX`
+/// escape must be exactly four hex digits (no sign). Accepting any of these
+/// would flip a Tier-1 MISS into a Tier-1 HIT and change the whole output
+/// document relative to the C++.
+///
+/// Numbers follow nlohmann's integer-vs-float split: a token containing `.`, `e`,
+/// or `E` becomes a [`Value::Double`]; an integer in `i64` range becomes a
+/// [`Value::Int`], one in `(i64::MAX, u64::MAX]` a [`Value::UInt`], and anything
+/// wider a [`Value::Double`]. Duplicate object keys keep the last occurrence
+/// (nlohmann's behavior); object keys serialize back in sorted order regardless.
+/// Trailing non-whitespace content after the top-level value is an error.
+///
+/// Nesting is capped at [`MAX_PARSE_DEPTH`]; see that constant for why a cap
+/// exists at all when nlohmann has none.
+pub fn parse(text: &str) -> Result<Value, String> {
+    let mut parser = Parser {
+        bytes: text.as_bytes(),
+        pos: 0,
+        depth: 0,
+    };
+    let value = parser.value()?;
+    parser.skip_ws();
+    if parser.pos != parser.bytes.len() {
+        return Err(format!("trailing content at byte {}", parser.pos));
+    }
+    Ok(value)
+}
+
+/// Maximum container nesting [`parse`] will descend into before failing.
+///
+/// nlohmann's parser is ITERATIVE (a heap `std::vector<bool> states` stack, and
+/// an iterative `destroy()`), so it has no depth limit and simply parses
+/// arbitrarily deep input. This parser is recursive descent, so an unbounded
+/// document would exhaust the thread stack - and a Windows stack overflow is an
+/// SEH exception, NOT a Rust panic, so `capi`'s `catch_unwind` firewall cannot
+/// contain it: the HOST process (MO2, or `mo2-server.exe`) would die where the
+/// C++ DLL returns a normal document. Measured on this host, a release build
+/// survived depth 2000 and died at depth 3000 with `STATUS_STACK_OVERFLOW`.
+///
+/// The cap turns that crash into an `Err`, which `try_fomod_plus_json` maps to a
+/// Tier-1 miss - the same observable outcome the C++ reaches for any such blob,
+/// because a real fomod-plus document nests about 5 levels and anything deeper
+/// can never name-resolve against the installer. 512 is ~100x the depth a
+/// genuine cached blob uses and small enough to be safe on a 1 MiB thread stack.
+/// Same guard class as the ported `MAX_ELEMENT_DEPTH` (XML) and
+/// `MAX_DEPENDENCY_DEPTH` (condition trees). See PARITY-NOTES "Task 12".
+pub const MAX_PARSE_DEPTH: usize = 512;
+
+/// Recursive-descent parser state over the raw UTF-8 bytes of the document.
+struct Parser<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+    /// Current container nesting depth, bounded by [`MAX_PARSE_DEPTH`].
+    depth: usize,
+}
+
+impl Parser<'_> {
+    fn skip_ws(&mut self) {
+        while matches!(self.bytes.get(self.pos), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+            self.pos += 1;
+        }
+    }
+
+    fn value(&mut self) -> Result<Value, String> {
+        self.skip_ws();
+        match self.bytes.get(self.pos) {
+            Some(b'{') => self.object(),
+            Some(b'[') => self.array(),
+            Some(b'"') => Ok(Value::Str(self.string()?)),
+            Some(b't') => self.literal("true", Value::Bool(true)),
+            Some(b'f') => self.literal("false", Value::Bool(false)),
+            Some(b'n') => self.literal("null", Value::Null),
+            Some(_) => self.number(),
+            None => Err("unexpected end of JSON".to_string()),
+        }
+    }
+
+    fn literal(&mut self, word: &str, value: Value) -> Result<Value, String> {
+        if self.bytes[self.pos..].starts_with(word.as_bytes()) {
+            self.pos += word.len();
+            Ok(value)
+        } else {
+            Err(format!("invalid literal at byte {}", self.pos))
+        }
+    }
+
+    /// Enter one container level, failing past [`MAX_PARSE_DEPTH`].
+    fn enter(&mut self) -> Result<(), String> {
+        self.depth += 1;
+        if self.depth > MAX_PARSE_DEPTH {
+            return Err(format!(
+                "nesting deeper than {MAX_PARSE_DEPTH} at byte {}",
+                self.pos
+            ));
+        }
+        Ok(())
+    }
+
+    /// Parse an object, accounting one nesting level. Depth is released only on
+    /// success; an `Err` aborts the whole parse, so it need not unwind.
+    fn object(&mut self) -> Result<Value, String> {
+        self.enter()?;
+        let value = self.object_body()?;
+        self.depth -= 1;
+        Ok(value)
+    }
+
+    fn object_body(&mut self) -> Result<Value, String> {
+        self.pos += 1; // consume '{'
+        let mut map = BTreeMap::new();
+        self.skip_ws();
+        if self.bytes.get(self.pos) == Some(&b'}') {
+            self.pos += 1;
+            return Ok(Value::Object(map));
+        }
+        loop {
+            self.skip_ws();
+            if self.bytes.get(self.pos) != Some(&b'"') {
+                return Err(format!("expected object key at byte {}", self.pos));
+            }
+            let key = self.string()?;
+            self.skip_ws();
+            if self.bytes.get(self.pos) != Some(&b':') {
+                return Err(format!("expected ':' at byte {}", self.pos));
+            }
+            self.pos += 1;
+            let val = self.value()?;
+            map.insert(key, val);
+            self.skip_ws();
+            match self.bytes.get(self.pos) {
+                Some(b',') => self.pos += 1,
+                Some(b'}') => {
+                    self.pos += 1;
+                    return Ok(Value::Object(map));
+                }
+                _ => return Err(format!("expected ',' or '}}' at byte {}", self.pos)),
+            }
+        }
+    }
+
+    /// Parse an array, accounting one nesting level. See [`Parser::object`].
+    fn array(&mut self) -> Result<Value, String> {
+        self.enter()?;
+        let value = self.array_body()?;
+        self.depth -= 1;
+        Ok(value)
+    }
+
+    fn array_body(&mut self) -> Result<Value, String> {
+        self.pos += 1; // consume '['
+        let mut items = Vec::new();
+        self.skip_ws();
+        if self.bytes.get(self.pos) == Some(&b']') {
+            self.pos += 1;
+            return Ok(Value::Array(items));
+        }
+        loop {
+            items.push(self.value()?);
+            self.skip_ws();
+            match self.bytes.get(self.pos) {
+                Some(b',') => self.pos += 1,
+                Some(b']') => {
+                    self.pos += 1;
+                    return Ok(Value::Array(items));
+                }
+                _ => return Err(format!("expected ',' or ']' at byte {}", self.pos)),
+            }
+        }
+    }
+
+    fn string(&mut self) -> Result<String, String> {
+        self.pos += 1; // consume opening '"'
+        let mut out = String::new();
+        loop {
+            match self.bytes.get(self.pos) {
+                None => return Err("unterminated string".to_string()),
+                Some(b'"') => {
+                    self.pos += 1;
+                    return Ok(out);
+                }
+                Some(b'\\') => {
+                    self.pos += 1;
+                    let esc = *self
+                        .bytes
+                        .get(self.pos)
+                        .ok_or_else(|| "truncated escape".to_string())?;
+                    self.pos += 1;
+                    match esc {
+                        b'"' => out.push('"'),
+                        b'\\' => out.push('\\'),
+                        b'/' => out.push('/'),
+                        b'b' => out.push('\u{8}'),
+                        b'f' => out.push('\u{c}'),
+                        b'n' => out.push('\n'),
+                        b'r' => out.push('\r'),
+                        b't' => out.push('\t'),
+                        b'u' => out.push(self.unicode_escape()?),
+                        other => return Err(format!("bad escape \\{}", other as char)),
+                    }
+                }
+                // nlohmann rejects a raw control byte inside a string
+                // (parse_error 101): it must be escaped. Accepting one here
+                // would parse a blob the C++ discards.
+                Some(&b) if b < 0x20 => {
+                    return Err(format!("raw control byte {b:#04x} in string"));
+                }
+                Some(&b) => {
+                    // Copy one UTF-8 code point verbatim (the source is valid
+                    // UTF-8, so the continuation bytes are well-formed).
+                    let len = match b {
+                        0x00..=0x7f => 1,
+                        0xc0..=0xdf => 2,
+                        0xe0..=0xef => 3,
+                        _ => 4,
+                    };
+                    let end = self.pos + len;
+                    let slice = self
+                        .bytes
+                        .get(self.pos..end)
+                        .ok_or_else(|| "truncated UTF-8".to_string())?;
+                    out.push_str(
+                        std::str::from_utf8(slice).map_err(|_| "invalid UTF-8".to_string())?,
+                    );
+                    self.pos = end;
+                }
+            }
+        }
+    }
+
+    /// Decode a `\uXXXX` escape (already past the `u`), combining a surrogate
+    /// pair when a high surrogate is followed by `\uXXXX` low surrogate.
+    fn unicode_escape(&mut self) -> Result<char, String> {
+        let hi = self.hex4()?;
+        if (0xd800..=0xdbff).contains(&hi) {
+            // High surrogate: require a following low surrogate escape.
+            if self.bytes.get(self.pos) == Some(&b'\\')
+                && self.bytes.get(self.pos + 1) == Some(&b'u')
+            {
+                self.pos += 2;
+                let lo = self.hex4()?;
+                if (0xdc00..=0xdfff).contains(&lo) {
+                    let c = 0x10000 + ((hi - 0xd800) << 10) + (lo - 0xdc00);
+                    return char::from_u32(c).ok_or_else(|| "bad surrogate pair".to_string());
+                }
+            }
+            return Err("lone high surrogate".to_string());
+        }
+        if (0xdc00..=0xdfff).contains(&hi) {
+            return Err("lone low surrogate".to_string());
+        }
+        char::from_u32(hi).ok_or_else(|| "bad code point".to_string())
+    }
+
+    fn hex4(&mut self) -> Result<u32, String> {
+        let slice = self
+            .bytes
+            .get(self.pos..self.pos + 4)
+            .ok_or_else(|| "truncated \\u escape".to_string())?;
+        // Require four ASCII hex digits. `u32::from_str_radix` would also accept
+        // a leading '+' (so `\u+123` would decode), which nlohmann rejects.
+        let mut code: u32 = 0;
+        for &b in slice {
+            let digit = match b {
+                b'0'..=b'9' => u32::from(b - b'0'),
+                b'a'..=b'f' => u32::from(b - b'a') + 10,
+                b'A'..=b'F' => u32::from(b - b'A') + 10,
+                _ => return Err("bad \\u hex".to_string()),
+            };
+            code = code * 16 + digit;
+        }
+        self.pos += 4;
+        Ok(code)
+    }
+
+    /// Parse a number token under the strict RFC 8259 grammar nlohmann enforces:
+    /// `-? (0 | [1-9][0-9]*) ( '.' [0-9]+ )? ( [eE] [+-]? [0-9]+ )?`.
+    ///
+    /// Scanning a permissive character class and deferring to Rust's `FromStr`
+    /// would accept `01`, `+5`, `.5` and `1.` - all of which nlohmann rejects
+    /// with parse_error 101. On the Tier-1 path that difference is not cosmetic:
+    /// the C++ discards the whole cached blob and runs the full solve, so
+    /// accepting it here would emit a completely different document.
+    fn number(&mut self) -> Result<Value, String> {
+        let start = self.pos;
+
+        // Optional minus (a leading '+' is NOT valid JSON).
+        if self.bytes.get(self.pos) == Some(&b'-') {
+            self.pos += 1;
+        }
+
+        // Integer part: a lone '0', or a nonzero digit followed by digits. A
+        // leading zero such as `01` is rejected.
+        match self.bytes.get(self.pos) {
+            Some(b'0') => self.pos += 1,
+            Some(b'1'..=b'9') => {
+                while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
+                    self.pos += 1;
+                }
+            }
+            _ => return Err(format!("invalid value at byte {start}")),
+        }
+
+        let mut is_float = false;
+
+        // Fraction: '.' must be followed by at least one digit (`1.` is invalid).
+        if self.bytes.get(self.pos) == Some(&b'.') {
+            self.pos += 1;
+            if !matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
+                return Err(format!("expected digit after '.' at byte {}", self.pos));
+            }
+            while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
+                self.pos += 1;
+            }
+            is_float = true;
+        }
+
+        // Exponent: [eE] with an optional sign and at least one digit.
+        if matches!(self.bytes.get(self.pos), Some(b'e' | b'E')) {
+            self.pos += 1;
+            if matches!(self.bytes.get(self.pos), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            if !matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
+                return Err(format!("expected digit in exponent at byte {}", self.pos));
+            }
+            while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
+                self.pos += 1;
+            }
+            is_float = true;
+        }
+
+        // The token is ASCII by construction, so this cannot fail.
+        let s = std::str::from_utf8(&self.bytes[start..self.pos])
+            .map_err(|_| "bad number".to_string())?;
+
+        // nlohmann's number split: a fractional/exponent token is a double;
+        // otherwise int64 if it fits, else uint64, else a double.
+        if is_float {
+            return s
+                .parse::<f64>()
+                .map(Value::Double)
+                .map_err(|_| format!("bad number {s:?}"));
+        }
+        if let Ok(i) = s.parse::<i64>() {
+            return Ok(Value::Int(i));
+        }
+        if let Ok(u) = s.parse::<u64>() {
+            return Ok(Value::UInt(u));
+        }
+        s.parse::<f64>()
+            .map(Value::Double)
+            .map_err(|_| format!("bad number {s:?}"))
     }
 }
 
@@ -509,5 +892,176 @@ mod tests {
         let mut a = Value::array();
         a.push(Value::Int(1));
         assert!(!a.is_empty());
+    }
+
+    // --- parse (Tier-1 fomod-plus blob decoder) ---------------------------
+
+    #[test]
+    fn parse_scalars_and_containers() {
+        assert_eq!(parse("null").unwrap(), Value::Null);
+        assert_eq!(parse("  true ").unwrap(), Value::Bool(true));
+        assert_eq!(parse("false").unwrap(), Value::Bool(false));
+        assert_eq!(parse("42").unwrap(), Value::Int(42));
+        assert_eq!(parse("-7").unwrap(), Value::Int(-7));
+        // Fractional/exponent tokens are doubles; plain integers are ints.
+        assert_eq!(parse("0.5").unwrap(), Value::Double(0.5));
+        assert_eq!(parse("1e3").unwrap(), Value::Double(1000.0));
+        assert_eq!(parse("\"hi\"").unwrap(), Value::string("hi"));
+        assert_eq!(parse("[]").unwrap(), Value::array());
+        assert_eq!(parse("{}").unwrap(), Value::object());
+    }
+
+    #[test]
+    fn parse_object_and_array_round_trip() {
+        let v = parse(r#"{"steps":[{"name":"Main","groups":[]}]}"#).unwrap();
+        let steps = v.get("steps").unwrap();
+        assert_eq!(steps.array_len(), Some(1));
+        assert_eq!(
+            steps
+                .get_index(0)
+                .unwrap()
+                .get("name")
+                .and_then(Value::as_str),
+            Some("Main")
+        );
+        // dump re-emits with sorted keys; parsing it back yields an equal value.
+        assert_eq!(parse(&v.dump(2)).unwrap(), v);
+    }
+
+    #[test]
+    fn parse_string_escapes_including_surrogate_pair() {
+        assert_eq!(parse(r#""a\"b""#).unwrap(), Value::string("a\"b"));
+        assert_eq!(parse(r#""a\\b""#).unwrap(), Value::string("a\\b"));
+        assert_eq!(
+            parse(r#""line\nfeed""#).unwrap(),
+            Value::string("line\nfeed")
+        );
+        assert_eq!(parse(r#""A""#).unwrap(), Value::string("A"));
+        // U+1F600 as a UTF-16 surrogate pair.
+        assert_eq!(parse(r#""😀""#).unwrap(), Value::string("\u{1f600}"));
+        // Raw non-ASCII UTF-8 passes through.
+        assert_eq!(parse("\"café\"").unwrap(), Value::string("café"));
+    }
+
+    #[test]
+    fn parse_duplicate_keys_keep_last() {
+        // nlohmann keeps the last occurrence of a duplicated key.
+        let v = parse(r#"{"a":1,"a":2}"#).unwrap();
+        assert_eq!(v.get("a").and_then(Value::as_i64), Some(2));
+    }
+
+    #[test]
+    fn parse_rejects_malformed_without_panicking() {
+        for bad in [
+            "",
+            "{",
+            "[1,2",
+            "{\"a\":}",
+            "truer",
+            "\"unterminated",
+            "{\"a\":1} trailing",
+            "01x",
+            "\"\\ud83d\"", // lone high surrogate
+        ] {
+            assert!(parse(bad).is_err(), "expected parse error for {bad:?}");
+        }
+    }
+
+    #[test]
+    fn parse_number_grammar_is_strict_like_nlohmann() {
+        // nlohmann rejects each of these with parse_error 101. Accepting them
+        // would turn a Tier-1 MISS into a Tier-1 HIT and emit a different
+        // document, so leniency here is a real parity bug, not a nicety.
+        for bad in [
+            "01",         // leading zero
+            "-01",        // leading zero after the sign
+            "+5",         // leading plus
+            ".5",         // no integer part
+            "1.",         // no fraction digits
+            "1e",         // no exponent digits
+            "1e+",        // sign but no exponent digits
+            "-",          // sign only
+            "{\"a\":01}", // nested, the shape a cached blob would carry
+        ] {
+            assert!(parse(bad).is_err(), "expected parse error for {bad:?}");
+        }
+
+        // ...while the valid forms still parse to the right variant.
+        assert_eq!(parse("0").unwrap(), Value::Int(0));
+        assert_eq!(parse("-0").unwrap(), Value::Int(0));
+        assert_eq!(parse("10").unwrap(), Value::Int(10));
+        assert_eq!(parse("1.5").unwrap(), Value::Double(1.5));
+        assert_eq!(parse("1e-3").unwrap(), Value::Double(0.001));
+        assert_eq!(parse("0.0").unwrap(), Value::Double(0.0));
+    }
+
+    #[test]
+    fn parse_big_integers_use_uint_and_keep_their_digits() {
+        // nlohmann stores an integer above i64::MAX as number_unsigned_t and
+        // dumps the exact digits; degrading to a double would print a mangled
+        // float. Reachable through the Tier-1 emitter, which echoes a cached
+        // `deselected` entry's raw `name` value into the output.
+        assert_eq!(parse("9223372036854775807").unwrap(), Value::Int(i64::MAX));
+        assert_eq!(
+            parse("9223372036854775808").unwrap(),
+            Value::UInt(9_223_372_036_854_775_808)
+        );
+        assert_eq!(
+            parse("18446744073709551615").unwrap(),
+            Value::UInt(u64::MAX)
+        );
+        assert_eq!(
+            Value::UInt(18_446_744_073_709_551_615).dump(2),
+            "18446744073709551615"
+        );
+        // Wider than u64 falls back to a double, as nlohmann does.
+        assert!(matches!(
+            parse("18446744073709551616").unwrap(),
+            Value::Double(_)
+        ));
+    }
+
+    #[test]
+    fn parse_rejects_raw_control_bytes_and_signed_unicode_escapes() {
+        // A raw control byte inside a string is parse_error 101 in nlohmann; it
+        // has to be escaped.
+        assert!(parse("\"a\tb\"").is_err());
+        assert!(parse("\"a\nb\"").is_err());
+        assert!(parse("\"a\u{1}b\"").is_err());
+        // The escaped forms remain valid.
+        assert_eq!(parse(r#""a\tb""#).unwrap(), Value::string("a\tb"));
+        assert_eq!(parse(r#""a\u0001b""#).unwrap(), Value::string("a\u{1}b"));
+        // `u32::from_str_radix` would accept a sign, so `\u+123` must not decode.
+        assert!(parse(r#""\u+123""#).is_err());
+        assert!(parse(r#""\u 123""#).is_err());
+        assert!(parse(r#""\uzzzz""#).is_err());
+    }
+
+    #[test]
+    fn parse_depth_is_capped_instead_of_overflowing_the_stack() {
+        // At the cap the document still parses...
+        let deep_ok = format!(
+            "{}1{}",
+            "[".repeat(MAX_PARSE_DEPTH),
+            "]".repeat(MAX_PARSE_DEPTH)
+        );
+        assert!(parse(&deep_ok).is_ok());
+
+        // ...one level further is a clean Err, NOT a stack overflow. Without the
+        // cap this input class aborts the host process (a Windows stack overflow
+        // is an SEH exception that `capi`'s catch_unwind cannot contain).
+        let too_deep = format!(
+            "{}1{}",
+            "[".repeat(MAX_PARSE_DEPTH + 1),
+            "]".repeat(MAX_PARSE_DEPTH + 1)
+        );
+        assert!(parse(&too_deep).is_err());
+
+        // The unterminated form a hostile meta.ini would actually carry.
+        assert!(parse(&"[".repeat(100_000)).is_err());
+
+        // Depth is per-path, not cumulative: many shallow siblings are fine.
+        let wide = format!("[{}]", vec!["[1]"; 5000].join(","));
+        assert!(parse(&wide).is_ok());
     }
 }
