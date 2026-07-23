@@ -2779,3 +2779,242 @@ side changes.
 
 `cargo test`: 470 -> 485 (the 15 new cases). `cargo clippy --all-targets
 -- -D warnings` and `cargo fmt --check` clean.
+
+## Task 14 - FileOperations + FomodService install replay
+
+Milestone 7 begins. `src/FileOperations.hpp`/`.cpp` ->
+`rust/mo2-salma-rs/src/file_operations.rs`, `src/FomodService.hpp`/`.cpp` ->
+`src/fomod_service.rs`, and the `FileOperation` / `FileOpType` / `InstallResult`
+structs from `src/Types.hpp` -> `src/types.rs`. This is the install REPLAY: it
+turns a parsed `FomodInstaller` IR plus a JSON selections document into the
+ordered `FileOperation` queue and copies the files. It shares the Task 5
+dependency evaluator (`evaluate_condition` / `evaluate_plugin_type`) and Task 3
+utilities (`is_safe_destination`, `to_lower`). The `install` /
+`installWithConfig` exports still return the Milestone-1 stub - wiring the
+services to the ABI is Task 15.
+
+### `types.rs` additions
+
+`FileOpType` (File/Folder, `#[default] File`), `FileOperation`
+(op_type/source/destination/priority/document_order, all defaulting like the C++
+aggregate), and `InstallResult` (success/mod_path/error). No behavior, pure data;
+`FomodDependencyContext` and `PluginType` were already present from Tasks 3/5.
+
+### FileOperations (`file_operations.rs`)
+
+- **Two executors, two sort keys - both real, both reproduced.**
+  `FileOperations::execute` (the instance/queue method) stable-sorts by
+  `priority` ALONE (`FileOperations.cpp:59-62`) and leans on the stable sort to
+  keep insertion order among equal priorities. `FomodService::execute_file_operations`
+  (the free fn in `fomod_service.rs`) sorts by `(priority, document_order)`
+  (`FomodService.cpp:691-698`). The FOMOD replay path uses the LATTER; the former
+  exists for non-queued callers (Task 15's `InstallationService`). Rust
+  `Vec::sort_by_key` / `sort_by` are stable, matching `std::stable_sort`. Pinned
+  by `equal_priority_keeps_insertion_order_and_ignores_document_order` (the queue
+  method ignores `document_order`) and `execute_sorts_by_priority_then_document_order`
+  (the free fn uses it).
+- **Non-throwing contract.** Every C++ entry point is documented "does not
+  throw": each I/O step is wrapped in `try`/`catch (const fs::filesystem_error&)`
+  that logs and returns-early-or-continues. The port returns `()` from every
+  function and swallows `std::io::Error` at exactly the same points, so no
+  `Result` and no panic reaches FFI.
+- **Disk-full detection.** C++ compares the caught error against the portable
+  `std::errc::no_space_on_device` (`FileOperations.cpp:24-27`); MSVC's Win32
+  mapping folds both `ERROR_DISK_FULL` (112) and `ERROR_HANDLE_DISK_FULL` (39)
+  into that. Rust has no `error_condition`, so `is_disk_full` tests
+  `io::ErrorKind::StorageFull` (std maps the same two codes to it) OR the raw OS
+  code, with the accepted list `cfg`-gated per platform (`{112, 39}` on Windows,
+  `ENOSPC` 28 elsewhere) so a Windows `ERROR_OUT_OF_PAPER` (also 28) cannot be
+  mistaken for a full disk. The sticky `g_disk_full` atomic becomes a `static
+  AtomicBool` (Relaxed, matching the C++ memory order). Pinned by
+  `is_disk_full_maps_the_platform_error_codes`; the set-from-I/O path cannot be
+  provoked from a unit test (a real ENOSPC), so only the mapping is exercised.
+- **`copy_folder` uses an explicit stack** in place of
+  `fs::recursive_directory_iterator(src, skip_permission_denied)`. Parity points:
+  a directory entry is created at its destination BEFORE its children are visited
+  (pre-order), so empty subdirectories are reproduced; `DirEntry::file_type` does
+  not follow symlinks (matches `entry.symlink_status()`), and symlinked entries
+  are skipped; a `PermissionDenied` iteration error is skipped
+  (`skip_permission_denied`), while ANY OTHER iteration error aborts the whole
+  copy (the C++ outer `catch`); per-entry copy/mkdir errors are logged and the
+  loop continues (the C++ inner `catch`). Sibling order within a directory is
+  unspecified in both. Pinned by `copy_folder_reproduces_nested_tree_and_empty_dirs`,
+  `copy_folder_skips_symlinks` (skips itself when the platform refuses symlink
+  creation without privilege), `copy_folder_overwrites_existing_files_and_keeps_unrelated_ones`.
+- **`copy_directory_contents` quirks reproduced:** NO source-existence check (a
+  missing `src` still creates `dst`, then fails at iteration), and the
+  `create_directories(dst)` failure path does NOT consult the disk-full flag even
+  though the sibling `move_directory_contents` does. `fs::is_directory(entry)`
+  FOLLOWS symlinks, so a symlink-to-directory takes the folder branch
+  (`Path::is_dir` follows too). Pinned by
+  `copy_directory_contents_creates_dst_even_when_src_is_missing`.
+- **`move_directory_contents`:** `fs::rename` per child first, copy+remove
+  fallback on ANY rename error EXCEPT disk-full (which sets the sticky flag and
+  skips the child). Best-effort source cleanup mirrors `fs::remove_all` with an
+  ignored error_code (symlink_status semantics: a symlink is unlinked as a link,
+  never recursed). A real directory recurses via `remove_dir_all`; everything
+  else - a real file, a file symlink, OR a directory symlink/junction, all of
+  which report `is_dir() == false` under `symlink_metadata` - is unlinked with
+  `remove_file(...).or_else(|_| remove_dir(...))`. The fallback is NOT cosmetic:
+  a Windows directory reparse point is directory-attributed, so `remove_file`
+  (DeleteFileW) cannot delete it - only `remove_dir` (RemoveDirectoryW) can (a
+  Task 14 review finding; an earlier revision routed the directory-symlink case
+  to `remove_file` alone and left the link behind on Windows). On Unix the
+  `remove_file` unlink already removes any symlink, so the fallback never runs.
+  Not wired into any path in Task 14 (Task 15's `InstallationService` uses it for
+  the `unfomod -> mod_path` step); ported and tested now. Pinned by
+  `move_directory_contents_falls_back_to_copy_when_rename_fails` and
+  `move_directory_contents_removes_a_directory_symlink_child_on_fallback` (which
+  skips where directory-symlink creation needs a privilege the session lacks).
+- **Dropped logging (Task 17).** Every `Logger::instance().log*` call is dropped;
+  the branch that produced it is kept with a `// dropped log site` comment so
+  Task 17 restores it verbatim.
+
+### FomodService (`fomod_service.rs`)
+
+- **Exceptions become `Result`.** C++ `process_optional_files` and
+  `validate_json_selections` read step/group names with `json.value("name", "")`,
+  which THROWS `type_error 306` on a non-object element and `302` on a
+  present-but-non-string `name` (only an ABSENT key uses the default). Those
+  throws escape to the caller and fail the whole install;
+  `process_optional_files` first rolls its queued operations back. The port
+  returns `Result<_, SelectionsError>` and the private `name_field` reproduces
+  `value()`'s exact tri-state (same as `fomod_inference_service::name_field`, see
+  Task 12). PLUGIN names stay tolerant via `read_plugin_name`. Pinned by
+  `non_string_step_name_aborts_and_rolls_back`,
+  `non_object_step_and_non_string_group_name_abort`,
+  `name_field_reproduces_nlohmann_value_tri_state`,
+  `validate_propagates_the_name_type_error`.
+- **The `FomodService.hpp` class doc comment is STALE - the CODE is ported, not
+  the doc.** The header claims plugin entries are read via `get<std::string>()`
+  and that a non-string entry throws. The actual code
+  (`FomodService.cpp:22-33` `read_plugin_name`) is schema-tolerant: it accepts
+  schema-v1 strings AND schema-v2 objects and returns `""` for anything else so
+  the caller SKIPS it. Pinned by
+  `read_plugin_name_accepts_both_schemas_and_skips_the_rest` and
+  `schema_v1_and_v2_produce_identical_operations`.
+- **Rollback contract.** On `Err`, `ops` is truncated back to its entry length
+  and `next_doc_order` is restored (`FomodService.cpp:623-624`). The C++ does NOT
+  roll back `plugin_flags_` mutations, and neither does the port - moot because
+  the caller aborts the whole install on the re-throw. The
+  `initial_ops_size`/`initial_doc_order` are captured at the top BEFORE the
+  has-steps check, matching the C++.
+- **Occurrence-based matching quirks**, each pinned: a JSON step with no `groups`
+  array still CONSUMES a step-name occurrence before skipping
+  (`step_without_groups_array_still_consumes_an_occurrence`); a missing IR step
+  does NOT consume a second occurrence
+  (`missing_ir_step_does_not_consume_a_second_occurrence`); a missing IR GROUP
+  does NOT skip the plugin loop - the loop still runs and still advances the
+  plugin-occurrence counters, every lookup simply misses
+  (`group_without_plugins_array_still_consumes_an_occurrence`,
+  `duplicate_plugin_names_bind_by_occurrence`). The three passes (explicit
+  selections + per-step Required, catch-all Required for steps absent from the
+  JSON, alwaysInstall/installIfUsable from unselected plugins) are ported
+  statement-for-statement with visibility re-checked in each pass against the
+  flags as they stand at that point.
+- **Free functions vs private members.** `enqueue_entry` /
+  `enqueue_plugin_files` / `make_plugin_key` are free functions (the C++ has them
+  as private members, but none touch instance state); this lets
+  `process_optional_files` split-borrow `installer` (read) and `plugin_flags`
+  (write).
+- **`enqueue_entry` rooted-destination hole, reproduced not fixed.** The guard
+  `is_safe_destination` checks the NORMALIZED destination while the join uses the
+  RAW one, so a rooted destination like `/etc/passwd` passes (normalization
+  strips the leading slash) and then REPLACES the base during the join - the
+  root-component rule is identical in `std::filesystem::operator/` and
+  `Path::join`. Pinned by `enqueue_entry_reproduces_the_rooted_destination_hole`.
+  `..` segments are stripped by `normalize_path` and accepted (as in the C++),
+  pinned by `enqueue_entry_skips_traversal_destination`.
+- **`execute_file_operations` failed-counter is always 0 in practice**, in both
+  languages: `copy_file`/`copy_folder` swallow every I/O error internally (the
+  C++ statics are documented and implemented non-throwing), so the `try`/`catch`
+  this loop mirrors can never fire. The count is ported anyway because it is
+  observable through the return value. The body is factored behind
+  `execute_file_operations_with(ops, copy_fn)` so tests can observe execution
+  order and the failure counting without touching disk
+  (`execute_counts_failures_without_aborting`).
+
+### Install-replay end-to-end oracle (`tests/fomod_service_install_fixtures.rs`)
+
+Corpus-gated: for each committed case with an existing `source_archive_path`,
+extract the real archive, parse its `ModuleConfig.xml`, replay the install driven
+by the committed schema-v2 `expected.json` selections (the realistic
+`installWithConfig` path AND free coverage of the v2 consumer over real
+documents), then diff the tree the replay writes to disk against the golden
+`target_tree.json`. Skipped as a no-op on CI (no corpus), same convention as
+`archive_service_fixtures.rs`. Assertion strength is taken from the case's own
+`expected.json`: `exact_match: true` cases are byte-checked (paths + reachable
+sizes); `exact_match: false` cases are PATH-checked, since the reference
+implementation does not itself claim size equality there. The non-exact path
+check asserts real `missing.len() <= repro.missing` (the produced tree and the
+simulated tree the `repro` counts come from target the same dest set, so the
+replay must not DROP more dests than predicted - this catches under-production,
+e.g. an optional pass that enqueues nothing, which a bare `missing == 0` guard
+missed for `rar_exactlyone_heel_volume` at `repro.missing == 35`; a Task 14
+review finding) plus `extra.is_empty()` when `repro.extra == 0`.
+
+#### Stale golden vs committed archive - the simulator/installer/scan three-way split
+
+The end-to-end oracle initially FAILED on `sevenz_2step_nec_feet`: 12 mesh files
+"replayed at the wrong size" (e.g. `femalefeet_0.nif` got 825938, want 786505).
+Root cause, fully traced, is NOT a replay defect:
+
+- The committed archive contains exactly ONE source for each of those 12 dests
+  (no conflict to resolve), and the replay faithfully copies that source's real
+  bytes. `femalefeet_0.nif` is 825938 in `Base File\meshes\...`; the golden wants
+  786505, a size that appears NOWHERE in the committed `.7z`. The installed mod's
+  `.nif`s are simply a DIFFERENT build than the committed archive revision.
+- The C++ inference nonetheless stamps the case `exact_match: true`. That is a
+  false positive from the Task 12 entry-size under-population bug: the archive
+  paths carry uppercase and backslashes (`Base File\meshes\...`), so their atoms
+  keep `file_size == 0`, and a zero size compares as a size-compatibility
+  wildcard in `find_contested_dests`/`compare_trees`, so the SIMULATED tree never
+  registers a size mismatch. The simulator (atom-based) and the byte-level replay
+  (`FileOperation`-based) therefore disagree only because the simulator is
+  looking at size-0 atoms.
+- Two further committed cases carry the same class of stale-golden file, for
+  different real-world reasons: `zip_11step_cbbe_3ba` (3 shared `.tri` morph
+  files; the archive ships 3048-byte stubs, the installed mod has 645644-byte
+  versions - overwritten by a later mod, or a different build) and
+  `zip_exactlyone_mu_joint_fix` (`skse/plugins/mujointfix.log`; the archive ships
+  an empty 0-byte placeholder, the golden captured the 31378-byte RUNTIME log).
+  All three are "the installed file at this dest is not what THIS archive
+  produces."
+
+Fix is to the ORACLE, not the replay (the replay is correct): the exact-case size
+assertion now byte-checks only files whose golden size the committed archive can
+actually produce (`golden_size ∈ set(archive entry sizes)`), and skips + counts
+files whose golden size is unreachable. This is safe by construction - a genuine
+wrong-winner produces SOME archive size, so if the correct golden size were
+reachable the assertion still fires; only sizes NO archive source can produce are
+excused. Confirmed across the whole committed corpus: every produced-vs-golden
+size difference is an unreachable stale-golden file (16 files across 3 cases);
+there is not a single reachable-dest disagreement, i.e. the replay's conflict
+resolution reproduces the golden at every dest the archive can actually build.
+Recorded here rather than "fixed" in the corpus because the golden bytes are the
+authoritative capture of the installed mod, stale or not, and the Task 12
+under-population bug that hides the discrepancy from the simulator is itself a
+faithfully-reproduced C++ divergence.
+
+Note the two salma conflict models this exposed: the forward SIMULATOR overwrites
+on `new.priority >= existing.priority` and relies on phase + step/group/plugin
+APPLICATION ORDER for the tiebreak (`FomodForwardSimulator.cpp:11-14`), while the
+real INSTALLER sorts individual `FileOperation`s by `(priority, document_order)`
+and copies folders atomically. They agree on every reachable dest in this corpus,
+but they are not the same algorithm; a genuinely-contested folder-overlap dest
+could in principle split them (a latent C++ characteristic, reproduced on both
+sides).
+
+### Scratch removed
+
+A temporary `tests/zz_diag.rs` (a one-off print harness used while tracing the
+`sevenz_2step_nec_feet` conflict above) was deleted before commit, per its own
+header and the plan's git-hygiene rule.
+
+### Test-suite delta
+
+60 new unit tests (39 in `fomod_service.rs`, 21 in `file_operations.rs`), bringing
+the `src/lib.rs` unittest binary to 476, plus the corpus-gated
+`tests/fomod_service_install_fixtures.rs` (1 end-to-end test, a no-op on CI).
+`cargo test`, `cargo clippy --all-targets -- -D warnings`, and `cargo fmt --check`
+all clean.
