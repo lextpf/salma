@@ -1,8 +1,53 @@
-//! Shared types - Rust port of the pieces of `src/Types.hpp` the port needs
-//! so far. Later tasks add `FileOperation` and `InstallResult` when their
-//! consumers arrive.
+//! Shared types - Rust port of `src/Types.hpp`.
 
 use std::collections::HashSet;
+
+/// Discriminator for file vs folder copy operations. Mirror of
+/// `mo2core::FileOpType`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum FileOpType {
+    /// Single file copy.
+    #[default]
+    File,
+    /// Recursive folder copy.
+    Folder,
+}
+
+/// A single queued file or folder copy operation. Mirror of
+/// `mo2core::FileOperation`.
+///
+/// `priority` controls overwrite order (higher wins); `document_order` breaks
+/// ties using enqueue position. Note that the two executors differ in how they
+/// use these: [`crate::fomod_service::execute_file_operations`] sorts by
+/// `(priority, document_order)`, while `FileOperations::execute` sorts by
+/// `priority` alone and relies on the stable sort to preserve insertion order.
+/// See PARITY-NOTES "Task 14".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileOperation {
+    /// File or folder.
+    pub op_type: FileOpType,
+    /// Source path under the extracted archive root.
+    pub source: String,
+    /// Destination path under the mod directory.
+    pub destination: String,
+    /// FOMOD priority attribute (MO2 default: 0).
+    pub priority: i32,
+    /// Enqueue counter, used as the priority tiebreaker. Not strictly XML
+    /// byte-position.
+    pub document_order: i32,
+}
+
+/// Outcome of a FOMOD install/replay attempt. Mirror of
+/// `mo2core::InstallResult`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InstallResult {
+    /// Whether installation completed without error.
+    pub success: bool,
+    /// Path to the installed mod directory.
+    pub mod_path: String,
+    /// Error message if `success` is false.
+    pub error: String,
+}
 
 /// FOMOD plugin type descriptor. Mirror of `mo2core::PluginType` in
 /// `src/Types.hpp`.
