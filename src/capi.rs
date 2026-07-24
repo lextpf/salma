@@ -113,6 +113,8 @@ unsafe fn install_impl(
     json_path: &str,
     tag: &str,
 ) -> *const c_char {
+    // safety: the caller of install_impl guarantees each pointer is null or a valid nul-terminated
+    // string that stays alive for this call.
     match (unsafe { borrow_arg(archive_path) }, unsafe {
         borrow_arg(mod_path)
     }) {
@@ -234,6 +236,8 @@ pub unsafe extern "C" fn installWithConfig(
         || {
             // a null jsonPath is coerced to the empty string. invalid UTF-8 is rejected, consistent
             // with the other two arguments.
+            // safety: `json_path` is null or a valid nul-terminated string that the caller keeps
+            // alive for this call.
             let json = match unsafe { borrow_arg(json_path) } {
                 ArgStr::Null => "",
                 ArgStr::Str(s) => s,
@@ -242,6 +246,8 @@ pub unsafe extern "C" fn installWithConfig(
                     return owned_cstring("Unknown fatal error during installation");
                 }
             };
+            // safety: both pointers are this export's own arguments, forwarded unchanged under the
+            // contract stated above.
             unsafe { install_impl(archive_path, mod_path, json, "installWithConfig") }
         },
         || {
@@ -365,6 +371,8 @@ pub unsafe extern "C" fn resolveModArchive(
         || {
             // only installationFile and modFolder are null-checked; a null modsDir is coerced to an
             // empty path and merely skips candidates 4-6.
+            // safety: each pointer is null or a valid nul-terminated string that the caller keeps
+            // alive for this call.
             let (file, folder) = match (unsafe { borrow_arg(installation_file) }, unsafe {
                 borrow_arg(mod_folder)
             }) {
@@ -372,6 +380,7 @@ pub unsafe extern "C" fn resolveModArchive(
                 // null and non-UTF-8 both yield "".
                 _ => return owned_cstring(""),
             };
+            // safety: `mods_dir` carries the same null-or-valid contract.
             let mods = match unsafe { borrow_arg(mods_dir) } {
                 ArgStr::Str(s) => s,
                 ArgStr::Null | ArgStr::InvalidUtf8 => "",
