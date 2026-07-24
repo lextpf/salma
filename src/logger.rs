@@ -371,6 +371,8 @@ struct Stamp {
 #[cfg(windows)]
 fn now_local() -> Stamp {
     use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    // safety: SYSTEMTIME holds only integer fields, so all-zero is a valid value, and GetLocalTime
+    // overwrites it on the next line.
     let mut st = unsafe { std::mem::zeroed() };
     // safety: GetLocalTime only writes the SYSTEMTIME out-parameter.
     unsafe { GetLocalTime(&mut st) };
