@@ -1,13 +1,13 @@
 /*!
- * @brief defines shared string, path, hash, and FOMOD parsing helpers.
- * @author Alex (https://github.com/lextpf)
+ * @brief Defines shared string, path, hash, and FOMOD parsing helpers.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * string folding and path normalization are ASCII-only. normalize_path and
+ * String folding and path normalization are ASCII-only. normalize_path and
  * normalize_destination_for_join use different operation order and are not interchangeable.
  *
- * ### :material-shield-lock: path containment
+ * ### :material-shield-lock: Path containment
  *
- * path name screens do not prove containment. callers that join untrusted input must also verify
+ * Path name screens do not prove containment. Callers that join untrusted input must also verify
  * the result with is_inside.
  */
 
@@ -15,11 +15,11 @@ use crate::types::PluginType;
 use std::path::{Component, Path, PathBuf};
 
 /**
- * @fn to_lower(&str) -> String
- * @brief fold ASCII letters and leave non-ASCII text unchanged.
- * @author Alex (https://github.com/lextpf)
+ * @fn `to_lower(&str) -> String`
+ * @brief Fold ASCII letters and leave non-ASCII text unchanged.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * bytes >= 0x80 pass through, and every byte of a multi-byte UTF-8 sequence is >= 0x80, so
+ * Bytes >= 0x80 pass through, and every byte of a multi-byte UTF-8 sequence is >= 0x80, so
  * non-ASCII text is untouched.
  */
 pub fn to_lower(s: &str) -> String {
@@ -27,18 +27,18 @@ pub fn to_lower(s: &str) -> String {
 }
 
 /**
- * @fn normalize_path(&str) -> String
- * @brief normalize lexically with ASCII-only case folding and no filesystem access.
- * @author Alex (https://github.com/lextpf)
+ * @fn `normalize_path(&str) -> String`
+ * @brief Normalize lexically with ASCII-only case folding and no filesystem access.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * applies ASCII lowercase, slash conversion, leading and trailing slash removal, duplicate-slash
+ * Applies ASCII lowercase, slash conversion, leading and trailing slash removal, duplicate-slash
  * collapse, then removal of dot segments.
  *
  * @verbatim
  * ./\Textures\\LOD/ -> textures/lod
  * @endverbatim
  *
- * normalize_destination_for_join processes leading markers in a different order. for .//foo it
+ * normalize_destination_for_join processes leading markers in a different order. For .//foo it
  * returns /foo, while `normalize_path` returns foo.
  */
 pub fn normalize_path(p: &str) -> String {
@@ -78,15 +78,15 @@ pub const fn fnv1a_hash(data: &[u8]) -> u64 {
 }
 
 /**
- * @fn hash_combine(&mut u64, u64)
- * @brief apply boost-style 64-bit mixing with wrapping arithmetic.
- * @author Alex (https://github.com/lextpf)
+ * @fn `hash_combine(&mut u64, u64)`
+ * @brief Apply boost-style 64-bit mixing with wrapping arithmetic.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * @code{.text}
  * seed ^= v + 0x9e3779b97f4a7c15 + (seed << 6) + (seed >> 2)
  * @endcode
  *
- * all additions wrap at 64 bits.
+ * All additions wrap at 64 bits.
  */
 pub fn hash_combine(seed: &mut u64, v: u64) {
     *seed ^= v
@@ -96,17 +96,17 @@ pub fn hash_combine(seed: &mut u64, v: u64) {
 }
 
 /**
- * @brief define the default scratch-name token length in characters.
- * @author Alex (https://github.com/lextpf)
+ * @brief Define the default scratch-name token length in characters.
+ * @author Alex (<https://github.com/lextpf>)
  */
 pub const RANDOM_HEX_DEFAULT_LEN: usize = 12;
 
 /**
- * @fn random_hex_string(usize) -> String
- * @brief produce non-cryptographic thread-local hexadecimal tokens.
- * @author Alex (https://github.com/lextpf)
+ * @fn `random_hex_string(usize) -> String`
+ * @brief Produce non-cryptographic thread-local hexadecimal tokens.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the source is a thread-local SplitMix64 stream, seeded once per thread from std's OS-seeded
+ * The source is a thread-local SplitMix64 stream, seeded once per thread from std's OS-seeded
  * hasher entropy mixed with the system clock, so no external `rand` dependency is needed.
  */
 pub fn random_hex_string(length: usize) -> String {
@@ -133,12 +133,12 @@ pub fn random_hex_string(length: usize) -> String {
     })
 }
 
-// build a per-thread seed from std's OS-seeded hasher entropy plus the system clock.
+// Build a per-thread seed from std's OS-seeded hasher entropy plus the system clock.
 fn random_seed() -> u64 {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
     use std::time::{SystemTime, UNIX_EPOCH};
-    // each RandomState carries fresh std-internal random keys; finishing an empty hasher yields a
+    // Each RandomState carries fresh std-internal random keys; finishing an empty hasher yields a
     // value derived from those keys.
     let a = RandomState::new().build_hasher().finish();
     let b = RandomState::new().build_hasher().finish();
@@ -152,26 +152,26 @@ fn random_seed() -> u64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeOrder {
     /**
-     * @brief ascending byte-wise lexicographic order on the name attribute (the schema default).
-     * @author Alex (https://github.com/lextpf)
+     * @brief Ascending byte-wise lexicographic order on the name attribute (the schema default).
+     * @author Alex (<https://github.com/lextpf>)
      */
     Ascending,
     /**
-     * @brief descending byte-wise lexicographic order on the name attribute.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Descending byte-wise lexicographic order on the name attribute.
+     * @author Alex (<https://github.com/lextpf>)
      */
     Descending,
     /**
-     * @brief document order (no sort).
-     * @author Alex (https://github.com/lextpf)
+     * @brief Document order (no sort).
+     * @author Alex (<https://github.com/lextpf>)
      */
     Explicit,
 }
 
 /**
- * @fn parse_node_order(Option<&str>) -> NodeOrder
- * @brief default missing values to Ascending and unknown values to Explicit.
- * @author Alex (https://github.com/lextpf)
+ * @fn `parse_node_order(Option<&str>) -> NodeOrder`
+ * @brief Default missing values to Ascending and unknown values to Explicit.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub fn parse_node_order(order_attr: Option<&str>) -> NodeOrder {
@@ -183,9 +183,9 @@ pub fn parse_node_order(order_attr: Option<&str>) -> NodeOrder {
 }
 
 /**
- * @fn get_ordered_nodes<T,F>(Option<&str>,Vec<T>,F)->Vec<T> where F:Fn(&T)->&str
- * @brief use unstable byte-order sorting, or preserve input order for Explicit.
- * @author Alex (https://github.com/lextpf)
+ * @fn `get_ordered_nodes<T,F>(Option<&str>,Vec<T>,F)->Vec<T> where F:Fn(&T)->&str`
+ * @brief Use unstable byte-order sorting, or preserve input order for Explicit.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub fn get_ordered_nodes<T, F>(order_attr: Option<&str>, mut nodes: Vec<T>, name_of: F) -> Vec<T>
@@ -201,11 +201,11 @@ where
 }
 
 /**
- * @fn xml_bool_attribute_true(Option<&str>) -> bool
- * @brief accept only case-insensitive true and the literal 1.
- * @author Alex (https://github.com/lextpf)
+ * @fn `xml_bool_attribute_true(Option<&str>) -> bool`
+ * @brief Accept only case-insensitive true and the literal 1.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * pass `None` for a missing attribute and `Some(value)` otherwise; [`crate::fomod_ir_parser`] feeds
+ * Pass `None` for a missing attribute and `Some(value)` otherwise; [`crate::fomod_ir_parser`] feeds
  * roxmltree attribute values in.
  */
 pub fn xml_bool_attribute_true(attr: Option<&str>) -> bool {
@@ -217,9 +217,9 @@ pub fn xml_bool_attribute_true(attr: Option<&str>) -> bool {
 }
 
 /**
- * @fn parse_plugin_type_string(&str) -> PluginType
- * @brief map unknown names to PluginType::Optional.
- * @author Alex (https://github.com/lextpf)
+ * @fn `parse_plugin_type_string(&str) -> PluginType`
+ * @brief Map unknown names to PluginType::Optional.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub fn parse_plugin_type_string(type_name: &str) -> PluginType {
@@ -245,14 +245,14 @@ pub fn plugin_type_to_string(plugin_type: PluginType) -> &'static str {
 }
 
 /**
- * @fn normalize_destination_for_join(&str) -> String
- * @brief strip root markers from a FOMOD destination before normalization.
- * @author Alex (https://github.com/lextpf)
+ * @fn `normalize_destination_for_join(&str) -> String`
+ * @brief Strip root markers from a FOMOD destination before normalization.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * removes leading slashes before repeated ./ or .\ prefixes. no final slash pass occurs, so
+ * Removes leading slashes before repeated ./ or .\ prefixes. No final slash pass occurs, so
  * .//foo becomes /foo. normalize_path later removes that slash on the normal parser path.
  *
- * @return the stripped path, which can still start with a slash.
+ * @return The stripped path, which can still start with a slash.
  */
 pub fn normalize_destination_for_join(destination: &str) -> String {
     let mut s = destination.trim_start_matches(['\\', '/']);
@@ -263,21 +263,21 @@ pub fn normalize_destination_for_join(destination: &str) -> String {
 }
 
 /**
- * @fn resolve_file_destination(&str, &str, bool) -> String
- * @brief derive empty and directory destinations from the source filename.
- * @author Alex (https://github.com/lextpf)
+ * @fn `resolve_file_destination(&str, &str, bool) -> String`
+ * @brief Derive empty and directory destinations from the source filename.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * | entry  | destination       | intermediate result          |
- * |--------|-------------------|------------------------------|
- * | file   | empty             | source filename              |
- * | file   | trailing slash    | destination plus filename    |
- * | file   | other             | destination                  |
- * | folder | empty             | empty mod-root path          |
- * | folder | other             | destination                  |
+ * | entry  | destination    | intermediate result       |
+ * |--------|----------------|---------------------------|
+ * | file   | empty          | source filename           |
+ * | file   | trailing slash | destination plus filename |
+ * | file   | other          | destination               |
+ * | folder | empty          | empty mod-root path       |
+ * | folder | other          | destination               |
  *
  * normalize_destination_for_join processes the intermediate result.
  *
- * @return the destination prepared for later path normalization.
+ * @return The destination prepared for later path normalization.
  */
 pub fn resolve_file_destination(source: &str, raw_destination: &str, is_file: bool) -> String {
     let mut destination = raw_destination.to_string();
@@ -299,17 +299,17 @@ fn source_filename(source: &str) -> &str {
 }
 
 /**
- * @fn is_safe_destination(&str) -> bool
- * @brief reject drive prefixes without claiming path containment.
- * @author Alex (https://github.com/lextpf)
+ * @fn `is_safe_destination(&str) -> bool`
+ * @brief Reject drive prefixes without claiming path containment.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * empty and dot-only inputs are accepted as the mod root. normalization removes leading slashes,
+ * Empty and dot-only inputs are accepted as the mod root. Normalization removes leading slashes,
  * so the live rejection is a drive prefix in byte position 1.
  *
- * this is not a containment check. a rooted raw path can pass and then replace the base in
- * Path::join. verify the joined path with is_inside when containment is required.
+ * This is not a containment check. A rooted raw path can pass and then replace the base in
+ * Path::join. Verify the joined path with is_inside when containment is required.
  *
- * @return true when the string passes this screen.
+ * @return True when the string passes this screen.
  */
 pub fn is_safe_destination(dest: &str) -> bool {
     if dest.is_empty() {
@@ -327,29 +327,29 @@ pub fn is_safe_destination(dest: &str) -> bool {
     true
 }
 
-// the C-locale isspace set: space, \t, \n, \v, \f, \r.
-// bytes of 0x80 and above never count, so multi-byte UTF-8 is unaffected.
+// The C-locale isspace set: space, \t, \n, \v, \f, \r.
+// Bytes of 0x80 and above never count, so multi-byte UTF-8 is unaffected.
 fn is_c_locale_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\x0b' | b'\x0c' | b'\r')
 }
 
 /**
- * @fn is_safe_mod_name(&str) -> bool
- * @brief reject path syntax and windows-reserved basenames.
- * @author Alex (https://github.com/lextpf)
+ * @fn `is_safe_mod_name(&str) -> bool`
+ * @brief Reject path syntax and windows-reserved basenames.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * | rejected form          | rule                                      |
- * |------------------------|-------------------------------------------|
- * | empty or edge space    | C-locale whitespace                       |
- * | path                   | separator or absolute path                |
- * | dot name               | . or ..                                   |
- * | trailing dot           | windows removes it                        |
- * | reserved device stem   | CON, PRN, AUX, NUL, COM1-9, or LPT1-9     |
+ * | rejected form        | rule                                  |
+ * |----------------------|---------------------------------------|
+ * | empty or edge space  | C-locale whitespace                   |
+ * | path                 | separator or absolute path            |
+ * | dot name             | . or ..                               |
+ * | trailing dot         | windows removes it                    |
+ * | reserved device stem | CON, PRN, AUX, NUL, COM1-9, or LPT1-9 |
  *
- * windows drive-relative names such as C:evil pass this screen. verify the joined path with
+ * Windows drive-relative names such as C:evil pass this screen. Verify the joined path with
  * is_inside.
  *
- * @return true when the name passes this screen.
+ * @return True when the name passes this screen.
  */
 pub fn is_safe_mod_name(name: &str) -> bool {
     if name.is_empty() {
@@ -407,10 +407,10 @@ pub fn is_safe_mod_name(name: &str) -> bool {
     )
 }
 
-// normalize a path lexically, without touching the filesystem: drop . components, fold name/..
-// pairs, drop .. directly after a root directory, keep a leading .. in a relative path, and turn an
+// Normalize a path lexically, without touching the filesystem: drop . components, fold name/..
+// pairs, drop .. directly after a root directory, keep a leading .. In a relative path, and turn an
 // all-elided non-empty input into ..
-// an empty input stays empty.
+// An empty input stays empty.
 fn lexically_normal(p: &Path) -> PathBuf {
     if p.as_os_str().is_empty() {
         return PathBuf::new();
@@ -431,7 +431,7 @@ fn lexically_normal(p: &Path) -> PathBuf {
                     out.pop();
                     normals -= 1;
                 } else if !has_root {
-                    // leading ".." in a relative path is preserved; ".." directly after a root
+                    // Leading ".." in a relative path is preserved; ".." directly after a root
                     // directory is dropped.
                     out.push("..");
                 }
@@ -482,16 +482,16 @@ fn weakly_canonical(p: &Path) -> std::io::Result<PathBuf> {
 }
 
 /**
- * @fn is_inside(&Path, &Path) -> bool
- * @brief resolve existing symlinks and fail closed on filesystem errors.
- * @author Alex (https://github.com/lextpf)
+ * @fn `is_inside(&Path, &Path) -> bool`
+ * @brief Resolve existing symlinks and fail closed on filesystem errors.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the check performs blocking filesystem access, resolves existing symlinks, and fails closed.
- * nonexistent suffixes use lexical normalization. equality counts as containment.
+ * The check performs blocking filesystem access, resolves existing symlinks, and fails closed.
+ * nonexistent suffixes use lexical normalization. Equality counts as containment.
  *
- * the result is point-in-time and does not prevent a later symlink race.
+ * The result is point-in-time and does not prevent a later symlink race.
  *
- * @return true when the resolved child has the resolved parent as a component prefix.
+ * @return True when the resolved child has the resolved parent as a component prefix.
  */
 pub fn is_inside(parent: &Path, child: &Path) -> bool {
     let Ok(canonical_child) = weakly_canonical(child) else {
@@ -504,11 +504,11 @@ pub fn is_inside(parent: &Path, child: &Path) -> bool {
 }
 
 /**
- * @fn executable_directory() -> PathBuf
- * @brief return the host executable directory, not the calling module directory.
- * @author Alex (https://github.com/lextpf)
+ * @fn `executable_directory() -> PathBuf`
+ * @brief Return the host executable directory, not the calling module directory.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * do not use it for resources that should follow the calling binary inside MO2: there the host EXE
+ * Do not use it for resources that should follow the calling binary inside MO2: there the host EXE
  * is `ModOrganizer.exe`, so this points at MO2's install root.
  */
 pub fn executable_directory() -> PathBuf {
@@ -522,11 +522,11 @@ pub fn executable_directory() -> PathBuf {
 }
 
 /**
- * @fn module_directory(*const core::ffi::c_void) -> PathBuf
- * @brief fall back to the current working directory when module lookup fails.
- * @author Alex (https://github.com/lextpf)
+ * @fn `module_directory(*const core::ffi::c_void) -> PathBuf`
+ * @brief Fall back to the current working directory when module lookup fails.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * falls back to the current working directory when the lookup fails or the platform is not windows.
+ * Falls back to the current working directory when the lookup fails or the platform is not windows.
  */
 pub fn module_directory(anchor: *const core::ffi::c_void) -> PathBuf {
     #[cfg(windows)]
@@ -542,9 +542,9 @@ pub fn module_directory(anchor: *const core::ffi::c_void) -> PathBuf {
     current_dir_fallback()
 }
 
-// shared fallback for the directory lookups: the current working directory, or "." when even that
+// Shared fallback for the directory lookups: the current working directory, or "." when even that
 // cannot be read.
-// never panics.
+// Never panics.
 fn current_dir_fallback() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
@@ -552,8 +552,8 @@ fn current_dir_fallback() -> PathBuf {
 #[cfg(windows)]
 mod win {
     /*!
-     * @brief implements Win32 module path lookup.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Implements Win32 module path lookup.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * executable_directory and module_directory expose these lookups to the crate.
      */
@@ -567,17 +567,17 @@ mod win {
         GetModuleFileNameW, GetModuleHandleExW,
     };
 
-    // resolve the parent directory of the file backing hmod.
-    // pass null to query the host executable.
+    // Resolve the parent directory of the file backing hmod.
+    // Pass null to query the host executable.
     pub(super) fn module_path_for(hmod: HMODULE) -> Option<PathBuf> {
         const MAX_RETRIES: u32 = 5;
         let mut buf: Vec<u16> = vec![0; MAX_PATH as usize];
-        // safety: buf is a valid, writable u16 buffer of the length passed.
+        // Safety: buf is a valid, writable u16 buffer of the length passed.
         let mut len = unsafe { GetModuleFileNameW(hmod, buf.as_mut_ptr(), buf.len() as u32) };
         let mut retries = 0;
         while len as usize >= buf.len() && retries < MAX_RETRIES {
             buf.resize(buf.len() * 2, 0);
-            // safety: buf was just resized; pointer and length stay in sync.
+            // Safety: buf was just resized; pointer and length stay in sync.
             len = unsafe { GetModuleFileNameW(hmod, buf.as_mut_ptr(), buf.len() as u32) };
             retries += 1;
         }
@@ -595,7 +595,7 @@ mod win {
         anchor: *const core::ffi::c_void,
     ) -> Option<PathBuf> {
         let mut hmod: HMODULE = std::ptr::null_mut();
-        // safety: anchor is only inspected as an address (FROM_ADDRESS flag);
+        // Safety: anchor is only inspected as an address (FROM_ADDRESS flag);
         // hmod is a valid out-pointer. UNCHANGED_REFCOUNT means no reference
         // is leaked.
         let ok = unsafe {
@@ -958,8 +958,8 @@ mod tests {
     }
 
     // containment invariant: even when a hostile name slips past is_safe_mod_name, the is_inside
-    // check on the joined path catches it. this exercises the pairing the upload controller relies
-    // on. the temp directory name is unique to this test so concurrent suites cannot collide.
+    // check on the joined path catches it. This exercises the pairing the upload controller relies
+    // on. The temp directory name is unique to this test so concurrent suites cannot collide.
     #[test]
     fn is_inside_rejects_mod_name_traversal_generated_path_stays_inside_mods_dir() {
         let tmp = std::env::temp_dir().join("salma_rs_modname_containment_test");
@@ -1096,7 +1096,7 @@ mod tests {
         assert!(is_safe_destination("a/../b"));
         assert!(!is_safe_destination("C:/evil"));
         assert!(!is_safe_destination("c:\\evil"));
-        // the consequence is pinned by fomod_service's
+        // The consequence is pinned by fomod_service's
         // enqueue_entry_reproduces_the_rooted_destination_hole.
     }
 
