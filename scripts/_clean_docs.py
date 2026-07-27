@@ -1,12 +1,12 @@
 """
-@brief normalize generated doxide pages for MkDocs Material.
-@author Alex (https://github.com/lextpf)
+@brief Normalize generated doxide pages for MkDocs Material.
+@author Alex (<https://github.com/lextpf>)
 
-the command edits only `.md` files with doxide frontmatter in the first 200
-characters. it rewrites files in place without backup; use generated output
+The command edits only `.md` files with doxide frontmatter in the first 200
+characters. It rewrites files in place without backup; use generated output
 only.
 
-it removes documentation tags, corrects Material syntax, shortens summary
+It removes documentation tags, corrects Material syntax, shortens summary
 rows, and injects version, member, and rustdoc links on the home page.
 """
 
@@ -99,16 +99,16 @@ def add_page_title_icons(text: str) -> str:
 def add_section_icons(text: str) -> str:
     """
     @fn add_section_icons(text: str) -> str
-    @brief decorate complete generated section headings once.
-    @author Alex (https://github.com/lextpf)
+    @brief Decorate complete generated section headings once.
+    @author Alex (<https://github.com/lextpf>)
 
-    authored Material headings keep their chosen icons. fenced and indented
+    Authored Material headings keep their chosen icons. Fenced and indented
     code examples keep literal heading text.
     """
     return _add_heading_icons(text, 2, SECTION_ICONS)
 
 
-# detail sections retain full prose; summary tables keep one sentence.
+# Detail sections retain full prose; summary tables keep one sentence.
 SUMMARY_TABLE_SECTIONS = (
     "Types",
     "Functions",
@@ -132,10 +132,10 @@ def _is_summary_table_header(stripped: str) -> bool:
 def trim_summary_table_descriptions(text: str) -> str:
     """
     @fn trim_summary_table_descriptions(text: str) -> str
-    @brief keep one sentence in generated summary-table descriptions.
-    @author Alex (https://github.com/lextpf)
+    @brief Keep one sentence in generated summary-table descriptions.
+    @author Alex (<https://github.com/lextpf>)
 
-    doxide flattens each declaration block into one physical row. detail
+    doxide flattens each declaration block into one physical row. Detail
     sections retain the full prose.
     """
     lines = text.split("\n")
@@ -205,11 +205,11 @@ def flatten_namespace_lists(text: str) -> str:
 def rewrite_sibling_entity_links(text: str, page_path: Path) -> str:
     """
     @fn rewrite_sibling_entity_links(text: str, page_path: Path) -> str
-    @brief repair doxide links when an entity is emitted as a directory.
-    @author Alex (https://github.com/lextpf)
+    @brief Repair doxide links when an entity is emitted as a directory.
+    @author Alex (<https://github.com/lextpf>)
 
-    only relative sibling `X.md` targets are eligible. the rewrite requires
-    `X.md` to be absent and `X/index.md` to exist. query and fragment suffixes
+    Only relative sibling `X.md` targets are eligible. The rewrite requires
+    `X.md` to be absent and `X/index.md` to exist. Query and fragment suffixes
     are preserved.
     """
     def replace(match: re.Match) -> str:
@@ -239,10 +239,10 @@ def rewrite_sibling_entity_links(text: str, page_path: Path) -> str:
 def collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]:
     """
     @fn collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]
-    @brief make member links relative to the documentation root.
-    @author Alex (https://github.com/lextpf)
+    @brief Make member links relative to the documentation root.
+    @author Alex (<https://github.com/lextpf>)
 
-    the result contains name, path, and description tuples. anchor-only links
+    The result contains name, path, and description tuples. anchor-only links
     target the source page.
     """
     if not index_path.exists():
@@ -271,10 +271,10 @@ def collect_members(index_path: Path, prefix: str) -> list[tuple[str, str, str]]
 def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str, str]]:
     """
     @fn collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str, str]]
-    @brief collect members from one group and its subgroups.
-    @author Alex (https://github.com/lextpf)
+    @brief Collect members from one group and its subgroups.
+    @author Alex (<https://github.com/lextpf>)
 
-    nested subgroup content takes precedence. namespace groups can expose
+    Nested subgroup content takes precedence. Namespace groups can expose
     content at the documentation root.
     """
     group_index = docs_dir / group_dir / "index.md"
@@ -305,10 +305,10 @@ def collect_group_members(docs_dir: Path, group_dir: str) -> list[tuple[str, str
 def inject_group_members(text: str, docs_dir: Path) -> str:
     """
     @fn inject_group_members(text: str, docs_dir: Path) -> str
-    @brief list group members on the home page.
-    @author Alex (https://github.com/lextpf)
+    @brief List group members on the home page.
+    @author Alex (<https://github.com/lextpf>)
 
-    the function removes injected member rows before it writes the current
+    The function removes injected member rows before it writes the current
     list.
     """
     lines = text.split("\n")
@@ -348,11 +348,11 @@ def inject_group_members(text: str, docs_dir: Path) -> str:
 def parse_version(repo_root: Path) -> str:
     """
     @fn parse_version(repo_root: Path) -> str
-    @brief read the API version used by release artifacts.
-    @author Alex (https://github.com/lextpf)
+    @brief Read the API version used by release artifacts.
+    @author Alex (<https://github.com/lextpf>)
 
-    `MO2_SALMA_API_VERSION` is authoritative. the CMake project version is the
-    fallback. the result is empty when neither source contains three numeric
+    `MO2_SALMA_API_VERSION` is authoritative. The CMake project version is the
+    fallback. The result is empty when neither source contains three numeric
     components.
     """
     capi = repo_root / "src" / "capi.rs"
@@ -375,10 +375,10 @@ def parse_version(repo_root: Path) -> str:
 def inject_version(text: str, version: str) -> str:
     """
     @fn inject_version(text: str, version: str) -> str
-    @brief put one current version badge in the home-page subtitle.
-    @author Alex (https://github.com/lextpf)
+    @brief Put one current version badge in the home-page subtitle.
+    @author Alex (<https://github.com/lextpf>)
 
-    the function removes existing version badges first. it leaves the page
+    The function removes existing version badges first. It leaves the page
     unchanged when `version` is empty or the subtitle is absent.
     """
     if not version:
@@ -423,7 +423,7 @@ def inject_rust_link(text: str) -> str:
 def clean(text: str) -> str:
     text = re.sub(r"^\s*@author\b.*\n?", "", text, flags=re.MULTILINE)
 
-    # match only the parenthesized house form; a bare author has no safe end marker.
+    # Match only the parenthesized house form; a bare author has no safe end marker.
     text = re.sub(r"[ \t]*@author\b[^\n(]*\([^)\n]*\)", "", text)
 
     text = re.sub(r"@brief\s+", "", text)
@@ -477,7 +477,7 @@ def main():
                 parts[0],
                 flags=re.MULTILINE,
             )
-            # keep nested links unchanged; a ../ prefix breaks their targets.
+            # Keep nested links unchanged; a ../ prefix breaks their targets.
             cleaned = "\n## ".join(parts)
 
         cleaned = cleaned.rstrip() + "\n"
