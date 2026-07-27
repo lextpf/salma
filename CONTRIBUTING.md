@@ -321,6 +321,10 @@ Do not translate it into language-native documentation dialects such as C# XML
 comments, Python `Args:` sections, Rust Markdown parameter headings, or JSDoc
 `@returns`. Keep the shared annotations defined below.
 
+Use sentence case in comments and docstrings, including command descriptions and
+section titles after icons. Capitalize each new sentence. Preserve the case of
+commands, identifiers, URLs, and icon shortcodes.
+
 Keep every documentation line, including diagrams and tables, at or under 100
 columns after its comment prefix is added.
 
@@ -332,9 +336,9 @@ terms of a particular filename extension.
 | Target                                | Style              | Commands     | `@author`    |
 |---------------------------------------|--------------------|--------------|--------------|
 | Module/package/namespace/primary type | Structured block   | Yes          | Yes          |
-| Public/external declaration           | Structured block   | Yes          | Yes          |
+| Callable at any visibility            | Structured block   | Yes          | Yes          |
 | Field/property/variant/enum           | Short member docs  | Usually none | Usually none |
-| Implementation detail                 | Plain line comment | No           | No           |
+| Body note or noncanonical definition  | Plain line comment | No           | No           |
 
 The canonical declaration is the one authoritative location for generated API
 documentation. Do not duplicate the same contract on declarations, definitions,
@@ -431,7 +435,8 @@ and implementation notes live in the source file.
 
 A documentation comment spanning more than one physical line uses a Javadoc block:
 `/**` on its own line, ` * ` on every content line, a bare ` *` for a blank line,
-and ` */` on its own line. A true one-line declaration comment uses `///`.
+and ` */` on its own line. A true one-line declaration comment uses `///` only for
+entities that do not require a full function block.
 
 Use trailing `///<` only for a short field or enumerator description. Do not use
 `/**< */`, `//!<`, or `/*!< */`. Do not use `//!` or `/*! ... */` in C or C++.
@@ -466,7 +471,7 @@ Use a kind tag only when it truthfully matches the declared entity:
 | Enum                 | `@enum Name`      |
 | Namespace            | `@namespace Name` |
 | Interface            | `@interface Name` |
-and more...
+And more...
 
 Do not invent a replacement tag for traits, protocols, records, packages, crates, or modules.
 Let the declaration identify their language-specific kind and begin the block with `@brief`
@@ -481,12 +486,14 @@ order:
 
 1. Optional kind tag: `@class`, `@struct`, `@enum`, or `@namespace`...
 2. `@brief` with one plain-text sentence ending in a period.
-3. `@author [NAME] (https://github.com/[USER])`.
+3. `@author [NAME] (<https://github.com/[USER]>)`.
 4. Optional `@ingroup <Module>` when grouping is valid for the generated navigation.
 5. A blank documentation line.
 6. Explanatory prose, sections, tables, diagrams, invariants, and examples.
    Use Material format for sections.
 7. Optional `@note`, `@warning`, and `@see` entries.
+
+Wrap author URLs in angle brackets inside parentheses: `(<https://github.com/[USER]>)`.
 
 `@author` should be repeated on a function, method,
 constructor, property, field, variant, or enum value.
@@ -496,13 +503,13 @@ It is not top-level since multiple authors can contribute to one file.
 /**
  * @class AppViewModel
  * @brief QML-facing coordinator for application commands and non-secret UI state.
- * @author [NAME] (https://github.com/[USER])
+ * @author [NAME] (<https://github.com/[USER]>)
  * @ingroup ViewModel
  *
  * Coordinates the application core and controller collaborators for the QML view
  * layer. Command methods may accept secrets, but no observable property exposes one.
  *
- * ### :material-shield-lock: security invariants
+ * ### :material-shield-lock: Security invariants
  *
  * | Invariant                                  | Enforcement                      |
  * |--------------------------------------------|----------------------------------|
@@ -519,13 +526,13 @@ A module or package whose language has no exact `@namespace` equivalent starts w
 ```python
 """
 @brief Authentication-domain services and immutable public result types.
-@author [NAME] (https://github.com/[USER])
+@author [NAME] (<https://github.com/[USER]>)
 @ingroup Authentication
 
 The module owns orchestration only. Cryptographic primitives remain in the crypto
 package and persistence remains behind repository interfaces.
 
-### :material-notes: usage notes
+### :material-notes: Usage notes
 
 This function is designed strictly for [insert primary purpose]
 """
@@ -533,11 +540,16 @@ This function is designed strictly for [insert primary purpose]
 
 #### Function, method, and callable documentation
 
-Use this order:
+If no separate declaration exists, attach the block to the definition.
+Otherwise, document the declaration and do not duplicate its contract on the definition.
+Plain comments and one-line summaries do not replace this block. The required `@fn`
+signature is metadata; the rule against restating the signature applies to prose.
+
+Use this order, with parameter and return entries where applicable:
 
 1. `@fn` signature of the function.
 2. `@brief` with one plain-text sentence ending in a period.
-3. `@author [NAME] (https://github.com/[USER])`.
+3. `@author [NAME] (<https://github.com/[USER]>)`.
 4. A blank documentation line.
 5. Explanatory prose, sections, tables, diagrams, invariants, and examples.
    Use Material format for sections.
@@ -559,14 +571,14 @@ square-bracket ranges in it. Put identifiers and ranges in the prose, `@param`, 
 /**
  * @fn float Lerp(float a, float b, float t)
  * @brief Linearly interpolate between two values.
- * @author [NAME] (https://github.com/[USER])
+ * @author [NAME] (<https://github.com/[USER]>)
  *
  * The factor @p t is clamped to [0, 1], so an out-of-range value saturates to
  * the nearest endpoint.
  *
- * ### :material-lock-outline: thread safety
+ * ### :material-lock-outline: Thread safety
  *
- * calls share no mutable state. concurrent calls need no synchronization.
+ * Calls share no mutable state. Concurrent calls need no synchronization.
  *
  * @param a  Start value, returned when @p t is 0.
  * @param b  End value, returned when @p t is 1.
@@ -583,14 +595,14 @@ def lerp(a: float, b: float, t: float) -> float:
     """
     @fn lerp(a: float, b: float, t: float) -> float
     @brief Linearly interpolate between two values.
-    @author [NAME] (https://github.com/[USER])
+    @author [NAME] (<https://github.com/[USER]>)
 
     The factor @p t is clamped to [0, 1], so an out-of-range value saturates to
     the nearest endpoint.
 
-    ### :material-lock-outline: thread safety
+    ### :material-lock-outline: Thread safety
 
-    calls share no mutable state. concurrent calls need no synchronization.
+    Calls share no mutable state. Concurrent calls need no synchronization.
 
     @param a  Start value, returned when @p t is 0.
     @param b  End value, returned when @p t is 1.
@@ -604,14 +616,14 @@ The same annotations also remain unchanged in a line-comment language:
 ```go
 // @fn Lerp(a, b, t float64) float64
 // @brief Linearly interpolate between two values.
-// @author [NAME] (https://github.com/[USER])
+// @author [NAME] (<https://github.com/[USER]>)
 //
 // The factor t is clamped to [0, 1], so an out-of-range value saturates to the
 // nearest endpoint.
 //
-// ### :material-lock-outline: thread safety
+// ### :material-lock-outline: Thread safety
 //
-// calls share no mutable state. concurrent calls need no synchronization.
+// Calls share no mutable state. Concurrent calls need no synchronization.
 //
 // @param a  Start value, returned when t is 0.
 // @param b  End value, returned when t is 1.
@@ -668,8 +680,8 @@ int m_Height = 720;          ///< Client-area height, in pixels.
 Section titles and visual documentation are language-independent body content. Keep
 them when moving documentation between languages.
 
-Use `### :material-icon-name: section title` for named prose sections in every
-language. Use lowercase prose in section titles and a valid Material for MkDocs
+Use `### :material-icon-name: Section title` for named prose sections in every
+language. Use sentence case in section titles and a valid Material for MkDocs
 icon shortcode. Keep a blank documentation line before and after each heading.
 
 Add sections when distinct contracts or a longer explanation need navigation.
@@ -686,7 +698,7 @@ Material SVG assets. Check icon names against that set and verify the generated 
 /**
  * @brief Coordinate authenticated browser-fill requests.
  *
- * ### :material-transit-connection-variant: data flow
+ * ### :material-transit-connection-variant: Data flow
  *
  * ```mermaid
  * flowchart LR
@@ -738,7 +750,7 @@ Use:
 
 | Content         | House form                                   |
 |-----------------|----------------------------------------------|
-| Section title   | `### :material-icon-name: section title`     |
+| Section title   | `### :material-icon-name: Section title`     |
 | Table           | Source-aligned Markdown table                |
 | Mermaid diagram | Fenced `mermaid` block                       |
 | ASCII diagram   | `@verbatim` and `@endverbatim`               |
@@ -754,7 +766,7 @@ Adapt identifiers and syntax, but preserve the documented relationship or flow.
 
 Use these annotations where useful in every supported language:
 
-`@brief`, `@author`, `@ingroup`, `@struct`, `@class`, `@enum`, `@namespace`,
+`@fn`, `@brief`, `@author`, `@ingroup`, `@struct`, `@class`, `@enum`, `@namespace`,
 `@param`, `@return`, `@tparam`, `@pre`, `@post`, `@note`, `@warning`, `@p`,
 `@c`, `@see`, `@code`, `@endcode`, `@verbatim`, and `@endverbatim`.
 
@@ -793,13 +805,13 @@ Use them only when whitespace follows the identifier.
 Write:
 
 ```text
-the caller owns `roll`.
+The caller owns `roll`.
 ```
 
 Do not write:
 
 ```text
-the caller owns @p roll.
+The caller owns @p roll.
 ```
 
 Use backticks whenever `.`, `,`, `;`, `:`, or `)` immediately follows the
@@ -824,21 +836,21 @@ Comments of this style are not allowed:
 
 #### Section headings
 
-Use `### :material-icon-name: section title` for named prose sections so the same
+Use `### :material-icon-name: Section title` for named prose sections so the same
 heading, icon, table, and diagram markup works in all languages.
 
 Rust unsafe API contracts use `### :material-shield-lock: **Safety**`. Clippy requires
 the exact `Safety` text as a separate Markdown text event. The emphasis keeps that
 text separate from the icon while preserving the shared section format. Keep the
-safety lint enabled; use lowercase prose for other section titles.
+safety lint enabled; use sentence case for other section titles.
 
 ---
 
 ### Implementation documentation
 
 Implementation comments use the language's ordinary line-comment syntax only.
-Do not use structured documentation delimiters or documentation commands inside a
-function body or implementation-only region.
+Do not use structured documentation delimiters or commands for notes inside a body.
+A nested function declaration still requires its own full block.
 
 When moving declaration prose into an implementation comment, strip annotation
 markup:
@@ -858,12 +870,11 @@ or ASCII diagram. A simple file may begin directly with imports/includes and cod
 // reserved so equal cursors unambiguously mean empty rather than full.
 ```
 
-Add a short intent comment above non-obvious local algorithms or implementation-only
-helpers.
+Add a short intent comment above non-obvious steps inside a function body.
 
 ```cpp
-// Clamp the requested gain before evaluating the non-linear fade curve.
-void SetGain(Channel& channel, float gain)
+// Clamp the requested gain before evaluating the nonlinear fade curve.
+gain = std::clamp(gain, 0.0f, 1.0f);
 ```
 
 ### TODO comments
@@ -875,8 +886,8 @@ the condition that makes it necessary.
 // TODO: Replace the linear scan with a spatial hash above 10,000 elements.
 ```
 
-Do not use vague reminders such as `TODO: improve`, `TODO: clean up`, or
-`TODO: revisit later`.
+Do not use vague reminders such as `TODO: Improve`, `TODO: Clean up`, or
+`TODO: Revisit later`.
 
 ---
 
