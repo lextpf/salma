@@ -1,8 +1,8 @@
 """
-@brief promote nested doxide subgroup pages for manual recovery.
-@author Alex (https://github.com/lextpf)
+@brief Promote nested doxide subgroup pages for manual recovery.
+@author Alex (<https://github.com/lextpf>)
 
-the documentation build does not run this tool. it copies subgroup directories
+The documentation build does not run this tool. It copies subgroup directories
 and can leave duplicate pages in `docs/`.
 """
 
@@ -15,8 +15,8 @@ from pathlib import Path
 def parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]:
     """
     @fn parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]
-    @brief read parent-child groups without a YAML dependency.
-    @author Alex (https://github.com/lextpf)
+    @brief Read parent-child groups without a YAML dependency.
+    @author Alex (<https://github.com/lextpf>)
 
     """
     text = config_path.read_text(encoding="utf-8")
@@ -53,10 +53,10 @@ def parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]:
 def promote_class_to_index(top_level: Path, child_name: str) -> None:
     """
     @fn promote_class_to_index(top_level: Path, child_name: str) -> None
-    @brief replace a generated stub with its class page.
-    @author Alex (https://github.com/lextpf)
+    @brief Replace a generated stub with its class page.
+    @author Alex (<https://github.com/lextpf>)
 
-    the function deletes the class page after copying its content.
+    The function deletes the class page after copying its content.
     """
     class_page = top_level / f"{child_name}.md"
     index_page = top_level / "index.md"
