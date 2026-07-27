@@ -1,8 +1,8 @@
 /*!
- * @brief defines file atoms and target-tree data for inference.
- * @author Alex (https://github.com/lextpf)
+ * @brief Defines file atoms and target-tree data for inference.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * an atom records one possible write and its FOMOD origin. atom indices use normalized
+ * An atom records one possible write and its FOMOD origin. atom indices use normalized
  * destination paths.
  */
 
@@ -10,8 +10,8 @@ use std::collections::HashMap;
 
 /**
  * @enum Origin
- * @brief which FOMOD section an atom came from, and therefore what decides whether it installs.
- * @author Alex (https://github.com/lextpf)
+ * @brief Which FOMOD section an atom came from, and therefore what decides whether it installs.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -24,44 +24,44 @@ pub enum Origin {
 
 /**
  * @struct FomodAtom
- * @brief one file-install operation produced by evaluating the FOMOD XML.
- * @author Alex (https://github.com/lextpf)
+ * @brief One file-install operation produced by evaluating the FOMOD XML.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FomodAtom {
     pub source_path: String,
     /**
-     * @brief mod-relative destination path.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Mod-relative destination path.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub dest_path: String,
     /**
-     * @brief overwrite priority; higher values win conflicts.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Overwrite priority; higher values win conflicts.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * comes from the XML `priority` attribute; 0 when the attribute is absent.
+     * Comes from the XML `priority` attribute; 0 when the attribute is absent.
      */
     pub priority: i32,
     /**
-     * @brief position of the source entry in the XML, ascending.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Position of the source entry in the XML, ascending.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * no production code reads it: the installer's conflict sort uses
+     * No production code reads it: the installer's conflict sort uses
      * `FileOperation::document_order`, a separate counter stamped at enqueue time, and the
      * simulator compares `priority` only.
      */
     pub document_order: i32,
     /**
-     * @brief store the FNV-1a content hash; zero means unavailable.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Store the FNV-1a content hash; zero means unavailable.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub content_hash: u64,
     /**
-     * @brief uncompressed size in bytes; 0 means unknown.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Uncompressed size in bytes; 0 means unknown.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * a 0 on either side makes every size comparison pass rather than fail.
+     * A 0 on either side makes every size comparison pass rather than fail.
      */
     pub file_size: u64,
     pub origin: Origin,
@@ -91,40 +91,40 @@ impl Default for FomodAtom {
 
 /**
  * @struct TargetFile
- * @brief metadata for a file already present in the installed mod directory.
- * @author Alex (https://github.com/lextpf)
+ * @brief Metadata for a file already present in the installed mod directory.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * conflict resolution compares atoms against each other and never reads the target tree.
+ * Conflict resolution compares atoms against each other and never reads the target tree.
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TargetFile {
     /**
-     * @brief size in bytes of the installed file; 0 means not yet known.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Size in bytes of the installed file; 0 means not yet known.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub size: u64,
     pub hash: u64,
 }
 
 /**
- * @brief maps a destination path to every atom that targets it.
- * @author Alex (https://github.com/lextpf)
+ * @brief Maps a destination path to every atom that targets it.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * each `Vec` holds its atoms in [`ExpandedAtoms::for_each`] order.
+ * Each `Vec` holds its atoms in [`ExpandedAtoms::for_each`] order.
  */
 pub type AtomIndex = HashMap<String, Vec<FomodAtom>>;
 
 /**
- * @brief maps a destination path to the metadata of the installed file there.
- * @author Alex (https://github.com/lextpf)
+ * @brief Maps a destination path to the metadata of the installed file there.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub type TargetTree = HashMap<String, TargetFile>;
 
 /**
  * @struct ExpandedAtoms
- * @brief atoms grouped by origin, ready for selection-based filtering.
- * @author Alex (https://github.com/lextpf)
+ * @brief Atoms grouped by origin, ready for selection-based filtering.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
