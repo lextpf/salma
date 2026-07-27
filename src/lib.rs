@@ -1,8 +1,8 @@
 /*!
- * @brief exposes the salma archive, inference, and installation engine.
- * @author Alex (https://github.com/lextpf)
+ * @brief Exposes the salma archive, inference, and installation engine.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the crate exposes its supported boundary through the capi module.
+ * The crate exposes its supported boundary through the capi module.
  *
  * @verbatim
  * archive -> FOMOD IR -> atoms -> propagation -> CSP -> diagnostics
