@@ -1,8 +1,8 @@
 /*!
- * @brief defines the parsed FOMOD intermediate representation.
- * @author Alex (https://github.com/lextpf)
+ * @brief Defines the parsed FOMOD intermediate representation.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the model preserves document order, condition trees, file priorities, plugin types, and
+ * The model preserves document order, condition trees, file priorities, plugin types, and
  * condition flags for inference and install replay.
  */
 
@@ -10,35 +10,35 @@ use crate::types::PluginType;
 
 /**
  * @enum FomodConditionOp
- * @brief logical operator for combining child conditions.
- * @author Alex (https://github.com/lextpf)
+ * @brief Logical operator for combining child conditions.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * an empty And is true. an empty Or is false.
+ * An empty And is true. An empty Or is false.
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FomodConditionOp {
     /**
-     * @brief all child conditions must be true.
-     * @author Alex (https://github.com/lextpf)
+     * @brief All child conditions must be true.
+     * @author Alex (<https://github.com/lextpf>)
      */
     #[default]
     And,
     /**
-     * @brief at least one child condition must be true.
-     * @author Alex (https://github.com/lextpf)
+     * @brief At least one child condition must be true.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * the parser uses an empty `Or` as its always-false value when condition nesting exceeds
+     * The parser uses an empty `Or` as its always-false value when condition nesting exceeds
      * [`crate::fomod_dependency_evaluator::MAX_DEPENDENCY_DEPTH`].
      */
     Or,
 }
 
 /**
- * @fn parse_condition_op(&str) -> FomodConditionOp
- * @brief default empty or unrecognized input to And.
- * @author Alex (https://github.com/lextpf)
+ * @fn `parse_condition_op(&str) -> FomodConditionOp`
+ * @brief Default empty or unrecognized input to And.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * recognized names require exact case.
+ * Recognized names require exact case.
  */
 pub fn parse_condition_op(s: &str) -> FomodConditionOp {
     match s {
@@ -70,10 +70,10 @@ pub enum FomodConditionType {
 
 /**
  * @struct FomodCondition
- * @brief recursive condition tree node: either a leaf predicate or a composite.
- * @author Alex (https://github.com/lextpf)
+ * @brief Recursive condition tree node: either a leaf predicate or a composite.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the parser defaults absent `file_state` and `plugin_type` values to `"Active"`. direct
+ * The parser defaults absent `file_state` and `plugin_type` values to `"Active"`. direct
  * constructors must set both fields to match a parsed tree.
  */
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -84,15 +84,15 @@ pub struct FomodCondition {
     pub flag_value: String,
     pub file_path: String,
     /**
-     * @brief leaf: required state of the file named by file_path (File).
-     * @author Alex (https://github.com/lextpf)
+     * @brief Leaf: required state of the file named by file_path (File).
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub file_state: String,
     pub version: String,
     pub plugin_name: String,
     /**
-     * @brief require an activation state for the named game plugin.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Require an activation state for the named game plugin.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub plugin_type: String,
     pub fomod_name: String,
@@ -101,54 +101,54 @@ pub struct FomodCondition {
 
 /**
  * @struct FomodFileEntry
- * @brief one source-to-destination mapping, from a file or folder element.
- * @author Alex (https://github.com/lextpf)
+ * @brief One source-to-destination mapping, from a file or folder element.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodFileEntry {
     pub source: String,
     /**
-     * @brief mod-relative destination path, normalized the same way as source.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Mod-relative destination path, normalized the same way as source.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * for a `<file>` entry the parser first resolves it through
+     * For a `<file>` entry the parser first resolves it through
      * [`crate::utils::resolve_file_destination`], which substitutes the source filename for an
      * empty destination and appends the source filename to a destination that ends with a
      * separator.
      */
     pub destination: String,
     /**
-     * @brief overwrite priority; higher values win conflicts (default 0).
-     * @author Alex (https://github.com/lextpf)
+     * @brief Overwrite priority; higher values win conflicts (default 0).
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub priority: i32,
     pub is_folder: bool,
     /**
-     * @brief install this entry even when the owning plugin is not selected.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Install this entry even when the owning plugin is not selected.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub always_install: bool,
     /**
-     * @brief install when deselected unless the effective type is NotUsable.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Install when deselected unless the effective type is NotUsable.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub install_if_usable: bool,
 }
 
 /**
  * @struct FomodTypePattern
- * @brief a condition that, when met, overrides a plugin's declared type.
- * @author Alex (https://github.com/lextpf)
+ * @brief A condition that, when met, overrides a plugin's declared type.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodTypePattern {
     /**
-     * @brief condition that triggers this override.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Condition that triggers this override.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * a `<pattern>` with no `<dependencies>` child keeps the default here, and that default is an
+     * A `<pattern>` with no `<dependencies>` child keeps the default here, and that default is an
      * empty `And` composite, which is always true.
      */
     pub condition: FomodCondition,
@@ -157,8 +157,8 @@ pub struct FomodTypePattern {
 
 /**
  * @struct FomodPlugin
- * @brief a selectable option within a group, carrying files and condition flags.
- * @author Alex (https://github.com/lextpf)
+ * @brief A selectable option within a group, carrying files and condition flags.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -166,21 +166,21 @@ pub struct FomodPlugin {
     pub name: String,
     pub r#type: PluginType,
     /**
-     * @brief conditional type overrides from dependencyType/patterns, in XML document order.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Conditional type overrides from dependencyType/patterns, in XML document order.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * the evaluator takes the first pattern whose condition is met, so this order decides which
+     * The evaluator takes the first pattern whose condition is met, so this order decides which
      * override wins.
      */
     pub type_patterns: Vec<FomodTypePattern>,
     /**
-     * @brief files installed when this plugin is selected, in XML document order.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Files installed when this plugin is selected, in XML document order.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub files: Vec<FomodFileEntry>,
     /**
-     * @brief flag name/value pairs set when selected, in XML document order.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Flag name/value pairs set when selected, in XML document order.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub condition_flags: Vec<(String, String)>,
     pub dependencies: Option<FomodCondition>,
@@ -188,21 +188,21 @@ pub struct FomodPlugin {
 
 /**
  * @enum FomodGroupType
- * @brief selection cardinality constraint for a group of plugins.
- * @author Alex (https://github.com/lextpf)
+ * @brief Selection cardinality constraint for a group of plugins.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FomodGroupType {
     /**
-     * @brief user must select exactly one plugin in the group.
-     * @author Alex (https://github.com/lextpf)
+     * @brief User must select exactly one plugin in the group.
+     * @author Alex (<https://github.com/lextpf>)
      */
     SelectExactlyOne,
     SelectAtMostOne,
     /**
-     * @brief user must select one or more plugins (at least one required).
-     * @author Alex (https://github.com/lextpf)
+     * @brief User must select one or more plugins (at least one required).
+     * @author Alex (<https://github.com/lextpf>)
      */
     SelectAtLeastOne,
     SelectAll,
@@ -211,11 +211,11 @@ pub enum FomodGroupType {
 }
 
 /**
- * @fn parse_group_type(&str) -> FomodGroupType
- * @brief default empty or unrecognized input to SelectAny.
- * @author Alex (https://github.com/lextpf)
+ * @fn `parse_group_type(&str) -> FomodGroupType`
+ * @brief Default empty or unrecognized input to SelectAny.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * recognized names require exact case.
+ * Recognized names require exact case.
  */
 pub fn parse_group_type(s: &str) -> FomodGroupType {
     match s {
@@ -240,8 +240,8 @@ pub fn group_type_to_string(group_type: FomodGroupType) -> &'static str {
 
 /**
  * @struct FomodGroup
- * @brief a named group of plugins sharing one selection cardinality constraint.
- * @author Alex (https://github.com/lextpf)
+ * @brief A named group of plugins sharing one selection cardinality constraint.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -249,28 +249,28 @@ pub struct FomodGroup {
     pub name: String,
     pub r#type: FomodGroupType,
     /**
-     * @brief selectable options within this group, in the order the plugins attribute selects.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Selectable options within this group, in the order the plugins attribute selects.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * this order fixes each plugin's flat index across the whole installer.
+     * This order fixes each plugin's flat index across the whole installer.
      */
     pub plugins: Vec<FomodPlugin>,
 }
 
 /**
  * @struct FomodStep
- * @brief one wizard page presented to the user, optionally gated by a visibility condition.
- * @author Alex (https://github.com/lextpf)
+ * @brief One wizard page presented to the user, optionally gated by a visibility condition.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodStep {
     pub name: String,
     /**
-     * @brief zero-based position in the wizard sequence (default 0).
-     * @author Alex (https://github.com/lextpf)
+     * @brief Zero-based position in the wizard sequence (default 0).
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * the parser assigns it after applying the `<installSteps order="...">` attribute, so it is the
+     * The parser assigns it after applying the `<installSteps order="...">` attribute, so it is the
      * presentation position, not the XML child position.
      */
     pub ordinal: i32,
@@ -280,17 +280,17 @@ pub struct FomodStep {
 
 /**
  * @struct FomodConditionalPattern
- * @brief files installed when a condition is met, from conditionalFileInstalls.
- * @author Alex (https://github.com/lextpf)
+ * @brief Files installed when a condition is met, from conditionalFileInstalls.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodConditionalPattern {
     /**
-     * @brief condition evaluated after all wizard steps complete.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Condition evaluated after all wizard steps complete.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * as on [`FomodTypePattern::condition`], a `<pattern>` with no `<dependencies>` child keeps the
+     * As on [`FomodTypePattern::condition`], a `<pattern>` with no `<dependencies>` child keeps the
      * default empty `And` composite, which is always true.
      */
     pub condition: FomodCondition,
@@ -301,29 +301,29 @@ pub struct FomodConditionalPattern {
 pub struct FomodInstaller {
     pub module_dependencies: Option<FomodCondition>,
     /**
-     * @brief unconditionally installed files from requiredInstallFiles, in XML document order.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Unconditionally installed files from requiredInstallFiles, in XML document order.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub required_files: Vec<FomodFileEntry>,
     /**
-     * @brief wizard pages from installSteps, already sorted by the installSteps attribute.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Wizard pages from installSteps, already sorted by the installSteps attribute.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub steps: Vec<FomodStep>,
     /**
-     * @brief post-wizard conditional installs from conditionalFileInstalls, in XML document order.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Post-wizard conditional installs from conditionalFileInstalls, in XML document order.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * an `order` attribute never reorders `<pattern>` children; only steps, groups and plugins are
+     * An `order` attribute never reorders `<pattern>` children; only steps, groups and plugins are
      * reordered.
      */
     pub conditional_patterns: Vec<FomodConditionalPattern>,
 }
 
 /**
- * @fn total_flat_plugins(&FomodInstaller) -> i32
- * @brief use i32 because the CSP solver stores flat indices as i32.
- * @author Alex (https://github.com/lextpf)
+ * @fn `total_flat_plugins(&FomodInstaller) -> i32`
+ * @brief Use i32 because the CSP solver stores flat indices as i32.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub fn total_flat_plugins(installer: &FomodInstaller) -> i32 {
@@ -337,9 +337,9 @@ pub fn total_flat_plugins(installer: &FomodInstaller) -> i32 {
 }
 
 /**
- * @fn compute_flat_starts(&FomodInstaller) -> Vec<Vec<i32>>
- * @brief assign global plugin indices in step, group, then plugin order.
- * @author Alex (https://github.com/lextpf)
+ * @fn `compute_flat_starts(&FomodInstaller) -> Vec<Vec<i32>>`
+ * @brief Assign global plugin indices in step, group, then plugin order.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub fn compute_flat_starts(installer: &FomodInstaller) -> Vec<Vec<i32>> {
