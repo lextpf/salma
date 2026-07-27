@@ -1,16 +1,16 @@
 """
-@brief render Material section icons in generated Rustdoc HTML.
-@author Alex (https://github.com/lextpf)
+@brief Render Material section icons in generated Rustdoc HTML.
+@author Alex (<https://github.com/lextpf>)
 
-### :material-shield-lock: output scope
+### :material-shield-lock: Output scope
 
-only HTML with the Rustdoc generator marker is eligible. text replacements preserve
-attributes, heading IDs, links, and code samples. each changed page is replaced atomically.
+Only HTML with the Rustdoc generator marker is eligible. Text replacements preserve
+attributes, heading IDs, links, and code samples. Each changed page is replaced atomically.
 
-### :material-memory: icon assets
+### :material-memory: Icon assets
 
-SVG assets come from the installed MkDocs Material package. load them only when an
-eligible text node contains a shortcode. an unknown icon fails the command.
+SVG assets come from the installed MkDocs Material package. Load them only when an
+eligible text node contains a shortcode. An unknown icon fails the command.
 """
 
 import argparse
@@ -35,8 +35,8 @@ def material_icon_directory() -> Path:
 class MaterialIcons:
     """
     @class MaterialIcons
-    @brief cache SVG assets after validating each shortcode name.
-    @author Alex (https://github.com/lextpf)
+    @brief Cache SVG assets after validating each shortcode name.
+    @author Alex (<https://github.com/lextpf>)
     """
 
     def __init__(self, directory: Path | None = None):
@@ -68,7 +68,7 @@ class MaterialIcons:
 
 
 class _IconTextParser(HTMLParser):
-    # record source offsets so serialization cannot alter unrelated HTML.
+    # Record source offsets so serialization cannot alter unrelated HTML.
     def __init__(self, text: str):
         super().__init__(convert_charrefs=False)
         self.line_starts = [0] + [match.end() for match in re.finditer("\n", text)]
@@ -104,10 +104,10 @@ class _IconTextParser(HTMLParser):
 def render_icons(text: str, icons: MaterialIcons | None = None) -> str:
     """
     @fn render_icons(text, icons=None) -> str
-    @brief replace eligible shortcodes without reserializing the HTML document.
-    @author Alex (https://github.com/lextpf)
+    @brief Replace eligible shortcodes without reserializing the HTML document.
+    @author Alex (<https://github.com/lextpf>)
 
-    attributes and code retain literal shortcodes. pages without the Rustdoc generator
+    Attributes and code retain literal shortcodes. Pages without the Rustdoc generator
     marker are returned unchanged, even when they contain an unknown icon.
 
     @param text generated HTML, including its original line endings.
@@ -135,10 +135,10 @@ def render_icons(text: str, icons: MaterialIcons | None = None) -> str:
 def process_directory(directory: Path, icons: MaterialIcons | None = None) -> int:
     """
     @fn process_directory(directory, icons=None) -> int
-    @brief update generated HTML below the selected Rustdoc directory.
-    @author Alex (https://github.com/lextpf)
+    @brief Update generated HTML below the selected Rustdoc directory.
+    @author Alex (<https://github.com/lextpf>)
 
-    symlinks are skipped. unchanged pages keep their modification time. file replacement
+    Symlinks are skipped. Unchanged pages keep their modification time. File replacement
     preserves the original page when writing the replacement fails.
 
     @param directory existing generated documentation directory.
