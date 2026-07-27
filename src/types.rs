@@ -1,8 +1,8 @@
 /*!
- * @brief defines values shared by installation and inference.
- * @author Alex (https://github.com/lextpf)
+ * @brief Defines values shared by installation and inference.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * file operations carry priority and document order. dependency contexts carry normalized
+ * File operations carry priority and document order. dependency contexts carry normalized
  * installed-state inputs.
  */
 
@@ -10,8 +10,8 @@ use std::collections::HashSet;
 
 /**
  * @enum FileOpType
- * @brief discriminator for file against folder copy operations.
- * @author Alex (https://github.com/lextpf)
+ * @brief Copy operation kind: file or folder.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -23,8 +23,8 @@ pub enum FileOpType {
 
 /**
  * @struct FileOperation
- * @brief a single queued file or folder copy operation.
- * @author Alex (https://github.com/lextpf)
+ * @brief A single queued file or folder copy operation.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `priority` controls overwrite order (higher wins) and `document_order` breaks ties by enqueue
  * position, but the two executors read them differently:
@@ -36,49 +36,49 @@ pub enum FileOpType {
 pub struct FileOperation {
     pub op_type: FileOpType,
     /**
-     * @brief source path under the extracted archive root.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Source path under the extracted archive root.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub source: String,
     /**
-     * @brief destination path under the mod directory.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Destination path under the mod directory.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * same convention as `source`: OS-native at the base, forward-slash in the FOMOD-derived tail,
+     * Same convention as `source`: OS-native at the base, forward-slash in the FOMOD-derived tail,
      * never normalized.
      */
     pub destination: String,
     /**
      * @brief FOMOD priority attribute (MO2 default: 0).
-     * @author Alex (https://github.com/lextpf)
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub priority: i32,
     /**
-     * @brief enqueue counter, used as the priority tiebreaker.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Enqueue counter, used as the priority tiebreaker.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * not strictly XML byte-position.
+     * Not strictly XML byte-position.
      */
     pub document_order: i32,
 }
 
 /**
  * @struct InstallResult
- * @brief outcome of a FOMOD install replay attempt.
- * @author Alex (https://github.com/lextpf)
+ * @brief Outcome of a FOMOD install replay attempt.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstallResult {
     /**
-     * @brief whether installation completed without error.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Whether installation completed without error.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub success: bool,
     pub mod_path: String,
     /**
-     * @brief error message if success is false.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Error message if success is false.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub error: String,
 }
@@ -86,7 +86,7 @@ pub struct InstallResult {
 /**
  * @enum PluginType
  * @brief FOMOD plugin type descriptor.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -101,18 +101,18 @@ pub enum PluginType {
 
 /**
  * @struct FomodDependencyContext
- * @brief external state passed to the FOMOD dependency evaluator.
- * @author Alex (https://github.com/lextpf)
+ * @brief External state passed to the FOMOD dependency evaluator.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FomodDependencyContext {
     pub game_path: String,
     /**
-     * @brief files present in the mod directory.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Files present in the mod directory.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * every entry must already be in `utils::normalize_path` form, that is lowercase with forward
+     * Every entry must already be in `utils::normalize_path` form, that is lowercase with forward
      * slashes.
      */
     pub installed_files: HashSet<String>,
