@@ -1,22 +1,22 @@
 /*!
- * @brief exposes the salma engine through a flat C ABI.
- * @author Alex (https://github.com/lextpf)
+ * @brief Exposes the salma engine through a flat C ABI.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ### :material-memory: result ownership
+ * ### :material-memory: Result ownership
  *
- * install results contain either the mod path or error text. call installSucceeded to
- * distinguish them. free every non-null string result with freeResult, except the static pointer
+ * Install results contain either the mod path or error text. Call installSucceeded to
+ * distinguish them. Free every non-null string result with freeResult, except the static pointer
  * from getApiVersion.
  *
- * ### :material-lock-outline: thread safety
+ * ### :material-lock-outline: Thread safety
  *
- * every export catches rust panics. a host must serialize an install call and its status read
- * because install status and disk-full state are process-global. the log callback is also global
+ * Every export guards against Rust unwinding. A host must serialize an install and its status read
+ * because install status and disk-full state are process-global. The log callback is also global
  * and can run concurrently.
  */
 
-// the C ABI export names are camelCase because that is what both binders look up:
-// scripts/mo2-salma.py through ctypes and src/SalmaEngine.cpp through GetProcAddress. the symbol
+// The C ABI export names are camelCase because that is what both binders look up:
+// scripts/mo2-salma.py through ctypes and src/SalmaEngine.cpp through GetProcAddress. The symbol
 // emitted by #[unsafe(no_mangle)] is the rust identifier itself, so these identifiers cannot be
 // renamed to snake_case without changing the exported symbol table.
 #![allow(non_snake_case)]
@@ -29,54 +29,74 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::logger::Logger;
 
 /**
- * @brief stable ABI version string, major.minor.patch.
- * @author Alex (https://github.com/lextpf)
+ * @brief Stable ABI version string, major.minor.patch.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * a different major is an incompatible ABI.
+ * A different major is an incompatible ABI.
  */
 pub const MO2_SALMA_API_VERSION: &str = "1.2.0";
 
 /**
- * @brief leading major-version digit of MO2_SALMA_API_VERSION.
- * @author Alex (https://github.com/lextpf)
+ * @brief Leading major-version digit of MO2_SALMA_API_VERSION.
+ * @author Alex (<https://github.com/lextpf>)
  */
 pub const MO2_SALMA_API_MAJOR: &str = "1";
 
 // nul-terminated form returned by getApiVersion.
-// static storage: the pointer is valid for the whole process lifetime and must never be passed to
+// Static storage: the pointer is valid while the DLL is loaded and must never be passed to
 // `freeResult`.
 static API_VERSION_C: &CStr = c"1.2.0";
 
-// process-global "did the last install succeed" flag.
-// the last install wins, and `SeqCst` store/load makes its value visible on every thread.
+// Process-global "did the last install succeed" flag.
+// The last install wins, and `SeqCst` store/load makes its value visible on every thread.
 static LAST_INSTALL_SUCCESS: AtomicBool = AtomicBool::new(false);
 
-// outcome of borrowing a C-string argument across the ABI boundary.
+// Outcome of borrowing a C-string argument across the ABI boundary.
 enum ArgStr<'a> {
-    // the pointer was null.
+    // The pointer was null.
     Null,
-    // the caller uses the export's failure value for invalid UTF-8.
+    // The caller uses the export's failure value for invalid UTF-8.
     InvalidUtf8,
-    // a borrowed UTF-8 string; it may be empty.
+    // A borrowed UTF-8 string; it may be empty.
     Str(&'a str),
 }
 
-// borrow a nul-terminated, UTF-8 C-string argument.
-// `ptr` must be null, or point to a valid nul-terminated C string that stays alive for the returned
-// borrow's lifetime `'a`.
+/**
+ * @fn `borrow_arg<'a>(*const c_char) -> ArgStr<'a>`
+ * @brief Borrow a C string without copying its bytes.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Null and invalid UTF-8 remain distinct so each export can choose its failure value.
+ *
+ * ### :material-shield-lock: **Safety**
+ *
+ * The caller must keep a non-null pointer readable through its NUL terminator for the
+ * entire returned borrow. The bytes must not change during that borrow.
+ *
+ * @param ptr Null or a pointer to a NUL-terminated byte string.
+ * @return A null marker, an invalid UTF-8 marker, or a borrowed string.
+ */
 unsafe fn borrow_arg<'a>(ptr: *const c_char) -> ArgStr<'a> {
     if ptr.is_null() {
         return ArgStr::Null;
     }
-    // safety: the caller guarantees a valid nul-terminated string when non-null.
+    // Safety: the caller guarantees a valid nul-terminated string when non-null.
     match unsafe { CStr::from_ptr(ptr) }.to_str() {
         Ok(s) => ArgStr::Str(s),
         Err(_) => ArgStr::InvalidUtf8,
     }
 }
 
-// allocate an owned C string the caller must release with freeResult.
-// the returned pointer is non-null and heap-owned.
+/**
+ * @fn `owned_cstring(&str) -> *const c_char`
+ * @brief Allocate a result string for the host to release.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * An interior NUL truncates the result at its first occurrence.
+ *
+ * @param s Text to copy into DLL-owned storage.
+ * @return A non-null pointer that must be passed to freeResult exactly once.
+ */
 fn owned_cstring(s: &str) -> *const c_char {
     let cstring = match CString::new(s) {
         Ok(c) => c,
@@ -84,15 +104,26 @@ fn owned_cstring(s: &str) -> *const c_char {
             let end = nul_err.nul_position();
             let mut bytes = nul_err.into_vec();
             bytes.truncate(end);
-            // safety: bytes[..end] contains no interior NUL by construction.
+            // Safety: bytes[..end] contains no interior NUL by construction.
             unsafe { CString::from_vec_unchecked(bytes) }
         }
     };
     cstring.into_raw().cast_const()
 }
 
-// run body behind catch_unwind so a rust panic never unwinds across the FFI boundary.
-// on panic, `on_panic` produces the fallback value.
+/**
+ * @fn `guard<R>(impl FnOnce() -> R, impl FnOnce() -> R) -> R`
+ * @brief Map a caught Rust panic to an export-specific failure value.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * The fallback runs outside the unwind guard and must not panic. This guard does not
+ * make invalid pointers safe or recover from process aborts.
+ *
+ * @tparam R Export result type.
+ * @param body Operation to execute within the unwind guard.
+ * @param on_panic Non-panicking fallback used after an unwind.
+ * @return The operation result or the fallback value.
+ */
 fn guard<R>(body: impl FnOnce() -> R, on_panic: impl FnOnce() -> R) -> R {
     match panic::catch_unwind(AssertUnwindSafe(body)) {
         Ok(value) => value,
@@ -100,20 +131,43 @@ fn guard<R>(body: impl FnOnce() -> R, on_panic: impl FnOnce() -> R) -> R {
     }
 }
 
+/**
+ * @fn `set_last_install_success(bool)`
+ * @brief Publish the process-wide installation outcome.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param value Whether the install completed successfully.
+ */
 fn set_last_install_success(value: bool) {
     LAST_INSTALL_SUCCESS.store(value, Ordering::SeqCst);
 }
 
-// shared body for install and installWithConfig, which differ only in the json_path they forward
-// and the subsystem tag they log under.
-// the null arm is matched first, so a null pointer wins over a non-UTF-8 one.
+/**
+ * @fn `install_impl(*const c_char, *const c_char, &str, &str) -> *const c_char`
+ * @brief Install an archive and publish the outcome before returning its text.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Null arguments take precedence over invalid UTF-8. The caller supplies the unwind
+ * guard and serializes this operation with the host's installSucceeded read.
+ *
+ * ### :material-shield-lock: **Safety**
+ *
+ * Each non-null input pointer must remain readable through its NUL terminator and
+ * unchanged for this call.
+ *
+ * @param archive_path Archive path, or null to report an argument error.
+ * @param mod_path Destination path, or null to report an argument error.
+ * @param json_path Selection file path; empty enables archive-side lookup.
+ * @param tag Subsystem name used in failure logs.
+ * @return An owned destination path on success or error text on failure.
+ */
 unsafe fn install_impl(
     archive_path: *const c_char,
     mod_path: *const c_char,
     json_path: &str,
     tag: &str,
 ) -> *const c_char {
-    // safety: the caller of install_impl guarantees each pointer is null or a valid nul-terminated
+    // Safety: the caller of install_impl guarantees each pointer is null or a valid nul-terminated
     // string that stays alive for this call.
     match (unsafe { borrow_arg(archive_path) }, unsafe {
         borrow_arg(mod_path)
@@ -123,7 +177,7 @@ unsafe fn install_impl(
             owned_cstring("archivePath and modPath must not be null")
         }
         (ArgStr::InvalidUtf8, _) | (_, ArgStr::InvalidUtf8) => {
-            // a path that is not valid UTF-8 is rejected here rather than forwarded as raw bytes,
+            // A path that is not valid UTF-8 is rejected here rather than forwarded as raw bytes,
             // and reports the same catch-all failure string a panic would.
             set_last_install_success(false);
             owned_cstring("Unknown fatal error during installation")
@@ -138,7 +192,7 @@ unsafe fn install_impl(
                 Err(err) => {
                     Logger::instance().log_error(&format!("[{tag}] Fatal error: {err}"));
                     set_last_install_success(false);
-                    // the caller sees the InstallError Display text verbatim.
+                    // The caller sees the InstallError Display text verbatim.
                     owned_cstring(&err.to_string())
                 }
             }
@@ -147,12 +201,12 @@ unsafe fn install_impl(
 }
 
 /**
- * @fn getApiVersion() -> *const c_char
- * @brief the ABI version string, as a nul-terminated C string.
- * @author Alex (https://github.com/lextpf)
+ * @fn `getApiVersion() -> *const c_char`
+ * @brief Report the ABI version without transferring ownership.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the pointer addresses static storage holding [`MO2_SALMA_API_VERSION`], is valid for the whole
- * process lifetime, is never heap-allocated, and must not be passed to [`freeResult`].
+ * @return A static NUL-terminated string valid while the DLL remains loaded.
+ * @warning Do not pass this pointer to freeResult.
  */
 #[unsafe(no_mangle)]
 pub extern "C" fn getApiVersion() -> *const c_char {
@@ -162,18 +216,25 @@ pub extern "C" fn getApiVersion() -> *const c_char {
 }
 
 /**
- * @fn setLogCallback(Option<unsafe extern "C" fn(*const c_char)>)
- * @brief register the host log callback, or clear it by passing null.
- * @author Alex (https://github.com/lextpf)
+ * @fn `setLogCallback(Option<unsafe extern "C" fn(*const c_char)>)`
+ * @brief Replace the process-wide host log callback.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the console echo (stdout for info and warning, stderr for error) is unaffected either way.
+ * A callback replaces file output; console output continues. It receives borrowed,
+ * NUL-terminated UTF-8 text that is valid only during the callback. Copy the text to
+ * retain it. Calls can arrive concurrently from engine threads and must not unwind.
+ *
+ * Clearing or replacing the callback does not wait for calls already in progress.
+ * Keep the callback and its host state alive until those calls finish.
+ *
+ * @param callback Host callback, or null to restore file logging.
  */
 #[unsafe(no_mangle)]
 pub extern "C" fn setLogCallback(callback: Option<unsafe extern "C" fn(*const c_char)>) {
     guard(
         || {
-            // the logger stores the pointer in a lock-free atomic, so this never blocks a logging
-            // thread. a null callback re-enables file logging.
+            // The logger stores the pointer in a lock-free atomic, so this never blocks a logging
+            // thread. A null callback re-enables file logging.
             crate::logger::Logger::instance().set_callback(callback);
         },
         || {},
@@ -181,18 +242,23 @@ pub extern "C" fn setLogCallback(callback: Option<unsafe extern "C" fn(*const c_
 }
 
 /**
- * @fn install(*const c_char, *const c_char) -> *const c_char
- * @brief install archive_path into mod_path, naming no selections JSON.
- * @author Alex (https://github.com/lextpf)
+ * @fn `install(*const c_char, *const c_char) -> *const c_char`
+ * @brief Install an archive with automatic selection-file lookup.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * on success the string is the installed mod directory path; on failure it is a human-readable
- * error message.
+ * The service looks for a sibling JSON file with the archive stem. Missing or unreadable
+ * selections permit default installation behavior. Failure can leave partial output.
+ * Serialize the call and the following installSucceeded read against all other installs.
  *
  * ### :material-shield-lock: **Safety**
  *
- * `archive_path` and `mod_path` must each be null or a valid nul-terminated C string. the returned
- * non-null pointer must be released with [`freeResult`].
- * @return a non-null, heap-allocated string that the caller must release with [`freeResult`].
+ * Each non-null argument must remain readable through its NUL terminator and unchanged
+ * for this call. Release the returned pointer exactly once with freeResult.
+ *
+ * @param archive_path UTF-8 archive path; null or invalid UTF-8 reports failure.
+ * @param mod_path UTF-8 destination path; existing files can be overwritten.
+ * @return An owned destination path on success or error text on failure.
+ * @see installSucceeded
  */
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn install(
@@ -200,8 +266,8 @@ pub unsafe extern "C" fn install(
     mod_path: *const c_char,
 ) -> *const c_char {
     guard(
-        // safety: install_impl borrows pointers under install's nul-or-valid contract.
-        // an empty json_path selects the documented sidecar lookup.
+        // Safety: install_impl borrows pointers under install's nul-or-valid contract.
+        // An empty json_path selects the documented sidecar lookup.
         || unsafe { install_impl(archive_path, mod_path, "", "install") },
         || {
             Logger::instance().log_error("[install] Fatal error: unknown exception");
@@ -212,18 +278,25 @@ pub unsafe extern "C" fn install(
 }
 
 /**
- * @fn installWithConfig(*const c_char, *const c_char, *const c_char) -> *const c_char
- * @brief install archive_path into mod_path, using the selections JSON at json_path.
- * @author Alex (https://github.com/lextpf)
+ * @fn `installWithConfig(*const c_char, *const c_char, *const c_char) -> *const c_char`
+ * @brief Install an archive with an optional explicit selection file.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * A nonempty JSON path suppresses archive-side lookup, even if the file is unreadable.
+ * Missing or unreadable selections permit default installation behavior. Failure can
+ * leave partial output. Serialize the call and the following installSucceeded read
+ * against all other installs.
  *
  * ### :material-shield-lock: **Safety**
  *
- * `archive_path` and `mod_path` must each be null or a valid nul-terminated C string. `json_path`
- * may be null, which is coerced to `""`; an empty or null `json_path` still lets the service pick
- * up a sibling `<archive stem>.json`, see [`install`].
- * @return contract identical to [`install`]: always a non-null heap string that the caller must
- * release with [`freeResult`], carrying the installed mod directory path on success and an error
- * message on failure, with [`installSucceeded`] as the only discriminator.
+ * Each non-null argument must remain readable through its NUL terminator and unchanged
+ * for this call. Release the returned pointer exactly once with freeResult.
+ *
+ * @param archive_path UTF-8 archive path; null or invalid UTF-8 reports failure.
+ * @param mod_path UTF-8 destination path; existing files can be overwritten.
+ * @param json_path UTF-8 selection-file path; null or empty enables archive-side lookup.
+ * @return An owned destination path on success or error text on failure.
+ * @see installSucceeded
  */
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn installWithConfig(
@@ -232,11 +305,11 @@ pub unsafe extern "C" fn installWithConfig(
     json_path: *const c_char,
 ) -> *const c_char {
     guard(
-        // safety: same nul-or-valid contract as install().
+        // Safety: same nul-or-valid contract as install().
         || {
-            // a null jsonPath is coerced to the empty string. invalid UTF-8 is rejected, consistent
+            // A null jsonPath is coerced to the empty string. Invalid UTF-8 is rejected, consistent
             // with the other two arguments.
-            // safety: `json_path` is null or a valid nul-terminated string that the caller keeps
+            // Safety: `json_path` is null or a valid nul-terminated string that the caller keeps
             // alive for this call.
             let json = match unsafe { borrow_arg(json_path) } {
                 ArgStr::Null => "",
@@ -246,7 +319,7 @@ pub unsafe extern "C" fn installWithConfig(
                     return owned_cstring("Unknown fatal error during installation");
                 }
             };
-            // safety: both pointers are this export's own arguments, forwarded unchanged under the
+            // Safety: both pointers are this export's own arguments, forwarded unchanged under the
             // contract stated above.
             unsafe { install_impl(archive_path, mod_path, json, "installWithConfig") }
         },
@@ -259,18 +332,21 @@ pub unsafe extern "C" fn installWithConfig(
 }
 
 /**
- * @fn inferFomodSelections(*const c_char, *const c_char) -> *const c_char
- * @brief infer FOMOD selections from an archive and its installed files.
- * @author Alex (https://github.com/lextpf)
+ * @fn `inferFomodSelections(*const c_char, *const c_char) -> *const c_char`
+ * @brief Infer FOMOD selections from an archive and its installed files.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * on any failure it holds `""`, because no `Result` crosses this boundary; the one exception is a
- * null argument, which yields `"archivePath and modPath must not be null"`.
+ * Successful inference returns schema-v2 JSON. A null argument returns an argument-error
+ * message; other failures return an empty string. Validate the result before parsing it.
  *
  * ### :material-shield-lock: **Safety**
  *
- * `archive_path` and `mod_path` must each be null or a valid nul-terminated UTF-8 C string. the
- * returned non-null pointer must be released with [`freeResult`].
- * @return a non-null, heap-allocated string that the caller must release with [`freeResult`].
+ * Each non-null argument must remain readable through its NUL terminator and unchanged
+ * for this call. Release the returned pointer exactly once with freeResult.
+ *
+ * @param archive_path UTF-8 path to the source archive.
+ * @param mod_path UTF-8 path to the installed mod used as evidence.
+ * @return Owned JSON, an empty string, or the null-argument error message.
  */
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn inferFomodSelections(
@@ -278,20 +354,20 @@ pub unsafe extern "C" fn inferFomodSelections(
     mod_path: *const c_char,
 ) -> *const c_char {
     guard(
-        // safety: inferFomodSelections borrows both pointers under its nul-or-valid contract.
+        // Safety: inferFomodSelections borrows both pointers under its nul-or-valid contract.
         || match (unsafe { borrow_arg(archive_path) }, unsafe {
             borrow_arg(mod_path)
         }) {
             (ArgStr::Null, _) | (_, ArgStr::Null) => {
                 owned_cstring("archivePath and modPath must not be null")
             }
-            // both non-null and valid UTF-8: run the orchestrator. it returns "" on any internal
+            // Both non-null and valid UTF-8: run the orchestrator. It returns "" on any internal
             // failure, so no Result crosses FFI.
             (ArgStr::Str(archive), ArgStr::Str(modp)) => {
                 let service = crate::fomod_inference_service::FomodInferenceService::new();
                 owned_cstring(&service.infer_selections(archive, modp))
             }
-            // a path that is not valid UTF-8 yields the same "" as any other failure.
+            // A path that is not valid UTF-8 yields the same "" as any other failure.
             _ => owned_cstring(""),
         },
         || {
@@ -303,12 +379,14 @@ pub unsafe extern "C" fn inferFomodSelections(
 }
 
 /**
- * @fn installSucceeded() -> bool
- * @brief whether the most recent install or installWithConfig call in this process succeeded.
- * @author Alex (https://github.com/lextpf)
+ * @fn `installSucceeded() -> bool`
+ * @brief Read the most recently published installation outcome.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the value is one process-global atomic flag, not a per-call and not a per-thread result.
- * @return true only when the latest install or installWithConfig call succeeded.
+ * The flag is process-wide and initially false. It is neither a completion signal nor
+ * a per-thread result. Read it after the install returns, within the same host lock.
+ *
+ * @return True when the last published install outcome was success.
  */
 #[unsafe(no_mangle)]
 pub extern "C" fn installSucceeded() -> bool {
@@ -316,19 +394,17 @@ pub extern "C" fn installSucceeded() -> bool {
 }
 
 /**
- * @fn freeResult(*const c_char)
- * @brief release a string previously returned by this DLL's owned-string exports.
- * @author Alex (https://github.com/lextpf)
- *
- * a null pointer is a no-op.
+ * @fn `freeResult(*const c_char)`
+ * @brief Release a string allocated by an owned-string export.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * ### :material-shield-lock: **Safety**
  *
- * `result` must be null, or a pointer previously returned by one of this DLL's owned-string exports
- * ([`install`], [`installWithConfig`], [`inferFomodSelections`], [`resolveModArchive`]) and not yet
- * freed. passing any other pointer (a foreign allocation, a stack pointer, an already-freed
- * pointer, or the static [`getApiVersion`] pointer) is undefined behavior: allocation and release
- * must stay on one side of the boundary, and this DLL does both with rust's allocator.
+ * The pointer must be null or an unchanged, unfreed result from install,
+ * installWithConfig, inferFomodSelections, or resolveModArchive in this loaded DLL.
+ * Do not pass foreign allocations or the static getApiVersion pointer.
+ *
+ * @param result Owned result to release; null has no effect.
  */
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn freeResult(result: *const c_char) {
@@ -337,7 +413,7 @@ pub unsafe extern "C" fn freeResult(result: *const c_char) {
             if result.is_null() {
                 return;
             }
-            // safety: per the contract above, `result` came from owned_cstring
+            // Safety: per the contract above, `result` came from owned_cstring
             // in this DLL (CString::into_raw), so reclaiming it with the
             // matching CString::from_raw is sound.
             unsafe { drop(CString::from_raw(result.cast_mut())) };
@@ -347,18 +423,23 @@ pub unsafe extern "C" fn freeResult(result: *const c_char) {
 }
 
 /**
- * @fn resolveModArchive(*const c_char, *const c_char, *const c_char) -> *const c_char
- * @brief resolve a mod archive through the installation-file fallback chain.
- * @author Alex (https://github.com/lextpf)
+ * @fn `resolveModArchive(*const c_char, *const c_char, *const c_char) -> *const c_char`
+ * @brief Resolve a metadata archive path through the shared search order.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * it holds the resolved archive path on success and `""` on every failure, including a null or
- * non-UTF-8 `installation_file` or `mod_folder`.
+ * An absolute metadata path is checked as supplied. Relative paths use the candidate
+ * order in archive_resolver. A null or invalid UTF-8 mods_dir skips its candidates;
+ * the same errors in either required argument return an empty result.
  *
  * ### :material-shield-lock: **Safety**
  *
- * `installation_file`, `mod_folder`, and `mods_dir` must each be null or a valid nul-terminated
- * UTF-8 C string. the returned non-null pointer must be released with [`freeResult`].
- * @return a non-null, heap-allocated string that the caller must release with [`freeResult`].
+ * Each non-null argument must remain readable through its NUL terminator and unchanged
+ * for this call. Release the returned pointer exactly once with freeResult.
+ *
+ * @param installation_file UTF-8 archive value from mod metadata.
+ * @param mod_folder UTF-8 installed-mod directory used for relative candidates.
+ * @param mods_dir UTF-8 MO2 mods directory; null or empty omits its candidates.
+ * @return An owned resolved path, or an owned empty string on failure.
  */
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn resolveModArchive(
@@ -367,20 +448,20 @@ pub unsafe extern "C" fn resolveModArchive(
     mods_dir: *const c_char,
 ) -> *const c_char {
     guard(
-        // safety: resolveModArchive borrows all three pointers under its nul-or-valid contract.
+        // Safety: resolveModArchive borrows all three pointers under its nul-or-valid contract.
         || {
-            // only installationFile and modFolder are null-checked; a null modsDir is coerced to an
+            // Only installationFile and modFolder are null-checked; a null modsDir is coerced to an
             // empty path and merely skips candidates 4-6.
-            // safety: each pointer is null or a valid nul-terminated string that the caller keeps
+            // Safety: each pointer is null or a valid nul-terminated string that the caller keeps
             // alive for this call.
             let (file, folder) = match (unsafe { borrow_arg(installation_file) }, unsafe {
                 borrow_arg(mod_folder)
             }) {
                 (ArgStr::Str(f), ArgStr::Str(d)) => (f, d),
-                // null and non-UTF-8 both yield "".
+                // Null and non-UTF-8 both yield "".
                 _ => return owned_cstring(""),
             };
-            // safety: `mods_dir` carries the same null-or-valid contract.
+            // Safety: `mods_dir` carries the same null-or-valid contract.
             let mods = match unsafe { borrow_arg(mods_dir) } {
                 ArgStr::Str(s) => s,
                 ArgStr::Null | ArgStr::InvalidUtf8 => "",
@@ -391,7 +472,7 @@ pub unsafe extern "C" fn resolveModArchive(
                 std::path::Path::new(folder),
                 std::path::Path::new(mods),
             );
-            // an unresolved path is empty and already stringifies to "", which is the documented
+            // An unresolved path is empty and already stringifies to "", which is the documented
             // failure value; no extra branch is needed.
             owned_cstring(&resolved.to_string_lossy())
         },
@@ -443,7 +524,7 @@ mod tests {
         assert_eq!(s, "hello world");
         unsafe { freeResult(ptr) };
 
-        // an empty string is still a valid non-null pointer.
+        // An empty string is still a valid non-null pointer.
         let ptr = owned_cstring("");
         assert!(!ptr.is_null());
         assert!(unsafe { CStr::from_ptr(ptr) }.to_bytes().is_empty());
@@ -494,16 +575,16 @@ mod tests {
         assert_eq!(out, "");
     }
 
-    // this is the only test that touches LAST_INSTALL_SUCCESS, so the shared process-global flag
-    // cannot race against a parallel test. keep it that way.
+    // This is the only test that touches LAST_INSTALL_SUCCESS, so the shared process-global flag
+    // cannot race against a parallel test. Keep it that way.
     #[test]
     fn install_wires_the_service_and_tracks_the_success_flag() {
-        // null inputs -> the null-argument message; flag cleared.
+        // Null inputs -> the null-argument message; flag cleared.
         let msg = unsafe { take_owned(install(std::ptr::null(), std::ptr::null())) };
         assert_eq!(msg, "archivePath and modPath must not be null");
         assert!(!installSucceeded());
 
-        // a real failure carries the InstallError text through unchanged.
+        // A real failure carries the InstallError text through unchanged.
         let archive = CString::new("definitely-absent-archive.7z").unwrap();
         let mod_dir = CString::new("mod").unwrap();
         let msg = unsafe { take_owned(install(archive.as_ptr(), mod_dir.as_ptr())) };
@@ -522,7 +603,7 @@ mod tests {
         assert_eq!(msg, "Archive file not found: definitely-absent-archive.7z");
         assert!(!installSucceeded());
 
-        // a null jsonPath is coerced to "" and must not change the outcome.
+        // A null jsonPath is coerced to "" and must not change the outcome.
         let msg = unsafe {
             take_owned(installWithConfig(
                 archive.as_ptr(),
@@ -537,7 +618,7 @@ mod tests {
             std::env::temp_dir().join(format!("salma-capi-{}", crate::utils::random_hex_string(8)));
         let src = root.join("src.zip");
         std::fs::create_dir_all(&root).expect("scratch");
-        // a minimal but real zip: the archive layer must be able to open it.
+        // A minimal but real zip: the archive layer must be able to open it.
         let svc = crate::archive_service::ArchiveService::new();
         std::fs::create_dir_all(root.join("payload")).expect("payload dir");
         std::fs::write(root.join("payload").join("readme.txt"), b"hi").expect("write");
@@ -555,7 +636,7 @@ mod tests {
         assert!(installSucceeded(), "a successful install sets the flag");
         assert!(out_dir.join("readme.txt").exists(), "content was installed");
 
-        // the flag is sticky across other exports: neither inferFomodSelections nor
+        // The flag is sticky across other exports: neither inferFomodSelections nor
         // resolveModArchive writes it.
         let _ = unsafe { take_owned(inferFomodSelections(c_archive.as_ptr(), c_out.as_ptr())) };
         assert!(installSucceeded(), "infer must not touch the install flag");
@@ -568,7 +649,7 @@ mod tests {
 
     #[test]
     fn resolve_mod_archive_is_wired_to_the_resolver() {
-        // null installationFile or modFolder -> "".
+        // Null installationFile or modFolder -> "".
         let out = unsafe {
             take_owned(resolveModArchive(
                 std::ptr::null(),
@@ -578,7 +659,7 @@ mod tests {
         };
         assert_eq!(out, "");
 
-        // an unresolvable name yields "" because the resolver missed every candidate, which is
+        // An unresolvable name yields "" because the resolver missed every candidate, which is
         // indistinguishable from a bad argument.
         let file = CString::new("definitely-absent-mod.7z").unwrap();
         let folder = CString::new("C:/mods/MyMod").unwrap();
@@ -591,7 +672,7 @@ mod tests {
         };
         assert_eq!(out, "");
 
-        // a resolvable archive under the mod folder comes back, which is what the MO2 plugin
+        // A resolvable archive under the mod folder comes back, which is what the MO2 plugin
         // depends on: it gates on hasattr and never falls back once the symbol exists.
         let root = std::env::temp_dir().join(format!(
             "salma-capi-res-{}",
