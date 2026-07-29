@@ -1,16 +1,16 @@
 /*!
- * @brief enumerates and caches candidate selections for one FOMOD group.
- * @author Alex (https://github.com/lextpf)
+ * @brief Enumerates and caches candidate selections for one FOMOD group.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * option order resolves score ties and must remain deterministic.
+ * Option order resolves score ties and must remain deterministic.
  *
- * ### :material-transit-connection-variant: option flow
+ * ### :material-transit-connection-variant: Option flow
  *
  * @verbatim
  * enumerate -> propagation filter -> equivalence reduction -> rank -> cap -> cache
  * @endverbatim
  *
- * a cap of 0 disables both truncation and the medium-group force heuristic.
+ * A cap of 0 disables both truncation and the medium-group force heuristic.
  */
 
 use std::collections::{HashMap, HashSet};
@@ -32,9 +32,9 @@ pub fn is_exact_group_mode(gidx: i32, exact_groups: Option<&HashSet<i32>>) -> bo
 }
 
 /**
- * @fn effective_select_any_cap(i32, i32, Option<&HashSet<i32>>) -> i32
- * @brief return zero in exact mode or the configured SelectAny cap otherwise.
- * @author Alex (https://github.com/lextpf)
+ * @fn `effective_select_any_cap(i32, i32, Option<&HashSet<i32>>) -> i32`
+ * @brief Return zero in exact mode or the configured SelectAny cap otherwise.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub fn effective_select_any_cap(
