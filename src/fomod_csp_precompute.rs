@@ -1,8 +1,8 @@
 /*!
- * @brief builds the immutable indices shared by all CSP phases.
- * @author Alex (https://github.com/lextpf)
+ * @brief Builds the immutable indices shared by all CSP phases.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the precompute stage derives evidence, flag dependencies, destination reverse indices,
+ * The precompute stage derives evidence, flag dependencies, destination reverse indices,
  * contested plugins, and independent components. vectors and components use total ordering so
  * equal inputs produce equal search order.
  */
@@ -16,11 +16,11 @@ use crate::fomod_propagator::PropagationResult;
 use crate::utils::{fnv1a_hash, hash_combine};
 
 /**
- * @fn collect_condition_flags(&FomodCondition, &mut HashSet<String>)
- * @brief skip empty names while collecting flags from composite conditions.
- * @author Alex (https://github.com/lextpf)
+ * @fn `collect_condition_flags(&FomodCondition, &mut HashSet<String>)`
+ * @brief Skip empty names while collecting flags from composite conditions.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * a `Flag` node inserts its `flag_name`, skipping an empty one.
+ * A `Flag` node inserts its `flag_name`, skipping an empty one.
  */
 pub fn collect_condition_flags(c: &FomodCondition, out: &mut HashSet<String>) {
     match c.r#type {
@@ -39,9 +39,9 @@ pub fn collect_condition_flags(c: &FomodCondition, out: &mut HashSet<String>) {
 }
 
 /**
- * @fn condition_depends_on_external_state(&FomodCondition) -> bool
- * @brief report whether a condition reads external state.
- * @author Alex (https://github.com/lextpf)
+ * @fn `condition_depends_on_external_state(&FomodCondition) -> bool`
+ * @brief Report whether a condition reads external state.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `Flag` is false, a `Composite` is the disjunction of its children (so an empty one is false), and
  * every other leaf type is true.
@@ -55,9 +55,9 @@ pub fn condition_depends_on_external_state(c: &FomodCondition) -> bool {
 }
 
 /**
- * @fn hash_flag_subset(&HashMap<String, String>, &[String]) -> u64
- * @brief fold only listed flags in caller-provided key order.
- * @author Alex (https://github.com/lextpf)
+ * @fn `hash_flag_subset(&HashMap<String, String>, &[String]) -> u64`
+ * @brief Fold only listed flags in caller-provided key order.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub fn hash_flag_subset(flags: &HashMap<String, String>, keys: &[String]) -> u64 {
