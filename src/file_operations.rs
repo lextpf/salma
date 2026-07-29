@@ -1,11 +1,11 @@
 /*!
- * @brief executes file operations for mod installation.
- * @author Alex (https://github.com/lextpf)
+ * @brief Executes file operations for mod installation.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * higher priorities execute later and replace lower-priority output. FileOperations::execute
+ * Higher priorities execute later and replace lower-priority output. FileOperations::execute
  * keeps insertion order for equal priorities. fomod_service also uses document order.
  *
- * copy errors are logged and absorbed. a storage-full error sets a process-wide sticky flag that
+ * Copy errors are logged and absorbed. A storage-full error sets a process-wide sticky flag that
  * the installation service converts to failure.
  */
 
@@ -32,7 +32,14 @@ const DISK_FULL_OS_CODES: &[i32] = &[39, 112];
 #[cfg(not(windows))]
 const DISK_FULL_OS_CODES: &[i32] = &[28];
 
-// true when err means "the volume ran out of space".
+/**
+ * @fn `is_disk_full(&io::Error) -> bool`
+ * @brief Recognize platform-specific storage-exhaustion errors.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param err I/O error with an optional raw OS code.
+ * @return True only for a storage-full code recognized on this platform.
+ */
 fn is_disk_full(err: &io::Error) -> bool {
     if err.kind() == io::ErrorKind::StorageFull {
         return true;
@@ -43,7 +50,13 @@ fn is_disk_full(err: &io::Error) -> bool {
     }
 }
 
-// set the sticky flag when err is a disk-full error.
+/**
+ * @fn `note_disk_full_if_applicable(&io::Error)`
+ * @brief Record storage exhaustion without clearing an earlier failure.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param err I/O error inspected for a platform storage-full code.
+ */
 fn note_disk_full_if_applicable(err: &io::Error) {
     if is_disk_full(err) {
         DISK_FULL.store(true, Ordering::Relaxed);
@@ -52,10 +65,10 @@ fn note_disk_full_if_applicable(err: &io::Error) {
 
 /**
  * @struct FileOperations
- * @brief queued file copy operations with priority sorting.
- * @author Alex (https://github.com/lextpf)
+ * @brief Queued file copy operations with priority sorting.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * an instance is not thread-safe.
+ * An instance is not thread-safe.
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileOperations {
@@ -72,18 +85,16 @@ impl FileOperations {
     }
 
     /**
-     * @fn execute(&mut self)
-     * @brief apply low priorities first and preserve enqueue order for ties.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `execute(&mut self)`
+     * @brief Apply low priorities first and preserve enqueue order for ties.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * stable-sorts ascending by [`FileOperation::priority`] alone, so higher-priority operations
-     * are copied last and win at a shared destination, and equal priorities keep their insertion
-     * order.
+     * Higher-priority operations copy last and win at a shared destination. Equal
+     * priorities retain enqueue order; document_order does not affect this queue.
+     * Execution retains the operations, so another call repeats them.
      *
-     * ### :material-alert-circle-outline: failure handling
-     *
-     * copy errors are logged and absorbed. storage-full errors set the process-wide sticky flag
-     * for the installation service to check.
+     * Copy errors are logged and absorbed. Recognized storage-full failures set the
+     * process-wide flag for the installation service to check.
      */
     pub fn execute(&mut self) {
         // `Vec::sort_by_key` is stable: equal-priority operations stay in insertion order, which is
@@ -120,10 +131,16 @@ impl FileOperations {
     }
 
     /**
-     * @fn copy_file(&Path, &Path)
-     * @brief overwrite the destination and treat a missing source as a warning.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `copy_file(&Path, &Path)`
+     * @brief Copy a file and overwrite an existing destination.
+     * @author Alex (<https://github.com/lextpf>)
      *
+     * Missing sources warn. Parent-creation and copy failures are logged, without a
+     * result for the caller. Only a storage-full failure from the copy sets the global
+     * flag; failure while creating a parent directory does not.
+     *
+     * @param src Source file; filesystem links are followed.
+     * @param dst Destination file, with parent directories created as needed.
      */
     pub fn copy_file(src: &Path, dst: &Path) {
         if !src.exists() {
@@ -149,9 +166,9 @@ impl FileOperations {
     }
 
     /**
-     * @fn copy_folder(&Path, &Path)
-     * @brief copy recursively without following symlinked entries.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `copy_folder(&Path, &Path)`
+     * @brief Copy recursively without following symlinked entries.
+     * @author Alex (<https://github.com/lextpf>)
      *
      */
     pub fn copy_folder(src: &Path, dst: &Path) {
@@ -175,11 +192,11 @@ impl FileOperations {
             let read_dir = match fs::read_dir(&dir) {
                 Ok(rd) => rd,
                 Err(err) => {
-                    // an inaccessible directory is skipped rather than ending the traversal.
+                    // An inaccessible directory is skipped rather than ending the traversal.
                     if err.kind() == io::ErrorKind::PermissionDenied {
                         continue;
                     }
-                    // any other read error abandons the whole copy.
+                    // Any other read error abandons the whole copy.
                     note_disk_full_if_applicable(&err);
                     Logger::instance().log_error(&format!(
                         "[install] Failed to iterate directory {}: {err}",
@@ -241,9 +258,9 @@ impl FileOperations {
     }
 
     /**
-     * @fn copy_directory_contents(&Path, &Path)
-     * @brief follow top-level directory links but skip links below them.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `copy_directory_contents(&Path, &Path)`
+     * @brief Follow top-level directory links but skip links below them.
+     * @author Alex (<https://github.com/lextpf>)
      *
      */
     pub fn copy_directory_contents(src: &Path, dst: &Path) {
@@ -292,12 +309,17 @@ impl FileOperations {
     }
 
     /**
-     * @fn move_directory_contents(&Path, &Path)
-     * @brief fall back to copy-and-remove after non-disk-full rename errors.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `move_directory_contents(&Path, &Path)`
+     * @brief Move child entries with a copy-and-remove fallback.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * every rename error except disk-full tries copy then remove. a disk-full error sets the
-     * process-wide flag and skips the child without copying.
+     * A storage-full rename error sets the global flag and skips that child. Other
+     * rename errors attempt copying and then source removal. Copy helpers return no
+     * status, so source cleanup can run even after an incomplete copy. Use disposable
+     * staging content as the source; this is not a transactional move.
+     *
+     * @param src Staging directory whose children can be removed.
+     * @param dst Destination directory, created as needed.
      */
     pub fn move_directory_contents(src: &Path, dst: &Path) {
         if !src.exists() {
@@ -357,7 +379,7 @@ impl FileOperations {
                 ));
                 continue;
             }
-            // an ordinary cross-volume move lands here too, so this line is what tells the two
+            // An ordinary cross-volume move lands here too, so this line is what tells the two
             // apart in a log.
             Logger::instance().log_warning(&format!(
                 "[install] rename {} -> {} failed ({rename_err}); falling back to copy",
@@ -370,13 +392,13 @@ impl FileOperations {
                 Self::copy_file(&path, &target);
             }
             // best-effort source cleanup: a failure leaves the entry for the install's
-            // temp-directory removal. a link is unlinked as a link, never recursed into. a real
+            // temp-directory removal. A link is unlinked as a link, never recursed into. A real
             // directory recurses. everything else - a real file, a file symlink, or a directory
             // symlink or junction, all of which report `is_dir() == false` under `symlink_metadata`
             // - is removed as a single entry. `remove_file` handles files and, on every platform,
-            // file symlinks plus unix directory symlinks. a windows directory reparse point is
+            // file symlinks plus unix directory symlinks. A windows directory reparse point is
             // directory-attributed, so `DeleteFileW` cannot delete it; the `remove_dir`
-            // (RemoveDirectoryW) fallback unlinks the reparse point without following it. on unix
+            // (RemoveDirectoryW) fallback unlinks the reparse point without following it. On unix
             // the `remove_file` unlink already succeeds and the fallback never runs.
             let remove_result = match fs::symlink_metadata(&path) {
                 Ok(meta) if meta.file_type().is_dir() => fs::remove_dir_all(&path),
@@ -393,20 +415,23 @@ impl FileOperations {
     }
 
     /**
-     * @fn disk_full_encountered() -> bool
-     * @brief true when any copy or move has hit "no space on device".
-     * @author Alex (https://github.com/lextpf)
+     * @fn `disk_full_encountered() -> bool`
+     * @brief Read the process-wide storage-exhaustion flag.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * sticky and process-global.
+     * The flag remains set until reset_disk_full is called. A false value does not prove
+     * all copies succeeded; ordinary I/O errors are reported only in logs.
+     *
+     * @return True when a checked I/O operation recorded a storage-full error.
      */
     pub fn disk_full_encountered() -> bool {
         DISK_FULL.load(Ordering::Relaxed)
     }
 
     /**
-     * @fn reset_disk_full()
-     * @brief clear the process-global disk-exhaustion latch.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `reset_disk_full()`
+     * @brief Clear the process-global disk-exhaustion latch.
+     * @author Alex (<https://github.com/lextpf>)
      *
      */
     pub fn reset_disk_full() {
@@ -482,7 +507,7 @@ mod tests {
         let dest = root.join("out/shared.txt");
 
         let mut ops = FileOperations::new();
-        // descending document_order verifies that execute ignores it. stable insertion order makes
+        // Descending document_order verifies that execute ignores it. Stable insertion order makes
         // the last operation win.
         ops.add(file_op(&first, &dest, 0, 99));
         ops.add(file_op(&second, &dest, 0, 50));
@@ -816,9 +841,9 @@ mod tests {
 
     #[test]
     fn move_directory_contents_removes_a_directory_symlink_child_on_fallback() {
-        // a directory symlink reports is_dir() == false under symlink_metadata, so the cleanup must
+        // A directory symlink reports is_dir() == false under symlink_metadata, so the cleanup must
         // not route it to remove_file alone: on windows a directory reparse point is
-        // directory-attributed and remove_file (DeleteFileW) cannot delete it. the remove_file ->
+        // directory-attributed and remove_file (DeleteFileW) cannot delete it. The remove_file ->
         // remove_dir fallback unlinks the link either way.
         let root = temp_root("mdcdirlink");
         let real_target = root.join("target");
@@ -827,7 +852,7 @@ mod tests {
         fs::create_dir_all(&src).expect("mkdir src");
         let link = src.join("child");
         if !try_symlink_dir(&real_target, &link) {
-            // directory-symlink creation needs SeCreateSymbolicLinkPrivilege on windows; skip
+            // Directory-symlink creation needs SeCreateSymbolicLinkPrivilege on windows; skip
             // rather than fail when unavailable.
             let _ = fs::remove_dir_all(&root);
             return;
@@ -848,7 +873,7 @@ mod tests {
             0,
             "every child is moved out of the source"
         );
-        // the symlink target itself is untouched (remove_all unlinks the link, never recurses into
+        // The symlink target itself is untouched (remove_all unlinks the link, never recurses into
         // it).
         assert_eq!(read_file(&real_target.join("inner.txt")), "T");
         let _ = fs::remove_dir_all(&root);
@@ -891,7 +916,7 @@ mod tests {
     #[test]
     fn reset_disk_full_clears_the_sticky_flag() {
         // note: a real ENOSPC cannot be provoked from a unit test, so the set-from-I/O path is
-        // exercised only by is_disk_full's mapping above. the flag is process-wide, so this test
+        // exercised only by is_disk_full's mapping above. The flag is process-wide, so this test
         // only asserts the cleared state it establishes itself.
         FileOperations::reset_disk_full();
         assert!(!FileOperations::disk_full_encountered());
