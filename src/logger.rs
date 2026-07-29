@@ -1,9 +1,9 @@
 /*!
- * @brief routes process-wide logs to a file or host callback.
- * @author Alex (https://github.com/lextpf)
+ * @brief Routes process-wide logs to a file or host callback.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * a callback replaces file output. callback and console calls occur outside the state lock.
- * reentrant callback logging is dropped. file output rotates at 10 MiB and keeps three backups.
+ * A callback replaces file output. Callback and console calls occur outside the state lock.
+ * Reentrant callback logging is dropped. File output rotates at 10 MiB and keeps three backups.
  */
 
 use std::ffi::CString;
@@ -17,12 +17,12 @@ use std::sync::{Mutex, OnceLock};
 use crate::utils::module_directory;
 
 /**
- * @brief host log callback.
- * @author Alex (https://github.com/lextpf)
+ * @brief Host log callback.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the ABI spelling is the parameter type of [`crate::capi::setLogCallback`], `Option<unsafe extern
- * "C" fn(*const c_char)>`, which the MO2 plugin declares as `ctypes.CFUNCTYPE(None,
- * ctypes.c_char_p)`.
+ * The argument is borrowed NUL-terminated UTF-8 text, valid only during the call. The host
+ * must copy text it retains. Calls can overlap on different engine threads and must not
+ * unwind across the C ABI.
  */
 pub type LogCallback = unsafe extern "C" fn(*const c_char);
 
@@ -31,9 +31,9 @@ const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
 
 const MAX_ROTATED_FILES: u32 = 3;
 
-// the file handle and its byte counter, which only ever move together.
+// The file handle and its byte counter, which only ever move together.
 struct FileState {
-    // absolute path to the logs directory.
+    // Absolute path to the logs directory.
     directory: PathBuf,
     file: Option<File>,
     // approximate bytes written since the last rotation.
@@ -42,30 +42,30 @@ struct FileState {
 
 /**
  * @struct Logger
- * @brief the logger singleton.
- * @author Alex (https://github.com/lextpf)
+ * @brief The logger singleton.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ### :material-lock-outline: thread safety
+ * ### :material-lock-outline: Thread safety
  *
- * the file state is protected by a mutex. callback and console calls run outside that lock.
- * callbacks can run on several threads at once. reentrant callback logging is dropped.
+ * The file state is protected by a mutex. Callback and console calls run outside that lock.
+ * Callbacks can run on several threads at once. Reentrant callback logging is dropped.
  *
  */
 pub struct Logger {
     state: Mutex<FileState>,
-    // callback function-pointer address, 0 when cleared.
+    // Callback function-pointer address, 0 when cleared.
     // stored lock-free so `set_callback` never blocks a logging thread.
     callback: AtomicUsize,
 }
 
 // module_anchor supplies an address from mo2-salma.dll for module path resolution.
-// the log directory has to follow mo2-salma.dll, not the host executable: MO2 loads the DLL out of
+// The log directory has to follow mo2-salma.dll, not the host executable: MO2 loads the DLL out of
 // its plugins tree while the process is ModOrganizer.exe, and the log belongs next to the DLL
 // either way.
 fn module_anchor() {}
 
-// re-entrancy guard for the host callback. a callback that itself logs would otherwise recurse
-// until the stack overflows. the flag is per-thread because callbacks run on whichever thread
+// re-entrancy guard for the host callback. A callback that itself logs would otherwise recurse
+// until the stack overflows. The flag is per-thread because callbacks run on whichever thread
 // logged.
 thread_local! {
     static IN_CALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -92,9 +92,9 @@ impl Level {
 
 impl Logger {
     /**
-     * @fn instance() -> &'static Logger
-     * @brief the process-wide logger, constructed on first use.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `instance() -> &'static Logger`
+     * @brief The process-wide logger, constructed on first use.
+     * @author Alex (<https://github.com/lextpf>)
      *
      */
     pub fn instance() -> &'static Logger {
@@ -124,12 +124,15 @@ impl Logger {
     }
 
     /**
-     * @fn set_callback(&self, Option<LogCallback>)
-     * @brief replace the callback with one atomic store; None clears it.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `set_callback(&self, Option<LogCallback>)`
+     * @brief Replace the host callback without waiting for active log calls.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * a single lock-free atomic store, so it never contends with an in-flight log call and never
-     * blocks.
+     * The atomic store changes future snapshots. It does not cancel callbacks that an
+     * emitting thread already copied. Keep the callback and its state alive until engine
+     * activity that could use the old pointer has finished.
+     *
+     * @param callback Host callback; None restores file output.
      */
     pub fn set_callback(&self, callback: Option<LogCallback>) {
         let addr = match callback {
@@ -148,7 +151,7 @@ impl Logger {
         if addr == 0 {
             None
         } else {
-            // safety: the address was stored from a `LogCallback` in
+            // Safety: the address was stored from a `LogCallback` in
             // `set_callback` and function pointers are not invalidated by the
             // round trip through `usize`.
             Some(unsafe { std::mem::transmute::<usize, LogCallback>(addr) })
@@ -167,6 +170,17 @@ impl Logger {
         self.emit(Level::Error, message);
     }
 
+    /**
+     * @fn `emit(&self, Level, &str)`
+     * @brief Route a message using one snapshot of the registered callback.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * File writes hold the state mutex. Console output and callback invocation occur
+     * after that mutex is released, so slow host code does not hold the file lock.
+     *
+     * @param level Severity used for file formatting and console routing.
+     * @param message Borrowed text; callback delivery truncates at an interior NUL.
+     */
     fn emit(&self, level: Level, message: &str) {
         // 1. under the lock: snapshot the callback, and write the file line only when no callback
         // is registered.
@@ -179,7 +193,7 @@ impl Logger {
             cb
         };
 
-        // 2. console echo, outside the lock: interleaved console output is acceptable, holding the
+        // 2. Console echo, outside the lock: interleaved console output is acceptable, holding the
         // mutex across slow I/O is not.
         if level == Level::Error {
             eprintln!("{message}");
@@ -187,18 +201,26 @@ impl Logger {
             println!("{message}");
         }
 
-        // 3. callback, if registered.
+        // 3. Callback, if registered.
         if let Some(cb) = cb {
             self.invoke_callback(cb, message);
         }
     }
 
+    /**
+     * @fn `invoke_callback(&self, LogCallback, &str)`
+     * @brief Deliver borrowed C-string text while suppressing recursive callbacks.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @param cb Callback kept alive by the host through this call.
+     * @param message Text copied into a temporary C string; an interior NUL ends the copy.
+     */
     fn invoke_callback(&self, cb: LogCallback, message: &str) {
         if IN_CALLBACK.with(|f| f.get()) {
             eprintln!("[Logger] Re-entrant callback dropped: {message}");
             return;
         }
-        // a C string cannot carry an interior NUL, so a message holding one is delivered truncated
+        // A C string cannot carry an interior NUL, so a message holding one is delivered truncated
         // at the first NUL rather than dropped.
         let Ok(cstr) = CString::new(message) else {
             let truncated: String = message.chars().take_while(|c| *c != '\0').collect();
@@ -213,9 +235,9 @@ impl Logger {
 
     fn call_guarded(&self, cb: LogCallback, cstr: &CString, message: &str) {
         IN_CALLBACK.with(|f| f.set(true));
-        // a host callback that unwinds must not tear down the log call site.
+        // The unwind guard does not relax the callback ABI rule: hosts must not unwind.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // safety: `cb` came from `set_callback` and `cstr` is a valid
+            // Safety: `cb` came from `set_callback` and `cstr` is a valid
             // nul-terminated string that outlives the call.
             unsafe { cb(cstr.as_ptr()) }
         }));
@@ -226,11 +248,11 @@ impl Logger {
     }
 
     /**
-     * @fn clear_log(&self) -> bool
-     * @brief truncate under the logger mutex and reopen in append mode.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `clear_log(&self) -> bool`
+     * @brief Truncate under the logger mutex and reopen in append mode.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * a `false` return does not mean the log file is closed: on the truncation-failure path the
+     * A `false` return does not mean the log file is closed: on the truncation-failure path the
      * file is reopened in append mode and logging continues, with `bytes_written` reseeded from the
      * reopened file's size so the rotation counter still matches what is on disk.
      * @return `true` only when the truncation and the reopen both succeeded.
@@ -267,8 +289,8 @@ impl Logger {
 }
 
 impl FileState {
-    // write one formatted line and rotate if the file has grown past the cap.
-    // the caller must hold the state mutex.
+    // Write one formatted line and rotate if the file has grown past the cap.
+    // The caller must hold the state mutex.
     fn write_line(&mut self, level: Level, message: &str) {
         let Some(file) = self.file.as_mut() else {
             return;
@@ -277,7 +299,7 @@ impl FileState {
         if file.write_all(line.as_bytes()).is_err() {
             return;
         }
-        // the newline is part of `line` and the whole record goes out in one call, so the counter
+        // The newline is part of `line` and the whole record goes out in one call, so the counter
         // takes the line length with no `+ 1` adjustment. adding one would drift the rotation point
         // away from the real size.
         self.bytes_written += line.len() as u64;
@@ -285,7 +307,7 @@ impl FileState {
     }
 
     // rotate the log once it passes MAX_LOG_SIZE.
-    // the caller must hold the state mutex.
+    // The caller must hold the state mutex.
     fn rotate_if_needed(&mut self) {
         if self.bytes_written < MAX_LOG_SIZE {
             return;
@@ -319,7 +341,7 @@ impl FileState {
             }
         }
 
-        // rotate the current log to .1. a rename can still fail on windows if an antivirus scanner
+        // rotate the current log to .1. A rename can still fail on windows if an antivirus scanner
         // or a log viewer pins the file.
         let current = dir.join("salma.log");
         if let Err(err) = fs::rename(&current, dir.join("salma.log.1")) {
@@ -335,9 +357,9 @@ impl FileState {
     }
 }
 
-// open path in append mode, reporting the existing size so the rotation counter continues from
+// Open path in append mode, reporting the existing size so the rotation counter continues from
 // where a previous process left off.
-// never fails.
+// Never fails.
 fn open_append(path: &Path) -> (Option<File>, u64) {
     match OpenOptions::new().create(true).append(true).open(path) {
         Ok(file) => {
@@ -367,14 +389,14 @@ struct Stamp {
     millis: u32,
 }
 
-// current local time.
+// Current local time.
 #[cfg(windows)]
 fn now_local() -> Stamp {
     use windows_sys::Win32::System::SystemInformation::GetLocalTime;
-    // safety: SYSTEMTIME holds only integer fields, so all-zero is a valid value, and GetLocalTime
+    // Safety: SYSTEMTIME holds only integer fields, so all-zero is a valid value, and GetLocalTime
     // overwrites it on the next line.
     let mut st = unsafe { std::mem::zeroed() };
-    // safety: GetLocalTime only writes the SYSTEMTIME out-parameter.
+    // Safety: GetLocalTime only writes the SYSTEMTIME out-parameter.
     unsafe { GetLocalTime(&mut st) };
     Stamp {
         year: st.wYear as i32,
@@ -421,9 +443,9 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     ((y + i64::from(m <= 2)) as i32, m as u32, d as u32)
 }
 
-// format one log line, newline included: {:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {level}
+// Format one log line, newline included: {:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {level}
 // {message}\n.
-// the trailing newline is part of the format string because each record must reach the file in a
+// The trailing newline is part of the format string because each record must reach the file in a
 // single write; see the one-write invariant on `FileState::write_line`.
 fn format_line(s: Stamp, level: &str, message: &str) -> String {
     format!(
