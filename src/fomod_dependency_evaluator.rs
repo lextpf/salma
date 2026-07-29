@@ -1,11 +1,11 @@
 /*!
- * @brief evaluates compiled FOMOD dependency trees.
- * @author Alex (https://github.com/lextpf)
+ * @brief Evaluates compiled FOMOD dependency trees.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * normal mode reads the dependency context and filesystem. inferred mode uses external
- * overrides and performs no filesystem access. both modes share flag and composite semantics.
+ * Normal mode reads the dependency context and filesystem. inferred mode uses external
+ * overrides and performs no filesystem access. Both modes share flag and composite semantics.
  *
- * evaluation is bounded by MAX_DEPENDENCY_DEPTH.
+ * Evaluation is bounded by MAX_DEPENDENCY_DEPTH.
  */
 
 use std::collections::HashMap;
@@ -17,28 +17,28 @@ use crate::types::{FomodDependencyContext, PluginType};
 use crate::utils::{normalize_path, to_lower};
 
 /**
- * @brief maximum nesting depth for recursive condition evaluation, a guard against malformed XML.
- * @author Alex (https://github.com/lextpf)
+ * @brief Maximum nesting depth for recursive condition evaluation, a guard against malformed XML.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * both users count from depth 0 at the outermost `<dependencies>`, and both degrade rather than
+ * Both users count from depth 0 at the outermost `<dependencies>`, and both degrade rather than
  * fail when the bound is passed.
  */
 pub const MAX_DEPENDENCY_DEPTH: i32 = 32;
 
 /**
  * @enum ExternalConditionOverride
- * @brief how inferred mode answers an external dependency.
- * @author Alex (https://github.com/lextpf)
+ * @brief How inferred mode answers an external dependency.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * consulted only in inferred mode; no variant reads the filesystem or the game state, because
+ * Consulted only in inferred mode; no variant reads the filesystem or the game state, because
  * inferred mode never probes either.
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum ExternalConditionOverride {
     /**
-     * @brief external state cannot be determined.
-     * @author Alex (https://github.com/lextpf)
+     * @brief External state cannot be determined.
+     * @author Alex (<https://github.com/lextpf>)
      */
     #[default]
     Unknown = 0,
