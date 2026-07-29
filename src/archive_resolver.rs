@@ -1,8 +1,8 @@
 /*!
- * @brief resolves source archives recorded by MO2 metadata.
- * @author Alex (https://github.com/lextpf)
+ * @brief Resolves source archives recorded by MO2 metadata.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * absolute paths are final. relative paths use the first existing candidate:
+ * Absolute paths are final. Relative paths use the first existing candidate:
  *
  * @verbatim
  * SALMA_DOWNLOADS_PATH/value
@@ -12,13 +12,23 @@
  * grandparent(mods_dir)/downloads/value
  * @endverbatim
  *
- * an empty mods_dir skips its three candidates. parent_path removes trailing separators without
+ * An empty mods_dir skips its three candidates. parent_path removes trailing separators without
  * removing the final directory component.
  */
 
 use std::path::{Component, Path, PathBuf};
 
-// keep roots unchanged and remove trailing separators before removing a directory component.
+/**
+ * @fn `parent_path(&Path) -> PathBuf`
+ * @brief Remove trailing separators before removing a directory component.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Roots remain unchanged. A trailing separator removes only the separator suffix;
+ * without one, the final component is removed. Separator trimming uses lossy text.
+ *
+ * @param p Path whose parent candidate is needed.
+ * @return The trimmed directory, its parent, or the unchanged root.
+ */
 fn parent_path(p: &Path) -> PathBuf {
     let has_relative = p.components().any(|c| {
         matches!(
@@ -30,8 +40,8 @@ fn parent_path(p: &Path) -> PathBuf {
         return p.to_path_buf();
     }
 
-    // a run of trailing separators contributes one empty element, so dropping the last element
-    // removes only the separators. conversion replaces non-unicode path units before trimming.
+    // A run of trailing separators contributes one empty element, so dropping the last element
+    // removes only the separators. Conversion replaces non-unicode path units before trimming.
     let s = p.as_os_str().to_string_lossy();
     let trimmed = s.trim_end_matches(['\\', '/']);
     if trimmed.len() < s.len() {
@@ -43,16 +53,31 @@ fn parent_path(p: &Path) -> PathBuf {
         .unwrap_or_else(|| p.to_path_buf())
 }
 
+/**
+ * @fn `has_parent_path(&Path) -> bool`
+ * @brief Check whether parent-candidate construction yields a nonempty path.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param p Candidate path, without filesystem access.
+ * @return True when parent_path returns a nonempty candidate, including a retained root.
+ */
 fn has_parent_path(p: &Path) -> bool {
     !parent_path(p).as_os_str().is_empty()
 }
 
 /**
- * @fn resolve_mod_archive(&str, &Path, &Path) -> PathBuf
- * @brief resolve archive_value to an existing archive, or an empty path on a miss.
- * @author Alex (https://github.com/lextpf)
+ * @fn `resolve_mod_archive(&str, &Path, &Path) -> PathBuf`
+ * @brief Find the first existing archive candidate from mod metadata.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * an empty `archive_value` resolves to nothing without touching the disk.
+ * An empty value returns immediately. An absolute value is checked only at that path;
+ * a missing absolute path does not enter the relative search. Candidates are checked
+ * for existence, without validating archive contents or requiring a regular file.
+ *
+ * @param archive_value Metadata path, either absolute or relative.
+ * @param mod_folder Installed-mod directory used for relative candidates.
+ * @param mods_dir MO2 mods directory; empty omits its three candidates.
+ * @return The first existing candidate, or an empty path when no candidate exists.
  */
 pub fn resolve_mod_archive(archive_value: &str, mod_folder: &Path, mods_dir: &Path) -> PathBuf {
     if archive_value.is_empty() {
@@ -69,7 +94,7 @@ pub fn resolve_mod_archive(archive_value: &str, mod_folder: &Path, mods_dir: &Pa
     }
 
     // `var_os` rather than `var`: a downloads path with non-UTF-8 components must still be usable,
-    // and `var` would drop it. empty is treated as unset.
+    // and `var` would drop it. Empty is treated as unset.
     let downloads = std::env::var_os("SALMA_DOWNLOADS_PATH").filter(|d| !d.is_empty());
 
     build_candidates(
@@ -83,10 +108,20 @@ pub fn resolve_mod_archive(archive_value: &str, mod_folder: &Path, mods_dir: &Pa
     .unwrap_or_default()
 }
 
-// the ordered candidate list for a relative archive_path, with the downloads directory passed in
-// rather than read from the environment.
-// split out of `resolve_mod_archive` so the search order is testable without mutating
-// process-global environment state, which would race the other tests in this binary.
+/**
+ * @fn `build_candidates(&Path, Option<&Path>, &Path, &Path) -> Vec<PathBuf>`
+ * @brief Construct the relative archive search order without accessing disk.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * The downloads directory is supplied explicitly so candidate construction does not
+ * read or mutate the process environment. Duplicate candidates remain in the list.
+ *
+ * @param archive_path Relative metadata value appended to each search directory.
+ * @param downloads Optional configured downloads directory.
+ * @param mod_folder Installed-mod directory.
+ * @param mods_dir MO2 mods directory; empty omits its three candidates.
+ * @return Candidates in the module's documented precedence order.
+ */
 fn build_candidates(
     archive_path: &Path,
     downloads: Option<&Path>,
@@ -323,7 +358,7 @@ mod tests {
 
     #[test]
     fn parent_path_keeps_the_directory_when_it_ends_in_a_separator() {
-        // the behavior this pins: Path::parent() would say r"C:\MO2".
+        // The behavior this pins: Path::parent() would say r"C:\MO2".
         assert_eq!(
             Path::new(r"C:\MO2\mods\").parent(),
             Some(Path::new(r"C:\MO2")),
