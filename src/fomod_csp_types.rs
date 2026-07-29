@@ -1,6 +1,6 @@
 /*!
- * @brief defines shared CSP state, indices, metrics, and budgets.
- * @author Alex (https://github.com/lextpf)
+ * @brief Defines shared CSP state, indices, metrics, and budgets.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * SelectAny caps are 64 for narrow search, 256 for widened search, and 0 for full search.
  * Precompute borrows source data and owns only derived indices.
@@ -16,10 +16,10 @@ use crate::fomod_propagator::PropagationResult;
 
 /**
  * @struct ReproMetrics
- * @brief count destination differences between simulated and target trees.
- * @author Alex (https://github.com/lextpf)
+ * @brief Count destination differences between simulated and target trees.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the four error counters are better the lower they are; `reproduced` is better the higher it is.
+ * The four error counters are better the lower they are; `reproduced` is better the higher it is.
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReproMetrics {
@@ -27,8 +27,8 @@ pub struct ReproMetrics {
     pub extra: i32,
     pub size_mismatch: i32,
     /**
-     * @brief count hash mismatches not already counted as size mismatches.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Count hash mismatches not already counted as size mismatches.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub hash_mismatch: i32,
     pub reproduced: i32,
@@ -40,9 +40,9 @@ impl ReproMetrics {
     }
 
     /**
-     * @fn better_than(&self, &ReproMetrics) -> bool
-     * @brief strict-weak lexicographic ordering over the five counters.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `better_than(&self, &ReproMetrics) -> bool`
+     * @brief Strict-weak lexicographic ordering over the five counters.
+     * @author Alex (<https://github.com/lextpf>)
      *
      */
     pub fn better_than(&self, rhs: &ReproMetrics) -> bool {
@@ -67,8 +67,8 @@ impl ReproMetrics {
 
 /**
  * @struct InferenceOverrides
- * @brief tri-state overrides for the external dependencies inference cannot evaluate.
- * @author Alex (https://github.com/lextpf)
+ * @brief Tri-state overrides for the external dependencies inference cannot evaluate.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -78,28 +78,28 @@ pub struct InferenceOverrides {
 }
 
 /**
- * @brief cap SelectAny enumeration before global widened or targeted passes.
- * @author Alex (https://github.com/lextpf)
+ * @brief Cap SelectAny enumeration before global widened or targeted passes.
+ * @author Alex (<https://github.com/lextpf>)
  */
 pub const SELECT_ANY_CAP_NARROW: i32 = 64;
 /**
- * @brief cap used by the phase-5 global-widened and global-targeted passes only.
- * @author Alex (https://github.com/lextpf)
+ * @brief Cap used by the phase-5 global-widened and global-targeted passes only.
+ * @author Alex (<https://github.com/lextpf>)
  */
 pub const SELECT_ANY_CAP_MEDIUM: i32 = 256;
 /**
- * @brief no cap: enumerate every valid combination.
- * @author Alex (https://github.com/lextpf)
+ * @brief No cap: enumerate every valid combination.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * because the force-heuristic gate tests `select_any_cap > 0`, 0 also widens raw enumeration for
+ * Because the force-heuristic gate tests `select_any_cap > 0`, 0 also widens raw enumeration for
  * medium no-evidence SelectAny groups.
  */
 pub const SELECT_ANY_CAP_FULL: i32 = 0;
 
 /**
  * @struct GroupRef
- * @brief reference to one plugin group, addressed by its (step, group) index pair.
- * @author Alex (https://github.com/lextpf)
+ * @brief Reference to one plugin group, addressed by its (step, group) index pair.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `flat_start` is the group's offset into the global flat plugin array, so per-plugin precomputed
  * data (evidence, unique support) can be looked up without re-walking the step hierarchy.
@@ -113,16 +113,16 @@ pub struct GroupRef {
 }
 
 /**
- * @brief select plugins by local position within one group.
- * @author Alex (https://github.com/lextpf)
+ * @brief Select plugins by local position within one group.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub type GroupOption = Vec<bool>;
 
 /**
  * @struct SolverResult
- * @brief output of the CSP solver: plugin selections and match-quality counters.
- * @author Alex (https://github.com/lextpf)
+ * @brief Output of the CSP solver: plugin selections and match-quality counters.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -132,7 +132,7 @@ pub struct SolverResult {
     pub exact_match: bool,
     /**
      * @brief CSP search-tree node count (diagnostics).
-     * @author Alex (https://github.com/lextpf)
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub nodes_explored: i32,
     pub missing: i32,
@@ -140,33 +140,33 @@ pub struct SolverResult {
     pub size_mismatch: i32,
     pub hash_mismatch: i32,
     /**
-     * @brief record the highest phase for unresolved groups and empty strings for resolved groups.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Record the highest phase for unresolved groups and empty strings for resolved groups.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * every unresolved group in every step receives the same string as `phase_reached`, including
+     * Every unresolved group in every step receives the same string as `phase_reached`, including
      * groups the phase never touched.
      */
     pub phase_per_group: Vec<Vec<String>>,
     /**
-     * @brief reserved alternative counts; the current solver writes zero.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Reserved alternative counts; the current solver writes zero.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * zero maps to the maximum ambiguity component, 1.0.
+     * Zero maps to the maximum ambiguity component, 1.0.
      */
     pub alternatives_per_group: Vec<Vec<i32>>,
     /**
-     * @brief record the highest entered phase as a stable CSP identifier.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Record the highest entered phase as a stable CSP identifier.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * empty when no diagnostic state was recorded.
+     * Empty when no diagnostic state was recorded.
      */
     pub phase_reached: String,
 }
 
 /**
  * @struct SolverSearchState
- * @brief mutable search state carried through backtracking and local search.
- * @author Alex (https://github.com/lextpf)
+ * @brief Mutable search state carried through backtracking and local search.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -174,30 +174,30 @@ pub struct SolverSearchState {
     pub selections: Vec<Vec<Vec<bool>>>,
     pub flags: HashMap<String, String>,
     /**
-     * @brief total search nodes visited across all passes.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Total search nodes visited across all passes.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * never reset between phases, which is what makes every `*_node_limit` cumulative.
+     * Never reset between phases, which is what makes every `*_node_limit` cumulative.
      */
     pub nodes_explored: i32,
     /**
-     * @brief true when an exact (zero-error) reproduction has been found.
-     * @author Alex (https://github.com/lextpf)
+     * @brief True when an exact (zero-error) reproduction has been found.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub found_exact: bool,
 }
 
 /**
  * @struct SolverBestResult
- * @brief the best solution found so far in this solve.
- * @author Alex (https://github.com/lextpf)
+ * @brief The best solution found so far in this solve.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SolverBestResult {
     /**
-     * @brief the best selection set and its error counts.
-     * @author Alex (https://github.com/lextpf)
+     * @brief The best selection set and its error counts.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub best: SolverResult,
     pub best_metrics: ReproMetrics,
@@ -206,8 +206,8 @@ pub struct SolverBestResult {
 
 /**
  * @struct SolverProgress
- * @brief progress reporting and deadline enforcement for one solve.
- * @author Alex (https://github.com/lextpf)
+ * @brief Progress reporting and deadline enforcement for one solve.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone)]
@@ -219,21 +219,21 @@ pub struct SolverProgress {
     pub pass_start_nodes: i64,
     pub deadline: Option<Instant>,
     /**
-     * @brief set when the backtracker observes the deadline as passed.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Set when the backtracker observes the deadline as passed.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub deadline_exceeded: bool,
 }
 
 impl SolverProgress {
     /**
-     * @brief minimum nodes between progress log lines.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Minimum nodes between progress log lines.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub const PROGRESS_NODE_INTERVAL: i32 = 1_000;
     /**
-     * @brief minimum milliseconds between progress log lines.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Minimum milliseconds between progress log lines.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub const PROGRESS_TIME_INTERVAL_MS: i32 = 1_000;
 }
@@ -255,8 +255,8 @@ impl Default for SolverProgress {
 
 /**
  * @struct SolverState
- * @brief search state, best result and progress, bundled so one value threads through every phase.
- * @author Alex (https://github.com/lextpf)
+ * @brief Search state, best result and progress, bundled so one value threads through every phase.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default)]
@@ -268,57 +268,57 @@ pub struct SolverState {
 
 /**
  * @struct SolverStats
- * @brief diagnostic counters for option pruning and search behavior.
- * @author Alex (https://github.com/lextpf)
+ * @brief Diagnostic counters for option pruning and search behavior.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SolverStats {
     /**
-     * @brief options dropped because they only produce extra files.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Options dropped because they only produce extra files.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub dropped_extra_only_options: i32,
     /**
-     * @brief count options collapsed by destination, source and flag effects.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Count options collapsed by destination, source and flag effects.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub collapsed_equivalent_options: i32,
     pub forced_unique_options: i32,
     pub capped_select_any_options: i32,
     /**
-     * @brief subtrees pruned because all options are extra-only.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Subtrees pruned because all options are extra-only.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub pruned_extra_only: i32,
     pub pruned_lower_bound: i32,
     pub pruned_memo: i32,
     /**
-     * @brief groups skipped because their step is not visible.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Groups skipped because their step is not visible.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub skipped_invisible: i32,
     /**
-     * @brief subtrees abandoned because the solve-wide node count reached the plan's node_limit.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Subtrees abandoned because the solve-wide node count reached the plan's node_limit.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub pruned_node_limit: i32,
     /**
-     * @brief branches abandoned because the backtrack stack exceeded the max depth.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Branches abandoned because the backtrack stack exceeded the max depth.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub max_depth_aborts: i32,
     /**
-     * @brief write-only marker, set for a group on every option-cache miss for that group.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Write-only marker, set for a group on every option-cache miss for that group.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub logged_group_options: Vec<bool>,
 }
 
 /**
  * @struct OptionProfile
- * @brief describe one group option's files, evidence and flag writes.
- * @author Alex (https://github.com/lextpf)
+ * @brief Describe one group option's files, evidence and flag writes.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -336,8 +336,8 @@ pub struct OptionProfile {
 
 /**
  * @struct CachedOptions
- * @brief one group's surviving options and their profiles.
- * @author Alex (https://github.com/lextpf)
+ * @brief One group's surviving options and their profiles.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -348,12 +348,12 @@ pub struct CachedOptions {
 
 /**
  * @struct Precompute
- * @brief hold immutable solver data built before phase execution.
- * @author Alex (https://github.com/lextpf)
+ * @brief Hold immutable solver data built before phase execution.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * source data is borrowed for the solve. derived indices belong to this value.
+ * Source data is borrowed for the solve. derived indices belong to this value.
  *
- * ### :material-link-variant: index spaces
+ * ### :material-link-variant: Index spaces
  *
  * @verbatim
  * installer hierarchy          flat plugin indices
@@ -371,10 +371,10 @@ pub struct CachedOptions {
  * local option index = flat plugin index - flat_start
  * @endverbatim
  *
- * a position in `groups` is not `GroupRef::group_idx`, which is a position within one step.
+ * A position in `groups` is not `GroupRef::group_idx`, which is a position within one step.
  * `flat_start` follows document order even when priority sorting changes `groups`.
  *
- * ### :material-shield-lock: destination invariants
+ * ### :material-shield-lock: Destination invariants
  *
  * `group_dests` and `dest_to_groups` cover every non-excluded produced destination.
  * `dest_to_plugins`, `dest_to_size_match_groups`, `dest_to_hash_capable_groups`, and
@@ -391,8 +391,8 @@ pub struct Precompute<'a> {
     pub propagation: Option<&'a PropagationResult>,
 
     /**
-     * @brief all groups across all steps, in the caller-provided order.
-     * @author Alex (https://github.com/lextpf)
+     * @brief All groups across all steps, in the caller-provided order.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub groups: Vec<GroupRef>,
     pub evidence: Vec<i32>,
@@ -401,15 +401,15 @@ pub struct Precompute<'a> {
     pub plugin_unique_support: Vec<i32>,
 
     /**
-     * @brief collect flags read by visibility, type, dependency or conditional rules.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Collect flags read by visibility, type, dependency or conditional rules.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub needed_flags: HashSet<String>,
     pub group_sets_flags: Vec<HashSet<String>>,
     pub group_reads_flags: Vec<HashSet<String>>,
     /**
-     * @brief per-group: sorted flag keys for cache hashing (byte-ascending).
-     * @author Alex (https://github.com/lextpf)
+     * @brief Per-group: sorted flag keys for cache hashing (byte-ascending).
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub group_cache_flags: Vec<Vec<String>>,
     pub flag_to_setter_groups: HashMap<String, Vec<i32>>,
@@ -418,41 +418,41 @@ pub struct Precompute<'a> {
 
     pub dest_to_groups: HashMap<String, Vec<i32>>,
     /**
-     * @brief flat plugin indices that can produce each destination (sorted-unique).
-     * @author Alex (https://github.com/lextpf)
+     * @brief Flat plugin indices that can produce each destination (sorted-unique).
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub dest_to_plugins: HashMap<String, Vec<i32>>,
     /**
-     * @brief groups that can produce a size-matching file for the destination (sorted-unique).
-     * @author Alex (https://github.com/lextpf)
+     * @brief Groups that can produce a size-matching file for the destination (sorted-unique).
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * a size of 0 on either side counts as a match, because 0 means "unknown".
+     * A size of 0 on either side counts as a match, because 0 means "unknown".
      */
     pub dest_to_size_match_groups: HashMap<String, Vec<i32>>,
     /**
-     * @brief groups that can produce a hash-matching file for the destination (sorted-unique).
-     * @author Alex (https://github.com/lextpf)
+     * @brief Groups that can produce a hash-matching file for the destination (sorted-unique).
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * this is the size-match test plus a hash test in which a 0 hash on either side counts as a
+     * This is the size-match test plus a hash test in which a 0 hash on either side counts as a
      * match, because 0 means "not hashed".
      */
     pub dest_to_hash_capable_groups: HashMap<String, Vec<i32>>,
 
     /**
-     * @brief collect non-excluded target destinations produced by conditional atoms.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Collect non-excluded target destinations produced by conditional atoms.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub conditional_dests: HashSet<String>,
     /**
-     * @brief list sorted plugins that produce non-excluded target destinations.
-     * @author Alex (https://github.com/lextpf)
+     * @brief List sorted plugins that produce non-excluded target destinations.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub contested_plugins: Vec<i32>,
     /**
-     * @brief connected components of the group dependency graph.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Connected components of the group dependency graph.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * groups in different components share neither, so each component can be searched without
+     * Groups in different components share neither, so each component can be searched without
      * regard to the others.
      */
     pub components: Vec<Vec<i32>>,
@@ -460,8 +460,8 @@ pub struct Precompute<'a> {
 
 /**
  * @struct OptionCacheKey
- * @brief cache key identifying one group's enumerated options under one flag state.
- * @author Alex (https://github.com/lextpf)
+ * @brief Cache key identifying one group's enumerated options under one flag state.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -469,21 +469,21 @@ pub struct OptionCacheKey {
     pub group_idx: i32,
     pub flags_sig: u64,
     /**
-     * @brief store the effective SelectAny cap; zero means exact mode.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Store the effective SelectAny cap; zero means exact mode.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub select_any_cap: i32,
     /**
-     * @brief true when the group is in exact mode.
-     * @author Alex (https://github.com/lextpf)
+     * @brief True when the group is in exact mode.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub exact_mode: bool,
 }
 
 /**
  * @struct MemoKey
- * @brief memoization key for subtree pruning during backtracking.
- * @author Alex (https://github.com/lextpf)
+ * @brief Memoization key for subtree pruning during backtracking.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `flag_state_sig` is `hash_flag_subset(flags, memo_flags)` and `contested_sig` is
  * `contested_signature(...)`, both byte-exact folds computed in [`crate::fomod_csp_solver`].
@@ -491,8 +491,8 @@ pub struct OptionCacheKey {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct MemoKey {
     /**
-     * @brief next group index in the search order.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Next group index in the search order.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub next_idx: i32,
     pub flag_state_sig: u64,
@@ -501,8 +501,8 @@ pub struct MemoKey {
 
 /**
  * @struct FlagDelta
- * @brief undo record for a single flag change during backtracking.
- * @author Alex (https://github.com/lextpf)
+ * @brief Undo record for a single flag change during backtracking.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -514,27 +514,27 @@ pub struct FlagDelta {
 
 /**
  * @struct SearchPlan
- * @brief configuration for a single backtracking pass over a set of groups.
- * @author Alex (https://github.com/lextpf)
+ * @brief Configuration for a single backtracking pass over a set of groups.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default)]
 pub struct SearchPlan {
     /**
-     * @brief group indices in the order they will be explored.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Group indices in the order they will be explored.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub order: Vec<i32>,
     /**
-     * @brief map each group index to its search-order position or minus one.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Map each group index to its search-order position or minus one.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub order_pos: Vec<i32>,
     /**
-     * @brief ceiling on the solve-wide node count, not a per-pass budget; 0 is unlimited.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Ceiling on the solve-wide node count, not a per-pass budget; 0 is unlimited.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * every earlier phase therefore spends the same budget, and a late pass whose limit is already
+     * Every earlier phase therefore spends the same budget, and a late pass whose limit is already
      * exceeded explores no nodes at all.
      */
     pub node_limit: i32,
@@ -544,27 +544,27 @@ pub struct SearchPlan {
 
 /**
  * @struct SolverConfig
- * @brief time budgets, search-space caps and node limits for each phase of the FOMOD CSP solver.
- * @author Alex (https://github.com/lextpf)
+ * @brief Time budgets, search-space caps and node limits for each phase of the FOMOD CSP solver.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the counter starts at 0 once per `solve_fomod_csp` call and is never reset, so a phase whose
+ * The counter starts at 0 once per `solve_fomod_csp` call and is never reset, so a phase whose
  * limit is already below the current count explores nothing.
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SolverConfig {
     /**
-     * @brief maximum wall-clock time for the entire solve (seconds).
-     * @author Alex (https://github.com/lextpf)
+     * @brief Maximum wall-clock time for the entire solve (seconds).
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub time_limit_seconds: i32,
     /**
-     * @brief maximum number of state checkpoints kept during backtracking.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Maximum number of state checkpoints kept during backtracking.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub max_checkpoints: usize,
     /**
-     * @brief limit estimated combinations for each backtracking pass.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Limit estimated combinations for each backtracking pass.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub greedy_space_cap: u64,
     pub component_space_cap: u64,
@@ -582,8 +582,8 @@ pub struct SolverConfig {
 
 impl SolverConfig {
     /**
-     * @brief the default solver configuration.
-     * @author Alex (https://github.com/lextpf)
+     * @brief The default solver configuration.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub const DEFAULT: SolverConfig = SolverConfig {
         time_limit_seconds: 600,
@@ -610,8 +610,8 @@ impl Default for SolverConfig {
 }
 
 /**
- * @brief the solver configuration every phase reads.
- * @author Alex (https://github.com/lextpf)
+ * @brief The solver configuration every phase reads.
+ * @author Alex (<https://github.com/lextpf>)
  */
 pub const CONFIG: SolverConfig = SolverConfig::DEFAULT;
 
