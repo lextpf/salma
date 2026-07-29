@@ -1,28 +1,28 @@
 /*!
- * @brief parses ModuleConfig.xml bytes into the FOMOD intermediate representation.
- * @author Alex (https://github.com/lextpf)
+ * @brief Parses ModuleConfig.xml bytes into the FOMOD intermediate representation.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ### :material-transit-connection-variant: parse flow
+ * ### :material-transit-connection-variant: Parse flow
  *
  * @verbatim
  * bytes -> encoding detection -> compatibility rewrite -> depth guard -> XML parse -> IR
  * @endverbatim
  *
- * ### :material-format-list-numbered: compatibility rules
+ * ### :material-format-list-numbered: Compatibility rules
  *
- * the compatibility rewrite makes common malformed input XML-safe before roxmltree runs.
+ * The compatibility rewrite makes common malformed input XML-safe before roxmltree runs.
  *
- * | input                      | parsed result                        |
- * |----------------------------|--------------------------------------|
- * | bare or unsupported `&...` | literal text                         |
- * | invalid comment body       | empty comment                        |
- * | stray `]]>`                | literal text                         |
- * | misplaced `<?xml ...?>`    | empty comment that splits text runs  |
+ * | input                      | parsed result                       |
+ * |----------------------------|-------------------------------------|
+ * | bare or unsupported `&...` | literal text                        |
+ * | invalid comment body       | empty comment                       |
+ * | stray `]]>`                | literal text                        |
+ * | misplaced `<?xml ...?>`    | empty comment that splits text runs |
  *
- * ### :material-shield-lock: resource limits
+ * ### :material-shield-lock: Resource limits
  *
- * element and condition limits prevent stack and memory exhaustion. malformed model elements
- * degrade to defaults where the parser contract requires it.
+ * XML deeper than `MAX_ELEMENT_DEPTH` fails before tree construction. Condition compilation
+ * replaces excessive nesting with a false condition and truncates excessive child counts.
  */
 
 use std::borrow::Cow;
@@ -46,31 +46,32 @@ use crate::utils::{
 const MAX_CONDITION_CHILDREN: i32 = 10000;
 
 /**
- * @brief maximum element nesting depth accepted by load_document.
- * @author Alex (https://github.com/lextpf)
+ * @brief Maximum element nesting depth accepted by load_document.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * that is not a rust panic, so the `catch_unwind` at the C ABI boundary cannot contain it.
+ * The guard limits parser stack use. A stack overflow can abort the process, so the C ABI panic
+ * guard is not a substitute for this check.
  */
 pub const MAX_ELEMENT_DEPTH: usize = 48;
 
 /**
  * @enum FomodXmlError
- * @brief errors from the document-load half of the pipeline.
- * @author Alex (https://github.com/lextpf)
+ * @brief Errors from the document-load half of the pipeline.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * [`parse`] itself never fails, so nothing past loading can produce one of these.
  */
 #[derive(Debug)]
 pub enum FomodXmlError {
     /**
-     * @brief the byte buffer could not be transcoded to UTF-8 text under the detected encoding.
-     * @author Alex (https://github.com/lextpf)
+     * @brief The byte buffer could not be transcoded to UTF-8 text under the detected encoding.
+     * @author Alex (<https://github.com/lextpf>)
      */
     Decode(String),
     Parse(roxmltree::Error),
     /**
-     * @brief the document nests elements deeper than MAX_ELEMENT_DEPTH, which is the carried value.
-     * @author Alex (https://github.com/lextpf)
+     * @brief The document nests elements deeper than MAX_ELEMENT_DEPTH, which is the carried value.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * roxmltree would abort the process with an uncatchable stack overflow, so [`load_document`]
      * rejects the document up front.
@@ -267,11 +268,15 @@ fn decode_utf32(bytes: &[u8], big_endian: bool) -> Result<String, FomodXmlError>
 }
 
 /**
- * @fn decode_xml_bytes(&[u8]) -> Result<String, FomodXmlError>
- * @brief decode ModuleConfig.xml bytes as UTF-8 and remove a leading BOM.
- * @author Alex (https://github.com/lextpf)
+ * @fn `decode_xml_bytes(bytes: &[u8]) -> Result<String, FomodXmlError>`
+ * @brief Convert ModuleConfig.xml bytes to UTF-8 text.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * invalid UTF-8, lone UTF-16 surrogates, and out-of-range UTF-32 units return Decode.
+ * Encoding detection accepts UTF-8, UTF-16, UTF-32, and a declared Latin-1 encoding.
+ * The converted text has no leading byte order mark.
+ *
+ * @param bytes Encoded XML, with or without a byte order mark.
+ * @return Decoded text, or a decoding error for invalid code units.
  */
 pub fn decode_xml_bytes(bytes: &[u8]) -> Result<String, FomodXmlError> {
     let text = match guess_buffer_encoding(bytes) {
@@ -355,8 +360,17 @@ fn doctype_len(s: &str) -> usize {
     s.len()
 }
 
-// make supported malformed constructs XML-safe without changing their parsed text.
-// bare ampersands and unsupported entity references become literal text.
+/**
+ * @fn `pugixml_lenient_pass(text: &str) -> Cow<'_, str>`
+ * @brief Rewrite supported malformed XML while preserving its intended text.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Unsupported entity references become literal text. Unterminated comments and CDATA remain
+ * unchanged so the XML parser can reject them.
+ *
+ * @param text Decoded XML before document parsing.
+ * @return Borrowed input when no rewrite is needed; otherwise, an owned replacement.
+ */
 fn pugixml_lenient_pass(text: &str) -> Cow<'_, str> {
     let bytes = text.as_bytes();
     let mut out = String::new();
@@ -514,12 +528,15 @@ fn element_depth_exceeds(text: &str) -> bool {
 }
 
 /**
- * @fn load_document(&str) -> Result<Document<'_>, FomodXmlError>
- * @brief reject excessive nesting before parsing and allow DTD declarations.
- * @author Alex (https://github.com/lextpf)
+ * @fn `load_document(text: &str) -> Result<Document<'_>, FomodXmlError>`
+ * @brief Reject excessive nesting before parsing and allow DTD declarations.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * `allow_dtd` keeps declarations loadable. the compatibility pass keeps their entity references
- * literal.
+ * This entry point parses the supplied text directly. Use `parse_module_config` to apply encoding
+ * detection and the compatibility rewrite first.
+ *
+ * @param text UTF-8 XML that must remain alive while the document is used.
+ * @return A document borrowing the input, or an XML syntax or nesting-limit error.
  */
 pub fn load_document(text: &str) -> Result<Document<'_>, FomodXmlError> {
     if element_depth_exceeds(text) {
@@ -533,12 +550,17 @@ pub fn load_document(text: &str) -> Result<Document<'_>, FomodXmlError> {
 }
 
 /**
- * @fn parse_module_config(&[u8], &str) -> Result<FomodInstaller, FomodXmlError>
- * @brief keep the borrowed XML lifetime inside and return owned IR.
- * @author Alex (https://github.com/lextpf)
+ * @fn `parse_module_config(bytes: &[u8], archive_prefix: &str)
+ *     -> Result<FomodInstaller, FomodXmlError>`
+ * @brief Decode and parse an installer into the owned FOMOD model.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * roxmltree borrows the decoded text. `parse_module_config` keeps the borrow local and returns
- * owned IR to the inference and installation services.
+ * The compatibility rewrite runs before the depth guard and XML parser. The returned model does
+ * not borrow the input buffer or temporary XML document.
+ *
+ * @param bytes ModuleConfig.xml contents from the archive.
+ * @param archive_prefix Archive directory above `fomod/`; empty when `fomod/` is at the root.
+ * @return An owned installer, or a decoding, XML syntax, or nesting-limit error.
  */
 pub fn parse_module_config(
     bytes: &[u8],
@@ -923,10 +945,16 @@ fn ordered_children<'a, 'input>(
 }
 
 /**
- * @fn parse(&Document, &str) -> FomodInstaller
- * @brief return an empty installer for a missing config root and skip malformed elements.
- * @author Alex (https://github.com/lextpf)
+ * @fn `parse(doc: &Document, archive_prefix: &str) -> FomodInstaller`
+ * @brief Compile the XML document into the installer model.
+ * @author Alex (<https://github.com/lextpf>)
  *
+ * A missing `config` root produces an empty installer. Step, group, and plugin ordinals follow
+ * the configured display order. Missing attributes use the parser's FOMOD defaults.
+ *
+ * @param doc Parsed XML; text extraction uses the document's source text.
+ * @param archive_prefix Archive directory prepended to file sources, or empty for the root.
+ * @return Owned model with file sources normalized for archive lookup.
  */
 pub fn parse(doc: &Document, archive_prefix: &str) -> FomodInstaller {
     let mut installer = FomodInstaller::default();
