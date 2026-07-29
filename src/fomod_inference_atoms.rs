@@ -1,8 +1,8 @@
 /*!
- * @brief expands FOMOD entries into atoms and assembles inference output.
- * @author Alex (https://github.com/lextpf)
+ * @brief Expands FOMOD entries into atoms and assembles inference output.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * expansion skips unsafe destinations and indexes the remaining atoms by normalized path.
+ * Expansion skips unsafe destinations and indexes the remaining atoms by normalized path.
  * outputTree and reproDetail are bounded diagnostic payloads.
  */
 
@@ -21,11 +21,11 @@ use crate::logger::Logger;
 use crate::utils::{is_safe_destination, normalize_path};
 
 /**
- * @fn is_safe_dest(&str) -> bool
- * @brief reuse the installer destination screen without claiming containment.
- * @author Alex (https://github.com/lextpf)
+ * @fn `is_safe_dest(&str) -> bool`
+ * @brief Reuse the installer destination screen without claiming containment.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * `is_safe_destination` rejects drive prefixes only. call `is_inside` after joining an
+ * `is_safe_destination` rejects drive prefixes only. Call `is_inside` after joining an
  * untrusted path.
  */
 pub fn is_safe_dest(dest: &str) -> bool {
@@ -127,11 +127,11 @@ pub fn expand_entry(
 }
 
 /**
- * @fn expand_all_atoms(&FomodInstaller, &[String], &HashMap<String, u64>) -> ExpandedAtoms
- * @brief give automatic entries later document order than ordinary entries.
- * @author Alex (https://github.com/lextpf)
+ * @fn `expand_all_atoms(&FomodInstaller, &[String], &HashMap<String, u64>) -> ExpandedAtoms`
+ * @brief Give automatic entries later document order than ordinary entries.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * expansion order is required, ordinary plugin, automatic plugin, then conditional.
+ * Expansion order is required, ordinary plugin, automatic plugin, then conditional.
  */
 pub fn expand_all_atoms(
     installer: &FomodInstaller,
@@ -237,11 +237,11 @@ pub fn expand_all_atoms(
 }
 
 /**
- * @fn build_atom_index(&ExpandedAtoms) -> AtomIndex
- * @brief preserve deterministic origin and plugin order in each destination bucket.
- * @author Alex (https://github.com/lextpf)
+ * @fn `build_atom_index(&ExpandedAtoms) -> AtomIndex`
+ * @brief Preserve deterministic origin and plugin order in each destination bucket.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * iterates via [`ExpandedAtoms::for_each`] (required, then per_plugin in flat order, then
+ * Iterates via [`ExpandedAtoms::for_each`] (required, then per_plugin in flat order, then
  * per_conditional), so each destination's `Vec` is in a deterministic order.
  */
 pub fn build_atom_index(atoms: &ExpandedAtoms) -> AtomIndex {
@@ -256,11 +256,11 @@ pub fn build_atom_index(atoms: &ExpandedAtoms) -> AtomIndex {
 }
 
 /**
- * @fn compute_excluded_dests(&AtomIndex) -> HashSet<String>
- * @brief find the destinations that carry no solver signal, so scoring can ignore them.
- * @author Alex (https://github.com/lextpf)
+ * @fn `compute_excluded_dests(&AtomIndex) -> HashSet<String>`
+ * @brief Find the destinations that carry no solver signal, so scoring can ignore them.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * exclusion requires only automatic plugin atoms with one shared source. required and
+ * Exclusion requires only automatic plugin atoms with one shared source. required and
  * conditional atoms remain because missing required files and flag-dependent installs carry
  * solver evidence.
  */
@@ -300,9 +300,9 @@ pub fn compute_excluded_dests(atom_index: &AtomIndex) -> HashSet<String> {
 }
 
 /**
- * @fn build_target_tree(&HashMap<String, u64>) -> TargetTree
- * @brief omit top-level meta.ini and initialize every content hash to zero.
- * @author Alex (https://github.com/lextpf)
+ * @fn `build_target_tree(&HashMap<String, u64>) -> TargetTree`
+ * @brief Omit top-level meta.ini and initialize every content hash to zero.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `meta.ini` is MO2 metadata. [`expand_entry`] omits the same destination from the atom side.
  */
@@ -362,9 +362,9 @@ fn lookup_step_diag(diag: &InferenceDiagnostics, s: usize) -> Option<&StepDiagno
 }
 
 /**
- * @fn assemble_json(&FomodInstaller, &SolverResult, &InferenceDiagnostics) -> Value
- * @brief turn a SolverResult plus its InferenceDiagnostics into the schema-v2 response object.
- * @author Alex (https://github.com/lextpf)
+ * @fn `assemble_json(&FomodInstaller, &SolverResult, &InferenceDiagnostics) -> Value`
+ * @brief Turn a SolverResult plus its InferenceDiagnostics into the schema-v2 response object.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub fn assemble_json(
@@ -450,9 +450,9 @@ pub fn assemble_json(
 }
 
 /**
- * @fn add_output_tree(&mut Value, &SimulatedTree)
- * @brief emit a path-sorted output tree capped at 5,000 entries.
- * @author Alex (https://github.com/lextpf)
+ * @fn `add_output_tree(&mut Value, &SimulatedTree)`
+ * @brief Emit a path-sorted output tree capped at 5,000 entries.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `path` is the atom's `dest_path`, `source` its archive entry path, and `size` its `file_size`,
  * where 0 means unknown rather than empty.
@@ -490,11 +490,11 @@ pub fn add_output_tree(out: &mut Value, sim: &SimulatedTree) {
 const MAX_REPRO_DETAIL_PATHS: usize = MAX_OUTPUT_TREE_ENTRIES;
 
 /**
- * @fn add_repro_detail(&mut Value, &[(String, DestStatus)])
- * @brief emit four mismatch buckets capped at 5,000 total paths.
- * @author Alex (https://github.com/lextpf)
+ * @fn `add_repro_detail(&mut Value, &[(String, DestStatus)])`
+ * @brief Emit four mismatch buckets capped at 5,000 total paths.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * emitted unconditionally, with empty buckets on a clean run, so a consumer can read "key present,
+ * Emitted unconditionally, with empty buckets on a clean run, so a consumer can read "key present,
  * all four buckets empty" as "this run reproduced everything" without checking a second signal.
  */
 pub fn add_repro_detail(out: &mut Value, classified: &[(String, DestStatus)]) {
