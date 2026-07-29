@@ -1,14 +1,15 @@
 /*!
- * @brief handles archive listing, bounded reads, extraction, and ZIP creation.
- * @author Alex (https://github.com/lextpf)
+ * @brief Handles archive listing, entry reads, extraction, and ZIP creation.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ZIP keeps central-directory order and slash paths. 7z, split 7z, and RAR use
- * case-insensitive path order and backslash paths. these differences affect inference.
+ * ZIP keeps central-directory order and stored paths. 7z and RAR listings use
+ * case-insensitive path order and backslash paths. These differences affect inference.
  *
- * ### :material-shield-lock: extraction and read limits
+ * ### :material-shield-lock: Extraction and read limits
  *
- * extraction rejects entries that escape the destination. buffered read operations reject entries
- * above MAX_ENTRY_SIZE bytes.
+ * Extraction skips paths that resolve outside the destination. Entry reads reject declared
+ * sizes above MAX_ENTRY_SIZE; this is a header check, not a streaming byte limit. Extraction
+ * does not apply that read limit and can buffer a complete file before writing it.
  */
 
 use std::collections::{HashMap, HashSet};
@@ -22,28 +23,41 @@ use crate::logger::Logger;
 use crate::utils::{self, normalize_path, to_lower};
 
 /**
- * @brief maximum decompressed entry size buffered in memory, in bytes: 256 MiB.
- * @author Alex (https://github.com/lextpf)
+ * @brief Maximum declared size accepted by entry reads, in bytes: 256 MiB.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the cap applies uniformly to all six read helpers (`read_entry_zip`, `_7z`, `_rar` and
+ * The cap applies uniformly to all six read helpers (`read_entry_zip`, `_7z`, `_rar` and
  * `read_batch_zip`, `_7z`, `_rar`), so an oversized entry comes back empty from a single read and
  * absent from a batch read, whatever the format.
  */
 pub const MAX_ENTRY_SIZE: i64 = 256 * 1024 * 1024;
 
-// copy buffer for create_zip only: 8 KiB.
+// Copy buffer for create_zip only: 8 KiB.
 const COPY_CHUNK: usize = 8192;
 
-// true when the entry's header uncompressed size exceeds the 256 MiB cap.
+/**
+ * @fn `exceeds_entry_cap(u64) -> bool`
+ * @brief Reject declared sizes above the entry-read limit.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param size Uncompressed size from the archive header, in bytes.
+ * @return True above 256 MiB; the exact limit is accepted.
+ */
 fn exceeds_entry_cap(size: u64) -> bool {
     size > MAX_ENTRY_SIZE as u64
 }
 
-// clamp an archive-declared (untrusted) uncompressed size before using it as a Vec::with_capacity
-// hint.
-// passing that raw size to `with_capacity` lets a forged value force an unbounded up-front
-// allocation before a single byte is read: an uncatchable `handle_alloc_error` abort below
-// `isize::MAX`, a "capacity overflow" panic beyond it.
+/**
+ * @fn `prealloc_hint(u64) -> usize`
+ * @brief Bound the initial allocation requested by an untrusted archive header.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * The buffer can still grow while decoding. This limits the capacity hint, not the
+ * total extracted size.
+ *
+ * @param size Declared uncompressed size, in bytes.
+ * @return A capacity hint capped at 256 MiB.
+ */
 fn prealloc_hint(size: u64) -> usize {
     size.min(MAX_ENTRY_SIZE as u64) as usize
 }
@@ -57,16 +71,17 @@ enum Format {
 
 /**
  * @enum ArchiveError
- * @brief errors returned by extraction and ZIP creation.
- * @author Alex (https://github.com/lextpf)
+ * @brief Errors returned by extraction and ZIP creation.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the listing and read methods never surface an error; they return empty results on failure.
+ * Listing and read methods do not return this error type. Depending on the backend and
+ * failure, they return an empty result or omit entries that could not be read.
  */
 #[derive(Debug)]
 pub enum ArchiveError {
     /**
-     * @brief the archive could not be opened or a fatal read error occurred.
-     * @author Alex (https://github.com/lextpf)
+     * @brief The archive could not be opened or a fatal read error occurred.
+     * @author Alex (<https://github.com/lextpf>)
      */
     Open(String),
     Io(std::io::Error),
@@ -93,9 +108,11 @@ pub type ArchiveResult<T> = Result<T, ArchiveError>;
 
 /**
  * @struct EntryListing
- * @brief preserve backend path spelling and order, with sizes keyed by normalized path.
- * @author Alex (https://github.com/lextpf)
+ * @brief Preserve backend paths and normalized uncompressed sizes.
+ * @author Alex (<https://github.com/lextpf>)
  *
+ * `paths` retains duplicates and backend order. `sizes` uses normalize_path keys and byte
+ * counts; the last entry for a duplicate normalized key supplies its size.
  */
 #[derive(Debug, Default)]
 pub struct EntryListing {
@@ -105,8 +122,8 @@ pub struct EntryListing {
 
 /**
  * @struct ArchiveService
- * @brief allow concurrent extraction only when destination directories differ.
- * @author Alex (https://github.com/lextpf)
+ * @brief Allow concurrent extraction only when destination directories differ.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Default, Clone, Copy)]
@@ -122,11 +139,11 @@ impl ArchiveService {
     }
 
     /**
-     * @fn list_entries_with_sizes(&self, &str) -> EntryListing
-     * @brief list entries with uncompressed sizes, reading headers only.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `list_entries_with_sizes(&self, &str) -> EntryListing`
+     * @brief List entries with uncompressed sizes, reading headers only.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * @return an empty listing on any open or read failure; it never errors, so an unreadable
+     * @return An empty listing on any open or read failure; it never errors, so an unreadable
      * archive is indistinguishable from an empty one.
      */
     pub fn list_entries_with_sizes(&self, archive_path: &str) -> EntryListing {
@@ -151,9 +168,9 @@ impl ArchiveService {
     }
 
     /**
-     * @fn list_entries(&self, &str) -> Vec<String>
-     * @brief list archive entry paths in backend order and casing.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `list_entries(&self, &str) -> Vec<String>`
+     * @brief List archive entry paths in backend order and casing.
+     * @author Alex (<https://github.com/lextpf>)
      *
      */
     pub fn list_entries(&self, archive_path: &str) -> Vec<String> {
@@ -161,13 +178,16 @@ impl ArchiveService {
     }
 
     /**
-     * @fn read_entry(&self, &str, &str) -> Vec<u8>
-     * @brief collapse missing, oversized and unreadable entries to empty bytes.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `read_entry(&self, &str, &str) -> Vec<u8>`
+     * @brief Read the first entry whose normalized path matches the requested name.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * no error is surfaced, so the three cases look alike.
-     * @return an empty vector when the entry is missing, its header size exceeds the 256 MiB cap,
-     * or the archive cannot be opened.
+     * An empty file, missing entry, rejected header size, and read failure all produce
+     * empty bytes. Callers cannot distinguish these cases from the result alone.
+     *
+     * @param archive_path Archive selected by its filename extension.
+     * @param entry_name Entry path; normalized internally before comparison.
+     * @return Decoded bytes, or an empty vector when the entry cannot be read.
      */
     pub fn read_entry(&self, archive_path: &str, entry_name: &str) -> Vec<u8> {
         let target = normalize_path(entry_name);
@@ -179,19 +199,24 @@ impl ArchiveService {
     }
 
     /**
-     * @fn read_entries_batch(&self, &str, &HashSet<String>) -> HashMap<String, Vec<u8>>
-     * @brief require normalized names and read all matches in one archive pass.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `read_entries_batch(&self, &str, &HashSet<String>) -> HashMap<String, Vec<u8>>`
+     * @brief Read requested entries in one archive pass.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * `entry_names` must already be fully normalized (lowercase, forward-slash); each archive entry
-     * is normalized and looked up in that set.
+     * Missing entries and entries above the declared-size limit are omitted. ZIP can keep
+     * successful reads after a payload error; a fatal traversal error discards the batch.
+     * An empty request does not open the archive or emit a log line.
+     *
+     * @param archive_path Archive selected by its filename extension.
+     * @param entry_names Keys already transformed by normalize_path.
+     * @return Decoded bytes keyed by normalized path; a zero-byte file has an empty value.
      */
     pub fn read_entries_batch(
         &self,
         archive_path: &str,
         entry_names: &HashSet<String>,
     ) -> HashMap<String, Vec<u8>> {
-        // this check runs before the log line, so an empty request emits nothing at all and never
+        // This check runs before the log line, so an empty request emits nothing at all and never
         // opens the archive.
         if entry_names.is_empty() {
             return HashMap::new();
@@ -219,15 +244,19 @@ impl ArchiveService {
     }
 
     /**
-     * @fn extract(&self, &str, &str) -> ArchiveResult<()>
-     * @brief skip entries whose resolved path escapes the destination root.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `extract(&self, &str, &str) -> ArchiveResult<()>`
+     * @brief Extract files whose resolved paths stay inside the destination.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * an entry whose resolved path would escape `destination_path` is skipped and never written
-     * (the traversal guard, [`utils::is_inside`]).
+     * Unsafe paths are logged and skipped. Existing files can be overwritten. A later
+     * read or write failure leaves files already extracted; this operation has no rollback.
+     *
+     * @param archive_path Archive selected by its filename extension.
+     * @param destination_path Output root, created as needed.
+     * @return Success after traversal, or a fatal archive or I/O error.
      */
     pub fn extract(&self, archive_path: &str, destination_path: &str) -> ArchiveResult<()> {
-        // calls the shared counted body rather than `extract_filtered`, whose closing log line
+        // Calls the shared counted body rather than `extract_filtered`, whose closing log line
         // belongs to that entry point alone.
         Logger::instance().log(&format!("[archive] Extracting archive: {archive_path}"));
         let count = self.extract_counted(archive_path, destination_path, |_| true)?;
@@ -239,12 +268,19 @@ impl ArchiveService {
     }
 
     /**
-     * @fn extract_filtered<F>(&self,&str,&str,F)->ArchiveResult<()> where F:FnMut(&str)->bool
-     * @brief preserve backend-native separators in filter input.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `extract_filtered<F>(&self, &str, &str, F) -> ArchiveResult<()>`
+     * @brief Extract files accepted by a caller-supplied path filter.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * a filter that must work for every format therefore has to be separator-insensitive, for
-     * example by running [`normalize_path`] on its argument before matching.
+     * The filter sees stored ZIP names and backslash-separated 7z/RAR names. Normalize its
+     * argument when matching across formats. Accepted paths still pass the containment
+     * check. Failure can leave files already written.
+     *
+     * @tparam F Mutable predicate called for each file considered by the backend.
+     * @param archive_path Archive selected by its filename extension.
+     * @param destination_path Output root, created as needed.
+     * @param filter Return true to accept an entry for extraction.
+     * @return Success after traversal, or a fatal archive or I/O error.
      */
     pub fn extract_filtered<F>(
         &self,
@@ -262,7 +298,7 @@ impl ArchiveService {
         Ok(())
     }
 
-    // route to the per-format extraction backend and return the number of entries actually written.
+    // Route to the per-format extraction backend and return the number of entries actually written.
     fn extract_counted<F>(
         &self,
         archive_path: &str,
@@ -279,6 +315,20 @@ impl ArchiveService {
         }
     }
 
+    /**
+     * @fn `extract_prefix(&self, &str, &str, &str) -> ArchiveResult<()>`
+     * @brief Extract entries whose paths start with a case-insensitive prefix.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Matching folds ASCII case and converts backslashes to slashes. It does not require
+     * a directory boundary: use a trailing slash to select only a directory's contents.
+     * The prefix remains part of each output path. An empty prefix selects every file.
+     *
+     * @param archive_path Archive selected by its filename extension.
+     * @param destination_path Output root, created as needed.
+     * @param prefix Text prefix, including a trailing separator when required.
+     * @return Success after traversal, or a fatal error that can leave partial output.
+     */
     pub fn extract_prefix(
         &self,
         archive_path: &str,
@@ -298,18 +348,25 @@ impl ArchiveService {
     }
 
     /**
-     * @fn create_zip(&self, &str, &str) -> ArchiveResult<()>
-     * @brief write forward-slash entry names in deterministic path order.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `create_zip(&self, &str, &str) -> ArchiveResult<()>`
+     * @brief Create a ZIP with deterministic path order and forward-slash entry names.
+     * @author Alex (<https://github.com/lextpf>)
      *
+     * The output file is created or truncated before collecting source files. Keep it
+     * outside the source tree so traversal cannot include the archive being written.
+     * A failure leaves a partial output file for the caller to remove.
+     *
+     * @param folder_path Source directory tree.
+     * @param output_zip_path ZIP path; parent directories are created as needed.
+     * @return Success after finalizing the ZIP, or a fatal archive or I/O error.
      */
     pub fn create_zip(&self, folder_path: &str, output_zip_path: &str) -> ArchiveResult<()> {
         create_zip_impl(folder_path, output_zip_path)
     }
 
-    // collect the raw (original-casing path, size) list for a format, applying the per-format
+    // Collect the raw (original-casing path, size) list for a format, applying the per-format
     // directory-strip / separator / ordering rules.
-    // errors only on open failure; the public listing methods map that to an empty result.
+    // Errors only on open failure; the public listing methods map that to an empty result.
     fn list_raw(&self, archive_path: &str) -> ArchiveResult<Vec<(String, u64)>> {
         match format_of(archive_path) {
             Format::Zip => list_zip(archive_path),
@@ -319,7 +376,7 @@ impl ArchiveService {
     }
 }
 
-// lowercased final extension of a path, without the dot, from Path::extension.
+// Lowercased final extension of a path, without the dot, from Path::extension.
 fn extension_lower(archive_path: &str) -> String {
     Path::new(archive_path)
         .extension()
@@ -330,14 +387,14 @@ fn extension_lower(archive_path: &str) -> String {
 fn format_of(archive_path: &str) -> Format {
     match extension_lower(archive_path).as_str() {
         "rar" => Format::Rar,
-        // sevenz_rust2 0.21.3 cannot read multiple volumes. a genuine `.001` first volume therefore
+        // sevenz_rust2 0.21.3 cannot read multiple volumes. A genuine `.001` first volume therefore
         // fails when its end header is stored in a later volume.
         "7z" | "001" => Format::SevenZ,
         _ => Format::Zip,
     }
 }
 
-// normalize an entry path for ArchiveService::extract_prefix matching, per format.
+// Normalize an entry path for ArchiveService::extract_prefix matching, per format.
 fn prefix_entry_norm(format: Format, entry_path: &str) -> String {
     match format {
         Format::Zip => to_lower(entry_path).replace('\\', "/"),
@@ -345,7 +402,7 @@ fn prefix_entry_norm(format: Format, entry_path: &str) -> String {
     }
 }
 
-// build an EntryListing from the per-format ordered raw list.
+// Build an EntryListing from the per-format ordered raw list.
 // `paths` keeps the original strings in order; `sizes` maps `normalize_path(path)` to the
 // uncompressed size in bytes.
 fn build_listing(raw: Vec<(String, u64)>) -> EntryListing {
@@ -357,22 +414,31 @@ fn build_listing(raw: Vec<(String, u64)>) -> EntryListing {
     listing
 }
 
-// stable case-insensitive sort of (path, size) pairs by the backslash path, the ordering step for
+// Stable case-insensitive sort of (path, size) pairs by the backslash path, the ordering step for
 // 7z and rar.
-// stable, so entries equal under lowercasing keep their raw header order.
+// Stable, so entries equal under lowercasing keep their raw header order.
 fn ci_sort_by_path(entries: &mut [(String, u64)]) {
     entries.sort_by_key(|entry| to_lower(&entry.0));
 }
 
-// join an entry's (possibly hostile) path onto the destination and confirm the result stays inside
-// it.
-// a genuine traversal: the joined path resolves outside `destination`.
+/**
+ * @fn `safe_output_path(&Path, &str) -> Option<PathBuf>`
+ * @brief Reject an entry whose joined path resolves outside the extraction root.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * All extraction backends use this guard. Rejected paths emit a warning. The check
+ * does not reserve the path against concurrent filesystem changes.
+ *
+ * @param destination Root used by the containment check.
+ * @param entry_path Untrusted archive entry name.
+ * @return The joined path when contained, or None when rejected.
+ */
 fn safe_output_path(destination: &Path, entry_path: &str) -> Option<PathBuf> {
     let full_output = destination.join(entry_path);
     if utils::is_inside(destination, &full_output) {
         Some(full_output)
     } else {
-        // all three extraction backends route through this guard, so the warning has a single call
+        // All three extraction backends route through this guard, so the warning has a single call
         // site.
         Logger::instance().log_warning(&format!(
             "[archive] Skipping path-traversal entry: {entry_path}"
@@ -381,7 +447,7 @@ fn safe_output_path(destination: &Path, entry_path: &str) -> Option<PathBuf> {
     }
 }
 
-// the extension with its leading dot, lowercased, as the archive log lines carry it: "for .7z
+// The extension with its leading dot, lowercased, as the archive log lines carry it: "for .7z
 // file".
 fn dotted_extension(archive_path: &str) -> String {
     let ext = extension_lower(archive_path);
@@ -407,7 +473,7 @@ fn note_extracted(count: &mut usize) {
     }
 }
 
-// write a file's bytes to output, creating parent directories first.
+// Write a file's bytes to output, creating parent directories first.
 fn write_extracted_file(output: &Path, bytes: &[u8]) -> ArchiveResult<()> {
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
@@ -417,9 +483,8 @@ fn write_extracted_file(output: &Path, bytes: &[u8]) -> ArchiveResult<()> {
     Ok(())
 }
 
-// list a zip in native central-directory order, skipping directory entries and keeping the stored
-// forward-slash names.
-// a zip may store explicit directory markers, and the listing must contain files only.
+// List a zip in native central-directory order, skipping directory entries and keeping the stored
+// names. Directory markers are omitted because callers expect files only.
 fn list_zip(archive_path: &str) -> ArchiveResult<Vec<(String, u64)>> {
     let file = File::open(archive_path).map_err(|e| ArchiveError::Open(e.to_string()))?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| ArchiveError::Open(e.to_string()))?;
@@ -507,7 +572,7 @@ where
         let Some(output) = safe_output_path(dest, &name) else {
             continue;
         };
-        // clamp the capacity hint: `entry.size()` is the archive-controlled uncompressed size, so a
+        // Clamp the capacity hint: `entry.size()` is the archive-controlled uncompressed size, so a
         // forged value would otherwise abort or panic on the pre-allocation.
         let mut buf = Vec::with_capacity(prealloc_hint(entry.size()));
         entry.read_to_end(&mut buf)?;
@@ -554,7 +619,7 @@ fn read_entry_7z(archive_path: &str, target: &str) -> Option<Vec<u8>> {
         Ok(true)
     })
     .ok()?;
-    // match not found -> empty (never None-on-not-found; only None on open err).
+    // Match not found -> empty (never None-on-not-found; only None on open err).
     Some(found.unwrap_or_default())
 }
 
@@ -570,7 +635,7 @@ fn read_batch_7z(
             read.read_to_end(&mut buf)?;
             results.insert(norm, buf);
         }
-        // stop once every requested entry has been collected. unmatched or over-cap entries, and
+        // Stop once every requested entry has been collected. Unmatched or over-cap entries, and
         // every entry before the last match, keep the pass going; `for_each_7z_entry` drains each
         // one so the solid block stays aligned.
         Ok(results.len() < entry_names.len())
@@ -579,14 +644,28 @@ fn read_batch_7z(
     Some(results)
 }
 
-// decode a 7z once. entries in one solid block share a decode cursor.
-//
-// [ a bytes ][ b bytes ][ c bytes ]
-//   ^ partial read
-//             ^ draining aligns the next reader
-//
-// without the drain, b starts inside a and can yield corrupt bytes or a CRC error. a false
-// callback stops traversal, so no later entry needs alignment.
+/**
+ * @fn `for_each_7z_entry<F>(&str, F) -> Result<(), sevenz_rust2::Error>`
+ * @brief Keep entry readers aligned while traversing a solid 7z stream.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Entries in a solid block share a decode cursor. Drain unread bytes before moving
+ * to the next entry, or its reader can start inside the preceding file.
+ *
+ * | Callback result | Action                                  |
+ * |-----------------|-----------------------------------------|
+ * | Ok(true)        | Drain unread bytes, then continue.      |
+ * | Ok(false)       | Stop this block without draining.       |
+ * | Err(error)      | Stop traversal and propagate the error. |
+ *
+ * The backend can still visit later solid blocks after Ok(false). Callbacks must
+ * tolerate further calls; a false result does not guarantee archive-wide termination.
+ *
+ * @tparam F Callback over the entry name, declared size, and borrowed reader.
+ * @param archive_path Archive opened with an empty password.
+ * @param each Called for files only; declared sizes are in bytes.
+ * @return Success after traversal, or an open, decode, or callback error.
+ */
 fn for_each_7z_entry<F>(archive_path: &str, mut each: F) -> Result<(), sevenz_rust2::Error>
 where
     F: FnMut(&str, u64, &mut dyn Read) -> Result<bool, std::io::Error>,
@@ -618,7 +697,7 @@ where
     fs::create_dir_all(dest)?;
     let mut io_err: Option<std::io::Error> = None;
     for_each_7z_entry(archive_path, |name, _size, read| {
-        // the filter contract gives 7z entries backslash separators.
+        // The filter contract gives 7z entries backslash separators.
         let back = sevenz_backslash_name(name);
         if !filter(&back) {
             return Ok(true);
@@ -629,7 +708,7 @@ where
         let mut buf = Vec::new();
         read.read_to_end(&mut buf)?;
         if let Err(e) = write_extracted_file(&output, &buf) {
-            // surface the first write error after the decode loop unwinds.
+            // Surface a write error after the decode loop returns.
             io_err = Some(match e {
                 ArchiveError::Io(io) => io,
                 ArchiveError::Open(msg) => std::io::Error::other(msg),
@@ -778,7 +857,7 @@ fn create_zip_impl(folder_path: &str, output_zip_path: &str) -> ArchiveResult<()
             Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
             Err(_) => continue,
         };
-        // only orders the stack pushes; the global sort below overrides it.
+        // Only orders the stack pushes; the global sort below overrides it.
         children.sort();
         for child in children {
             if child.is_dir() {
@@ -788,7 +867,7 @@ fn create_zip_impl(folder_path: &str, output_zip_path: &str) -> ArchiveResult<()
             }
         }
     }
-    // this sort is what fixes the zip entry order: entries are written in `files` order, so the
+    // This sort is what fixes the zip entry order: entries are written in `files` order, so the
     // same tree always yields the same archive layout.
     files.sort();
 
@@ -801,7 +880,7 @@ fn create_zip_impl(folder_path: &str, output_zip_path: &str) -> ArchiveResult<()
         writer
             .start_file(rel_name.clone(), options)
             .map_err(|e| ArchiveError::Open(e.to_string()))?;
-        // the warning says "skipping", but the `?` propagates and abandons the partially written
+        // The warning says "skipping", but the `?` propagates and abandons the partially written
         // archive.
         let mut input = File::open(&path).inspect_err(|_| {
             Logger::instance().log_warning(&format!(
@@ -814,7 +893,7 @@ fn create_zip_impl(folder_path: &str, output_zip_path: &str) -> ArchiveResult<()
             if n == 0 {
                 break;
             }
-            // same shape as the open above: warn, then propagate and abandon the archive.
+            // Same shape as the open above: warn, then propagate and abandon the archive.
             writer.write_all(&chunk[..n]).map_err(|e| {
                 Logger::instance()
                     .log_warning(&format!("[archive] Write error in zip for: {rel_name}"));
@@ -1003,7 +1082,7 @@ mod tests {
             svc.read_entry(path, "FOMOD\\MODULECONFIG.XML"),
             b"<config/>".to_vec()
         );
-        // missing entry -> empty (not an error).
+        // Missing entry -> empty (not an error).
         assert!(svc.read_entry(path, "nope/missing.txt").is_empty());
 
         fs::remove_dir_all(&dir).ok();
@@ -1057,9 +1136,9 @@ mod tests {
             .expect("extract");
 
         assert!(out.join("safe/benign.txt").exists());
-        // no escaped file landed where the escapes actually target. assert at the resolved paths,
+        // No escaped file landed where the escapes actually target. assert at the resolved paths,
         // not at `out.join("evil_abs.txt")`: nothing ever writes there, so such an assertion passes
-        // vacuously. the drive-root escape is covered deterministically by
+        // vacuously. The drive-root escape is covered deterministically by
         // `safe_output_path_rejects_all_escape_classes` below.
         assert!(!dir.join("evil_rel.txt").exists());
         assert!(!dir.join("evil_bs.txt").exists());
@@ -1073,7 +1152,7 @@ mod tests {
 
     #[test]
     fn safe_output_path_rejects_all_escape_classes() {
-        // deterministic, side-effect-free proof that the traversal guard rejects every escape
+        // Deterministic, side-effect-free proof that the traversal guard rejects every escape
         // class, including the absolute drive-root case the extraction test cannot reliably observe
         // (a weakened guard would write to C:\evil_abs.txt, invisible to a walk of the destination
         // tree).
@@ -1087,7 +1166,7 @@ mod tests {
         assert!(safe_output_path(&dest, "../evil_rel.txt").is_none());
         assert!(safe_output_path(&dest, "..\\evil_bs.txt").is_none());
         // rooted-but-driveless names: on windows dest.join("/x") replaces everything after the
-        // drive prefix, giving C:\x at the drive root, outside the destination. a weakened guard
+        // drive prefix, giving C:\x at the drive root, outside the destination. A weakened guard
         // would write there unnoticed.
         assert!(safe_output_path(&dest, "/evil_abs.txt").is_none());
         assert!(safe_output_path(&dest, "\\evil_abs.txt").is_none());
