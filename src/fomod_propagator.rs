@@ -1,9 +1,9 @@
 /*!
- * @brief narrows FOMOD plugin domains before CSP search.
- * @author Alex (https://github.com/lextpf)
+ * @brief Narrows FOMOD plugin domains before CSP search.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * each fixpoint pass applies effective plugin type, unique-file evidence, and group cardinality
- * in that order. the narrowed domains seed the solver and do not replace it.
+ * Each fixpoint pass applies effective plugin type, unique-file evidence, and group cardinality
+ * in that order. The narrowed domains seed the solver and do not replace it.
  */
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -18,8 +18,8 @@ use crate::types::{FomodDependencyContext, PluginType};
 
 /**
  * @struct PropagationResult
- * @brief hold narrowed domains and groups resolved before backtracking.
- * @author Alex (https://github.com/lextpf)
+ * @brief Hold narrowed domains and groups resolved before backtracking.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `narrowed_domains` filters each group's option list during the CSP solve, and `resolved_groups`
  * blanks the matching `phase_per_group` entries in the solver's result.
@@ -28,29 +28,29 @@ use crate::types::{FomodDependencyContext, PluginType};
 pub struct PropagationResult {
     pub narrowed_domains: Vec<Vec<Vec<bool>>>,
     /**
-     * @brief list groups in propagation-resolution order.
-     * @author Alex (https://github.com/lextpf)
+     * @brief List groups in propagation-resolution order.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * a group is pushed at most once, because a resolved group is skipped by every later iteration.
+     * A group is pushed at most once, because a resolved group is skipped by every later iteration.
      */
     pub resolved_groups: Vec<(i32, i32)>,
     /**
-     * @brief true when propagation resolved every group in the installer.
-     * @author Alex (https://github.com/lextpf)
+     * @brief True when propagation resolved every group in the installer.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * no caller skips or shortens the CSP solve on this flag: the inference service reads it once,
+     * No caller skips or shortens the CSP solve on this flag: the inference service reads it once,
      * into a log line, and the solver never reads it at all.
      */
     pub fully_resolved: bool,
     /**
-     * @brief reason code per plugin, indexed by step, group and plugin.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Reason code per plugin, indexed by step, group and plugin.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub plugin_reasons: Vec<Vec<Vec<ReasonCode>>>,
     pub plugin_reason_details: Vec<Vec<Vec<Option<ReasonDetail>>>>,
     /**
-     * @brief per-group identifier for the rule that completed the group's resolution.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Per-group identifier for the rule that completed the group's resolution.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * `propagation.cardinality` otherwise.
      */
@@ -87,7 +87,26 @@ fn record_plugin_reason(
     }
 }
 
-// malformed or contradictory input weakens narrowing instead of failing.
+/**
+ * @fn `propagate(installer: &FomodInstaller, atoms: &ExpandedAtoms, atom_index: &AtomIndex,
+ *     target: &TargetTree, excluded_dests: &HashSet<String>, overrides: &InferenceOverrides,
+ *     context: Option<&FomodDependencyContext>) -> PropagationResult`
+ * @brief Narrow plugin domains before the CSP search.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Type rules, unique destination evidence, and group cardinality repeat for at most 16 passes.
+ * A resolved group stays fixed. Step visibility is not evaluated here; the solver evaluates it
+ * against candidate flags. A true domain bit means a plugin remains possible, not selected.
+ *
+ * @param installer Model whose hierarchy defines result indices.
+ * @param atoms Expanded entries in the model's flattened plugin order.
+ * @param atom_index Reserved shared-interface input; unused by this phase.
+ * @param target Installed destination evidence.
+ * @param excluded_dests Normalized destinations omitted from file evidence.
+ * @param overrides Reserved shared-interface input; unused by this phase.
+ * @param context External state; None prevents hard pruning from dynamic plugin type patterns.
+ * @return Narrowed domains and the reasons recorded during propagation.
+ */
 pub fn propagate(
     installer: &FomodInstaller,
     atoms: &ExpandedAtoms,
