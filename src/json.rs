@@ -1,8 +1,8 @@
 /*!
- * @brief defines the ordered JSON value model used by inference output.
- * @author Alex (https://github.com/lextpf)
+ * @brief Defines the ordered JSON value model used by inference output.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * object keys use byte-lexicographic order. integer and floating variants remain distinct so
+ * Object keys use byte-lexicographic order. integer and floating variants remain distinct so
  * counts render as 0 and confidence values render as 0.0. non-finite floats render as null.
  */
 
@@ -33,6 +33,16 @@ impl Value {
         Value::Str(s.into())
     }
 
+    /**
+     * @fn `insert(&mut self, key: impl Into<String>, val: Value) -> &mut Self`
+     * @brief Set an object member, replacing any value at the same key.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @param key Member name; serialization sorts object keys.
+     * @param val Owned replacement value.
+     * @return This object for chained insertion.
+     * @pre This value is an object; other variants panic.
+     */
     pub fn insert(&mut self, key: impl Into<String>, val: Value) -> &mut Self {
         match self {
             Value::Object(map) => {
@@ -43,6 +53,14 @@ impl Value {
         self
     }
 
+    /**
+     * @fn `push(&mut self, val: Value)`
+     * @brief Append an array element without changing existing element order.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @param val Owned element to append.
+     * @pre This value is an array; other variants panic.
+     */
     pub fn push(&mut self, val: Value) {
         match self {
             Value::Array(items) => items.push(val),
@@ -140,11 +158,15 @@ impl Value {
     }
 
     /**
-     * @fn dump(&self, usize) -> String
-     * @brief select compact output for zero indentation and fixed pretty output otherwise.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `dump(&self, indent: usize) -> String`
+     * @brief Serialize the ordered value as JSON text.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * only `dump(2)` has a byte-stability contract. layout, escaping, and number tests pin it.
+     * Integer and floating variants remain distinct in output. Non-finite floats become null.
+     * Only `dump(2)` has a byte-stability contract, covered by layout and number-format tests.
+     *
+     * @param indent Zero for compact output; any nonzero value selects two-space indentation.
+     * @return JSON text without a trailing newline.
      */
     pub fn dump(&self, indent: usize) -> String {
         let v = to_serde(self);
@@ -211,14 +233,16 @@ pub fn format_double(v: f64) -> String {
 }
 
 /**
- * @fn parse(&str) -> Result<Value, String>
- * @brief enforce strict RFC 8259 syntax without panicking.
- * @author Alex (https://github.com/lextpf)
+ * @fn `parse(text: &str) -> Result<Value, String>`
+ * @brief Parse JSON using strict syntax and bounded nesting.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * backed by `serde_json`, which implements the strict RFC 8259 grammar rather than a lenient
- * superset: leading zeros (`01`), a leading `+`, and a bare `.5` or `1.` are all rejected, as are
- * raw control bytes below `0x20` inside a string.
- * @return `Err(String)` on malformed input and never panics.
+ * Duplicate object keys keep their last value. Integer tokens retain signed or unsigned storage
+ * when they fit; other accepted numbers use floating storage. The underlying parser rejects
+ * excessive nesting before conversion to the ordered value model.
+ *
+ * @param text One JSON value, optionally surrounded by whitespace.
+ * @return Parsed value, or an error for invalid syntax, unsupported numbers, or excessive nesting.
  */
 pub fn parse(text: &str) -> Result<Value, String> {
     match serde_json::from_str::<serde_json::Value>(text) {
