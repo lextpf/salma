@@ -1,11 +1,11 @@
 /*!
- * @brief builds schema-v2 inference reasons, confidence scores, and diagnostics.
- * @author Alex (https://github.com/lextpf)
+ * @brief Builds schema-v2 inference reasons, confidence scores, and diagnostics.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ReasonCode numeric values and names are wire data. append codes; do not renumber or repurpose
+ * ReasonCode numeric values and names are wire data. Append codes; do not renumber or repurpose
  * existing values.
  *
- * ### :material-format-list-numbered: confidence calculation
+ * ### :material-format-list-numbered: Confidence calculation
  *
  * @verbatim
  * plugin = 0.40*evidence + 0.30*propagation + 0.20*repro + 0.10*ambiguity
@@ -14,7 +14,7 @@
  * high >= 0.85; medium >= 0.50; low < 0.50
  * @endverbatim
  *
- * all component and composite values are clamped to [0, 1].
+ * All component and composite values are clamped to [0, 1].
  */
 
 use crate::fomod_csp_types::{ReproMetrics, SolverResult};
@@ -25,10 +25,10 @@ use crate::logger::Logger;
 
 /**
  * @enum ReasonCode
- * @brief stable reason the inference engine attaches to a plugin, group or step decision.
- * @author Alex (https://github.com/lextpf)
+ * @brief Stable reason the inference engine attaches to a plugin, group or step decision.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * codes are integer-backed (`#[repr(i32)]`) and stable across releases: the dashboard maps the
+ * Codes are integer-backed (`#[repr(i32)]`) and stable across releases: the dashboard maps the
  * integer and the name to UI labels and never reads the human message.
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -40,10 +40,10 @@ pub enum ReasonCode {
     // forced by plugin-type constraints (propagator rule 1).
     ForcedRequired = 100,
     /**
-     * @brief plugin type NotUsable eliminated the plugin.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Plugin type NotUsable eliminated the plugin.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * not recorded for a dynamic `dependencyType` evaluated without an external context: that
+     * Not recorded for a dynamic `dependencyType` evaluated without an external context: that
      * outcome is not definitive enough to prune on.
      */
     ForcedNotUsable = 101,
@@ -58,23 +58,23 @@ pub enum ReasonCode {
     // file evidence (propagator rule 2).
     UniqueFileEvidence = 200,
     /**
-     * @brief mark a plugin whose unique destinations are absent from the target.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Mark a plugin whose unique destinations are absent from the target.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * a plugin with no group-unique destination is never eliminated by this rule, however many of
+     * A plugin with no group-unique destination is never eliminated by this rule, however many of
      * its files are absent.
      */
     NoFileEvidence = 201,
     /**
-     * @brief deselected because nothing in the target maps uniquely here.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Deselected because nothing in the target maps uniquely here.
+     * @author Alex (<https://github.com/lextpf>)
      */
     NoUniqueEvidence = 202,
 
     // cardinality. reserved: rule 3 records the three FORCED_* codes above instead.
     /**
-     * @brief group narrowed to a single combination by its group type.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Group narrowed to a single combination by its group type.
+     * @author Alex (<https://github.com/lextpf>)
      */
     CardinalityForced = 300,
 
@@ -96,15 +96,15 @@ pub enum ReasonCode {
     StepVisibilityForced = 510,
     StepVisibilityUnknown = 511,
     /**
-     * @brief step skipped entirely because not visible.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Step skipped entirely because not visible.
+     * @author Alex (<https://github.com/lextpf>)
      */
     StepNotVisible = 512,
 
     // penalties and scoring.
     /**
-     * @brief the selection produces a file the target does not have.
-     * @author Alex (https://github.com/lextpf)
+     * @brief The selection produces a file the target does not have.
+     * @author Alex (<https://github.com/lextpf>)
      */
     ExtraFileProduced = 600,
 
@@ -113,9 +113,9 @@ pub enum ReasonCode {
 }
 
 /**
- * @fn reason_code_to_string(ReasonCode) -> &'static str
- * @brief wire name of a ReasonCode, for example "FORCED_REQUIRED".
- * @author Alex (https://github.com/lextpf)
+ * @fn `reason_code_to_string(ReasonCode) -> &'static str`
+ * @brief Wire name of a ReasonCode, for example "FORCED_REQUIRED".
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub fn reason_code_to_string(code: ReasonCode) -> &'static str {
@@ -149,17 +149,17 @@ pub fn reason_code_to_string(code: ReasonCode) -> &'static str {
 
 /**
  * @enum ReasonDetail
- * @brief structured payload carried beside a plugin reason.
- * @author Alex (https://github.com/lextpf)
+ * @brief Structured payload carried beside a plugin reason.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * a reason with no payload stores `None` rather than an empty variant, and [`serialize_reason`]
+ * A reason with no payload stores `None` rather than an empty variant, and [`serialize_reason`]
  * then omits the `detail` key entirely.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReasonDetail {
     /**
-     * @brief positive file evidence: the plugin uniquely produces at least one target file.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Positive file evidence: the plugin uniquely produces at least one target file.
+     * @author Alex (<https://github.com/lextpf>)
      *
      * `files` holds up to four examples, sorted byte-ascending so the document is deterministic;
      * `count` is the full number of unique target hits and may exceed `files.len()`.
@@ -170,10 +170,10 @@ pub enum ReasonDetail {
         count: i32,
     },
     /**
-     * @brief identifies the CSP phase that selected a plugin.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Identifies the CSP phase that selected a plugin.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * phase names are stable wire values.
+     * Phase names are stable wire values.
      */
     CspPhase {
         nodes: i32,
@@ -196,8 +196,8 @@ const RUN_FALLBACK_PENALTY: f64 = 0.10;
 
 /**
  * @struct Reason
- * @brief one justification attached to a plugin, group or step decision.
- * @author Alex (https://github.com/lextpf)
+ * @brief One justification attached to a plugin, group or step decision.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,44 +209,44 @@ pub struct Reason {
 
 /**
  * @struct ConfidenceComponents
- * @brief per-axis confidence values from 0.0 to 1.0, each defaulting to 1.0.
- * @author Alex (https://github.com/lextpf)
+ * @brief Per-axis confidence values from 0.0 to 1.0, each defaulting to 1.0.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ConfidenceComponents {
     /**
-     * @brief score file evidence from the plugin reason chain.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Score file evidence from the plugin reason chain.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * forcing evidence scores 1.0. otherwise the first matching reason scores 1.0 for
+     * Forcing evidence scores 1.0. Otherwise the first matching reason scores 1.0 for
      * UniqueFileEvidence, 0.5 for NoUniqueEvidence or 0.3 for ExtraFileProduced. without a
-     * matching reason, selected plugins score 0.5 and deselected plugins score 0.7. this is not a
+     * matching reason, selected plugins score 0.5 and deselected plugins score 0.7. This is not a
      * file-count ratio.
      */
     pub evidence: f64,
     /**
      * @brief 1.0 when the plugin's reason chain holds a propagation-forcing code, 0.0 otherwise.
-     * @author Alex (https://github.com/lextpf)
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * it is not a positive statement that the CSP made the choice.
+     * It is not a positive statement that the CSP made the choice.
      */
     pub propagation: f64,
     /**
-     * @brief run-level reproduction quality, not a group-local ratio.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Run-level reproduction quality, not a group-local ratio.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * it is 1.0 for a deselected plugin and for a selected plugin in an exact-match run; otherwise
+     * It is 1.0 for a deselected plugin and for a selected plugin in an exact-match run; otherwise
      * `0.85 * repro_ratio`, where `repro_ratio` is computed once per run as `clamp01(1 - (missing +
      * 0.5 * (size_mismatch + hash_mismatch)) / target_file_count)` and defaults to 1.0 when
      * `target_file_count` is 0.
      */
     pub repro: f64,
     /**
-     * @brief score ambiguity from the solver alternative count.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Score ambiguity from the solver alternative count.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * zero, one, two, and at least three alternatives score 1.0, 0.6, 0.4, and 0.2. the solver
+     * Zero, one, two, and at least three alternatives score 1.0, 0.6, 0.4, and 0.2. The solver
      * initializes all counts to zero, so this component is 1.0.
      */
     pub ambiguity: f64,
@@ -265,17 +265,17 @@ impl Default for ConfidenceComponents {
 
 /**
  * @struct ConfidenceScore
- * @brief composite confidence score with a derived band.
- * @author Alex (https://github.com/lextpf)
+ * @brief Composite confidence score with a derived band.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfidenceScore {
     /**
-     * @brief combine confidence components into one normalized score.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Combine confidence components into one normalized score.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * the score is `clamp01(0.40 * evidence + 0.30 * propagation + 0.20 * repro + 0.10 *
+     * The score is `clamp01(0.40 * evidence + 0.30 * propagation + 0.20 * repro + 0.10 *
      * ambiguity)`. propagation-forced groups use 1.0 directly.
      */
     pub composite: f64,
@@ -295,8 +295,8 @@ impl Default for ConfidenceScore {
 
 /**
  * @struct PluginDiagnostics
- * @brief diagnostics for one plugin in one group.
- * @author Alex (https://github.com/lextpf)
+ * @brief Diagnostics for one plugin in one group.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -304,27 +304,27 @@ pub struct PluginDiagnostics {
     pub selected: bool,
     pub confidence: ConfidenceScore,
     /**
-     * @brief reason chain in evaluation order.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Reason chain in evaluation order.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub reasons: Vec<Reason>,
 }
 
 /**
  * @struct GroupDiagnostics
- * @brief diagnostics for one group in one step.
- * @author Alex (https://github.com/lextpf)
+ * @brief Diagnostics for one group in one step.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GroupDiagnostics {
     pub confidence: ConfidenceScore,
     /**
-     * @brief identifies the rule or CSP phase that resolved the group.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Identifies the rule or CSP phase that resolved the group.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * propagation.* and cache.fomod_plus count as propagation. csp.* counts as CSP. other values
-     * do not increment either run counter. an empty value means no attribution.
+     * Propagation.* and cache.fomod_plus count as propagation. csp.* counts as CSP. other values
+     * do not increment either run counter. An empty value means no attribution.
      */
     pub resolved_by: String,
     pub reasons: Vec<Reason>,
@@ -333,8 +333,8 @@ pub struct GroupDiagnostics {
 
 /**
  * @struct StepDiagnostics
- * @brief diagnostics for one installation step.
- * @author Alex (https://github.com/lextpf)
+ * @brief Diagnostics for one installation step.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, PartialEq)]
@@ -358,8 +358,8 @@ impl Default for StepDiagnostics {
 
 /**
  * @struct DiagnosticTimings
- * @brief pipeline timings in milliseconds.
- * @author Alex (https://github.com/lextpf)
+ * @brief Pipeline timings in milliseconds.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -372,8 +372,8 @@ pub struct DiagnosticTimings {
 
 /**
  * @struct DiagnosticGroupCounts
- * @brief group-resolution counters, tallied once by InferenceDiagnosticsBuilder::absorb_solver.
- * @author Alex (https://github.com/lextpf)
+ * @brief Group-resolution counters, tallied once by InferenceDiagnosticsBuilder::absorb_solver.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -381,16 +381,16 @@ pub struct DiagnosticGroupCounts {
     pub total: i32,
     pub resolved_by_propagation: i32,
     /**
-     * @brief groups resolved by the CSP solver.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Groups resolved by the CSP solver.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub resolved_by_csp: i32,
 }
 
 /**
  * @struct DiagnosticCacheInfo
- * @brief cache-hit context.
- * @author Alex (https://github.com/lextpf)
+ * @brief Cache-hit context.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -401,8 +401,8 @@ pub struct DiagnosticCacheInfo {
 
 /**
  * @struct RunDiagnostics
- * @brief run-level diagnostic summary.
- * @author Alex (https://github.com/lextpf)
+ * @brief Run-level diagnostic summary.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -410,13 +410,13 @@ pub struct RunDiagnostics {
     pub confidence: ConfidenceScore,
     pub exact_match: bool,
     /**
-     * @brief highest CSP phase that contributed (or "tier1_cache").
-     * @author Alex (https://github.com/lextpf)
+     * @brief Highest CSP phase that contributed (or "tier1_cache").
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub phase_reached: String,
     /**
-     * @brief total CSP search-tree nodes explored.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Total CSP search-tree nodes explored.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub nodes_explored: i32,
     pub groups: DiagnosticGroupCounts,
@@ -427,8 +427,8 @@ pub struct RunDiagnostics {
 
 /**
  * @struct InferenceDiagnostics
- * @brief top-level diagnostics tree, shaped like the FOMOD installer hierarchy.
- * @author Alex (https://github.com/lextpf)
+ * @brief Top-level diagnostics tree, shaped like the FOMOD installer hierarchy.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, PartialEq)]
@@ -464,13 +464,29 @@ fn clamp01(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
 }
 
-// weighted mean, returning 1.0 when the weight is not positive.
-// every aggregation level uses this guard for an empty level.
+/**
+ * @fn `weighted_mean(sum: f64, weight: f64) -> f64`
+ * @brief Average confidence without penalizing an empty hierarchy level.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param sum Sum of weighted confidence values.
+ * @param weight Total weight; nonpositive values represent an empty level.
+ * @return Weighted mean, or 1.0 when the total weight is nonpositive.
+ */
 fn weighted_mean(sum: f64, weight: f64) -> f64 {
     if weight <= 0.0 { 1.0 } else { sum / weight }
 }
 
-// multiplication order is part of the wire value; all ones produces 0.9999999999999999.
+/**
+ * @fn `composite_from(c: &ConfidenceComponents) -> f64`
+ * @brief Combine the four confidence components with the wire-format weights.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Preserve arithmetic order: all-one components produce 0.9999999999999999 in serialized output.
+ *
+ * @param c Evidence, propagation, reproduction, and ambiguity components.
+ * @return Weighted sum clamped to the range from 0.0 to 1.0.
+ */
 fn composite_from(c: &ConfidenceComponents) -> f64 {
     clamp01(
         WEIGHT_EVIDENCE * c.evidence
@@ -574,9 +590,12 @@ fn ambiguity_component(alternatives_in_group: i32) -> f64 {
 
 /**
  * @struct InferenceDiagnosticsBuilder
- * @brief accumulates per-decision reasons during inference, then computes the confidence formula.
- * @author Alex (https://github.com/lextpf)
+ * @brief Accumulates decision reasons and computes confidence for one inference run.
+ * @author Alex (<https://github.com/lextpf>)
  *
+ * Build against the installer used by propagation and search. Import propagation before solver
+ * outcomes so group counts retain that attribution. Set target counts and timings before calling
+ * `finalize`; finalization freezes the builder and later mutations have no effect.
  */
 #[derive(Debug, Clone)]
 pub struct InferenceDiagnosticsBuilder {
@@ -691,9 +710,9 @@ impl InferenceDiagnosticsBuilder {
     }
 
     /**
-     * @fn set_step_visibility(&mut self, i32, bool, ReasonCode)
-     * @brief ignore finalized builders and out-of-range step indices.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `set_step_visibility(&mut self, i32, bool, ReasonCode)`
+     * @brief Ignore finalized builders and out-of-range step indices.
+     * @author Alex (<https://github.com/lextpf>)
      *
      */
     pub fn set_step_visibility(&mut self, step: i32, visible: bool, code: ReasonCode) {
@@ -725,9 +744,9 @@ impl InferenceDiagnosticsBuilder {
     }
 
     /**
-     * @fn set_run_timings(&mut self, i64, i64, i64, i64)
-     * @brief overwrite millisecond timings unless the builder is finalized.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `set_run_timings(&mut self, i64, i64, i64, i64)`
+     * @brief Overwrite millisecond timings unless the builder is finalized.
+     * @author Alex (<https://github.com/lextpf>)
      *
      */
     pub fn set_run_timings(&mut self, list_ms: i64, scan_ms: i64, solve_ms: i64, total_ms: i64) {
@@ -741,11 +760,11 @@ impl InferenceDiagnosticsBuilder {
     }
 
     /**
-     * @fn set_cache_hit(&mut self, impl Into<String>)
-     * @brief append an undeduplicated cache reason to every plugin.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `set_cache_hit(&mut self, impl Into<String>)`
+     * @brief Append an undeduplicated cache reason to every plugin.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * the reason append is not de-duplicated, so a second call leaves two identical reasons on
+     * The reason append is not de-duplicated, so a second call leaves two identical reasons on
      * every plugin.
      */
     pub fn set_cache_hit(&mut self, source: impl Into<String>) {
@@ -777,11 +796,11 @@ impl InferenceDiagnosticsBuilder {
     }
 
     /**
-     * @fn absorb_propagation(&mut self, &PropagationResult)
-     * @brief ignore empty group labels and ImplicitDefault plugin reasons.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `absorb_propagation(&mut self, &PropagationResult)`
+     * @brief Ignore empty group labels and ImplicitDefault plugin reasons.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * an empty `resolved_by` from the propagator leaves the current value alone, and an
+     * An empty `resolved_by` from the propagator leaves the current value alone, and an
      * `ImplicitDefault` plugin code records no reason at all.
      */
     pub fn absorb_propagation(&mut self, propagation: &PropagationResult) {
@@ -850,13 +869,14 @@ impl InferenceDiagnosticsBuilder {
     }
 
     /**
-     * @fn absorb_solver(&mut self, &SolverResult)
-     * @brief preserve earlier group attribution while importing solver outcomes.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `absorb_solver(&mut self, &SolverResult)`
+     * @brief Preserve earlier group attribution while importing solver outcomes.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * a group's `resolved_by` is written only while it is still empty, so `absorb_propagation` and
-     * `set_cache_hit` must run before this call or their attribution is replaced by the CSP phase
-     * id.
+     * Import propagation first. Existing nonempty group labels are retained and used when this
+     * method tallies group-resolution counts.
+     *
+     * @param result Solver outcome for the installer used to construct this builder.
      */
     pub fn absorb_solver(&mut self, result: &SolverResult) {
         if self.finalized {
@@ -949,11 +969,16 @@ impl InferenceDiagnosticsBuilder {
     }
 
     /**
-     * @fn finalize(&mut self, &SolverResult, &PropagationResult, &FomodInstaller)
-     * @brief compute confidence scores and reproduction totals once.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `finalize(&mut self, &SolverResult, &PropagationResult, &FomodInstaller)`
+     * @brief Compute confidence scores and reproduction totals once.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * must run last. it sets `finalized`; later setters and repeated calls return without changes.
+     * Finalization freezes the builder. Later setters and repeated calls have no effect.
+     * File-entry counts weight confidence through the plugin, group, and step hierarchy.
+     *
+     * @param result Final selection and reproduction metrics.
+     * @param _propagation Reserved input; propagation reasons must already be imported.
+     * @param installer Same installer used to construct the builder.
      */
     pub fn finalize(
         &mut self,
@@ -1205,11 +1230,11 @@ pub fn serialize_reason(reason: &Reason) -> Value {
 }
 
 /**
- * @fn serialize_run_diagnostics(&RunDiagnostics) -> Value
- * @brief emit confidence values as doubles and counters as integers.
- * @author Alex (https://github.com/lextpf)
+ * @fn `serialize_run_diagnostics(&RunDiagnostics) -> Value`
+ * @brief Emit confidence values as doubles and counters as integers.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the split decides the emitted text, because the same zero dumps as `0.0` on one side and `0` on
+ * The split decides the emitted text, because the same zero dumps as `0.0` on one side and `0` on
  * the other.
  */
 pub fn serialize_run_diagnostics(run: &RunDiagnostics) -> Value {
