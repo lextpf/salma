@@ -15,12 +15,22 @@ namespace mo2core
 namespace
 {
 
-// prevent a host callback from recursively logging on the same thread.
+// Prevent a host callback from recursively logging on the same thread.
 thread_local bool g_in_callback = false;
 
 struct CallbackReentryGuard
 {
+    /**
+     * @fn CallbackReentryGuard::CallbackReentryGuard()
+     * @brief Mark the current thread as executing a host log callback.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     CallbackReentryGuard() { g_in_callback = true; }
+    /**
+     * @fn CallbackReentryGuard::~CallbackReentryGuard()
+     * @brief Allow later callbacks after the current invocation leaves scope.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     ~CallbackReentryGuard() { g_in_callback = false; }
     CallbackReentryGuard(const CallbackReentryGuard&) = delete;
     CallbackReentryGuard& operator=(const CallbackReentryGuard&) = delete;
@@ -36,7 +46,7 @@ Logger& Logger::instance()
 
 Logger::Logger()
 {
-    // anchor logs to this module instead of the process working directory.
+    // Anchor logs to this module instead of the process working directory.
     auto module_dir = module_directory(reinterpret_cast<const void*>(&Logger::instance));
     log_directory_ = (module_dir / "logs").string();
 
@@ -92,7 +102,7 @@ void Logger::log(const std::string& message)
             write_log_unlocked("INFO", message);
         }
     }
-    // keep console and callback latency outside the file lock.
+    // Keep console and callback latency outside the file lock.
     std::cout << message << '\n';
     if (cb_snapshot)
     {
@@ -196,7 +206,7 @@ bool Logger::clear_log()
         std::ofstream ofs(path, std::ios::trunc);
         if (!ofs)
         {
-            // reopen after a failed truncate so later records still reach the file.
+            // Reopen after a failed truncate so later records still reach the file.
             log_file_.open(path, std::ios::app);
             return false;
         }
@@ -233,7 +243,7 @@ void Logger::write_log_unlocked(const std::string& level, const std::string& mes
     localtime_r(&time_t_now, &tm_now);
 #endif
 
-    // include the newline in the record passed to the stream.
+    // Include the newline in the record passed to the stream.
     auto line = std::format("{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}.{:03d} {} {}\n",
                             tm_now.tm_year + 1900,
                             tm_now.tm_mon + 1,
@@ -245,8 +255,8 @@ void Logger::write_log_unlocked(const std::string& level, const std::string& mes
                             level,
                             message);
 
-    // this logger and the Rust engine append through independent handles.
-    // keep each record in one write and flush it to prevent torn lines.
+    // This logger and the Rust engine append through independent handles.
+    // Keep each record in one write and flush it to prevent torn lines.
     log_file_.write(line.data(), static_cast<std::streamsize>(line.size()));
     log_file_.flush();
     bytes_written_ += line.size();
@@ -264,7 +274,7 @@ void Logger::rotate_if_needed()
 
     auto log_dir = fs::path(log_directory_);
 
-    // delete .3, then shift .2 and .1.
+    // Delete .3, then shift .2 and .1.
     for (int i = kMaxRotatedFiles; i >= 1; --i)
     {
         auto src = log_dir / std::format("salma.log.{}", i);
@@ -293,7 +303,7 @@ void Logger::rotate_if_needed()
         }
     }
 
-    // a sharing violation can prevent rename on Windows. retain the byte count
+    // A sharing violation can prevent rename on Windows. Retain the byte count
     // and append past kMaxLogSize until a later rotation succeeds.
     {
         std::error_code ec;
