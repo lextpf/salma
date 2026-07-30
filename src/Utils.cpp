@@ -17,7 +17,14 @@ namespace mo2core
 namespace
 {
 
-// double the module-path buffer at most five times. return empty on truncation.
+/**
+ * @fn std::filesystem::path module_path_for(HMODULE hMod)
+ * @brief Resolve a module directory with a bounded path-buffer retry.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param hMod Module handle, or null for the running executable.
+ * @return The parent directory, or empty after lookup failure or retry exhaustion.
+ */
 std::filesystem::path module_path_for(HMODULE hMod)
 {
     std::wstring buf(MAX_PATH, L'\0');
@@ -44,7 +51,7 @@ std::filesystem::path module_path_for(HMODULE hMod)
 std::string to_lower(const std::string& s)
 {
     std::string out = s;
-    // std::tolower is undefined for a negative plain char.
+    // The std::tolower argument must not be a negative plain char.
     std::transform(
         out.begin(), out.end(), out.begin(), [](unsigned char c) { return std::tolower(c); });
     return out;
@@ -54,15 +61,15 @@ std::string normalize_path(const std::string& p)
 {
     std::string out = to_lower(p);
     std::replace(out.begin(), out.end(), '\\', '/');
-    // strip prefixes emitted by some archivers.
+    // Strip prefixes emitted by some archivers.
     while (out.starts_with("./"))
         out = out.substr(2);
     while (out.starts_with("/"))
         out = out.substr(1);
-    // strip the trailing separator.
+    // Strip the trailing separator.
     while (out.ends_with("/"))
         out.pop_back();
-    // collapse consecutive separators in one pass.
+    // Collapse consecutive separators in one pass.
     {
         std::string collapsed;
         collapsed.reserve(out.size());
@@ -75,7 +82,7 @@ std::string normalize_path(const std::string& p)
         out = std::move(collapsed);
     }
 
-    // remove traversal components.
+    // Remove traversal components.
     {
         std::vector<std::string> parts;
         size_t start = 0;
@@ -104,7 +111,7 @@ std::string normalize_path(const std::string& p)
 std::string random_hex_string(size_t length)
 {
     static const char hex[] = "0123456789abcdef";
-    // keep one generator per worker to avoid serialization. MT19937 is not
+    // Keep one generator per worker to avoid serialization. MT19937 is not
     // cryptographically secure; do not use this output as a sampled secret.
     thread_local std::mt19937 rng{std::random_device{}()};
     std::uniform_int_distribution<int> dist(0, 15);
@@ -168,8 +175,8 @@ bool is_safe_destination(const std::string& dest)
     if (dest.empty())
         return true;
     auto norm = normalize_path(dest);
-    // normalization removes traversal and reanchors a leading POSIX separator.
-    // reject drive-qualified Windows paths; retain the slash guard if normalization changes.
+    // Normalization removes traversal and reanchors a leading POSIX separator.
+    // Reject drive-qualified Windows paths; retain the slash guard if normalization changes.
     if (norm.empty())
         return true;
     if (norm.front() == '/' || (norm.size() >= 2 && norm[1] == ':'))
@@ -182,7 +189,7 @@ bool is_safe_mod_name(const std::string& name)
     if (name.empty())
         return false;
 
-    // reject whitespace that Windows can trim during file creation.
+    // Reject whitespace that Windows can trim during file creation.
     auto is_ws = [](unsigned char c) { return std::isspace(c) != 0; };
     if (is_ws(static_cast<unsigned char>(name.front())) ||
         is_ws(static_cast<unsigned char>(name.back())))
@@ -190,22 +197,22 @@ bool is_safe_mod_name(const std::string& name)
         return false;
     }
 
-    // reject separators and absolute paths.
+    // Reject separators and absolute paths.
     if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos)
         return false;
     if (std::filesystem::path(name).is_absolute())
         return false;
 
-    // reject dot directory names.
+    // Reject dot directory names.
     if (name == "." || name == "..")
         return false;
 
-    // reject a trailing dot that Windows can strip.
+    // Reject a trailing dot that Windows can strip.
     if (name.back() == '.')
         return false;
 
-    // compare the lowercase stem so names such as CON.txt remain reserved.
-    // keep this list synchronized with RESERVED_NAMES in installation_service.rs.
+    // Compare the lowercase stem so names such as CON.txt remain reserved.
+    // Keep this list synchronized with RESERVED_NAMES in installation_service.rs.
     static const std::unordered_set<std::string> kReservedNames = {
         "con",  "prn",  "aux",  "nul",  "com1", "com2", "com3", "com4", "com5", "com6", "com7",
         "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
