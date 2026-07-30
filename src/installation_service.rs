@@ -1,17 +1,17 @@
 /*!
- * @brief extracts an archive and installs its detected content root.
- * @author Alex (https://github.com/lextpf)
+ * @brief Extracts an archive and installs its detected content root.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * FOMOD archives use install replay. other archives copy the detected content root. temporary
+ * FOMOD archives use install replay. Other archives copy the detected content root. Temporary
  * content is removed after either result from the install stage; cleanup errors only warn.
  *
- * ### :material-alert-circle-outline: partial output
+ * ### :material-alert-circle-outline: Partial output
  *
- * disk-full failure is reported after copied output can exist, and no rollback occurs.
+ * Disk-full failure is reported after copied output can exist, and no rollback occurs.
  *
- * ### :material-lock-outline: thread safety
+ * ### :material-lock-outline: Thread safety
  *
- * overlapping installs are unsafe because disk-full state is process-global.
+ * Overlapping installs are unsafe because disk-full state is process-global.
  */
 
 use std::collections::HashSet;
@@ -32,8 +32,8 @@ use crate::utils::{is_inside, random_hex_string, to_lower};
 
 /**
  * @struct InstallError
- * @brief a fatal install failure, carrying the message returned across the C ABI.
- * @author Alex (https://github.com/lextpf)
+ * @brief A fatal install failure, carrying the message returned across the C ABI.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `capi::install` and `capi::installWithConfig` return this string unchanged, so its bytes are
  * observable.
@@ -55,7 +55,7 @@ impl InstallError {
     }
 }
 
-// the five base-game plugins seeded into every dependency context, in insertion order.
+// The five base-game plugins seeded into every dependency context, in insertion order.
 const SEED_PLUGINS: [&str; 5] = [
     "skyrim.esm",
     "update.esm",
@@ -72,10 +72,10 @@ const RESERVED_NAMES: [&str; 22] = [
 /**
  * @struct InstallationService
  * @brief FOMOD install orchestrator.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `capi::install` and `capi::installWithConfig` each build an instance inside the call and drop it
- * before returning. no service state persists between ABI calls.
+ * before returning. No service state persists between ABI calls.
  */
 #[derive(Debug, Default)]
 pub struct InstallationService;
@@ -86,11 +86,22 @@ impl InstallationService {
     }
 
     /**
-     * @fn install_mod(&mut self, &str, &str, &str) -> Result<String, InstallError>
-     * @brief derive a selection path from the archive stem when none is supplied.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `install_mod(&mut self, &str, &str, &str) -> Result<String, InstallError>`
+     * @brief Extract an archive and install its FOMOD selections or detected content root.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * @return `mod_path` on success.
+     * A nonempty selection path is used as supplied. An empty path enables a sibling JSON
+     * lookup using the archive stem. Missing, unreadable, or malformed selection files
+     * permit default installation behavior; malformed JSON emits a warning.
+     *
+     * Temporary extraction content is removed after the install stage returns. Cleanup
+     * errors only warn. Destination files can be overwritten or left after failure;
+     * installation has no rollback. Serialize installs because disk-full state is global.
+     *
+     * @param archive_path Existing archive path.
+     * @param mod_path Destination directory, created before extraction.
+     * @param json_path Selection-file path; empty enables archive-side lookup.
+     * @return The destination path on success, or a fatal install error.
      */
     pub fn install_mod(
         &mut self,
@@ -98,7 +109,7 @@ impl InstallationService {
         mod_path: &str,
         json_path: &str,
     ) -> Result<String, InstallError> {
-        // clear the disk-full marker so an earlier install's storage state does not affect
+        // Clear the disk-full marker so an earlier install's storage state does not affect
         // this run.
         FileOperations::reset_disk_full();
 
@@ -116,7 +127,7 @@ impl InstallationService {
             )));
         }
 
-        // size is read only to log it; a failure warns, reports 0, and keeps going.
+        // Size is read only to log it; a failure warns, reports 0, and keeps going.
         let archive_size = match fs::metadata(archive_path) {
             Ok(meta) => meta.len(),
             Err(err) => {
@@ -129,7 +140,7 @@ impl InstallationService {
             archive_size as f64 / 1024.0 / 1024.0
         ));
 
-        // this failure returns before any temp directory exists, so there is nothing to clean up on
+        // This failure returns before any temp directory exists, so there is nothing to clean up on
         // this path.
         fs::create_dir_all(mod_path)
             .map_err(|e| InstallError::new(format!("Cannot create mod directory: {e}")))?;
@@ -152,7 +163,7 @@ impl InstallationService {
             &archive_extract_dir,
         );
 
-        // cleanup is symmetric across both exit paths. a removal failure only warns.
+        // Cleanup is symmetric across both exit paths. A removal failure only warns.
         match fs::remove_dir_all(&temp_dir) {
             Ok(()) => logger.log("[install] Cleaned up temporary directory"),
             Err(err) if outcome.is_ok() => logger.log_warning(&format!(
@@ -171,7 +182,7 @@ impl InstallationService {
         let result = outcome?;
 
         // some files could not be copied because the volume ran out of space. surface it as a hard
-        // failure so a half-empty mod is never reported as installed. the temp tree is already
+        // failure so a half-empty mod is never reported as installed. The temp tree is already
         // removed above, so returning here leaks nothing.
         if FileOperations::disk_full_encountered() {
             return Err(InstallError::new(
@@ -182,9 +193,20 @@ impl InstallationService {
         Ok(result)
     }
 
-    // extract, find the FOMOD folder, dispatch.
-    // split out of `InstallationService::install_mod` so the temp-directory cleanup runs on both
-    // exit paths without being written twice.
+    /**
+     * @fn `run_install(&mut self, &str, &str, &str, &Path, &Path) -> Result<String, InstallError>`
+     * @brief Dispatch extracted content to FOMOD replay or content-root copying.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * The caller owns both scratch directories and removes them after this result.
+     *
+     * @param archive_path Archive to extract.
+     * @param mod_path Final destination directory.
+     * @param json_path Optional selection-file path; empty enables archive-side lookup.
+     * @param temp_dir Scratch root used for staged FOMOD output.
+     * @param archive_extract_dir Directory that receives the archive contents.
+     * @return The destination path, or the extraction or installation error.
+     */
     fn run_install(
         &mut self,
         archive_path: &str,
@@ -204,7 +226,7 @@ impl InstallationService {
                     .to_str()
                     .ok_or_else(|| InstallError::new("Temp directory path is not valid UTF-8"))?,
             )
-            // the archive back end's own error text becomes the ABI error string. the failure is
+            // The archive back end's own error text becomes the ABI error string. The failure is
             // the contract; the wording is not.
             .map_err(|e| InstallError::new(e.to_string()))?;
         logger.log(&format!(
@@ -239,16 +261,29 @@ impl InstallationService {
     }
 }
 
-// find the first directory named fomod (case-insensitively) that holds a moduleconfig.xml
-// (case-insensitively).
-// there is no shallowest-path preference here, unlike the ModuleConfig lookup in
-// `crate::fomod_inference_service`, which tracks depth and prefers the shallowest hit.
+/**
+ * @fn `find_fomod_folder(&Path) -> Option<PathBuf>`
+ * @brief Find the first FOMOD directory containing a module configuration.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Names are matched without ASCII case. Each directory's children are checked before
+ * recursing in filesystem enumeration order; the result is not globally shallowest.
+ * Directory links are followed, so the input tree must not contain directory cycles.
+ *
+ * @param archive_root Extracted archive tree to search.
+ * @return A matching directory, or None when traversal finds no readable match.
+ */
 fn find_fomod_folder(archive_root: &Path) -> Option<PathBuf> {
-    // tests every immediate subdirectory of `dir` first, then descends into them in read_dir order.
-    // a directory named `fomod` that has no moduleconfig.xml is still descended into, because
-    // `subdirs` collects it unconditionally. `path.is_dir()` follows symlinks and windows
-    // junctions. this recursion has no visited set or depth cap, so callers must supply a tree
-    // without directory cycles.
+    /**
+     * @fn `walk(&Path) -> Option<PathBuf>`
+     * @brief Check immediate child directories before descending into them.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Unreadable directories contribute no match. Traversal follows directory links.
+     *
+     * @param dir Directory within an acyclic extracted tree.
+     * @return The first matching FOMOD directory in traversal order, or None.
+     */
     fn walk(dir: &Path) -> Option<PathBuf> {
         let entries = fs::read_dir(dir).ok()?;
         let mut subdirs = Vec::new();
@@ -320,7 +355,7 @@ fn handle_non_fomod_install(
         }
     }
 
-    // path separators and parent segments clear the value rather than failing. a cleared name then
+    // Path separators and parent segments clear the value rather than failing. A cleared name then
     // falls through to the ambiguous-folder failure below when several candidates exist.
     if module_name_lower.contains('/')
         || module_name_lower.contains('\\')
@@ -332,7 +367,7 @@ fn handle_non_fomod_install(
         module_name_lower.clear();
     }
 
-    // windows reserved device names cannot be directory names and fail silently, so they are
+    // Windows reserved device names cannot be directory names and fail silently, so they are
     // cleared the same way.
     if !module_name_lower.is_empty() {
         let stem = match module_name_lower.rfind('.') {
@@ -410,7 +445,7 @@ fn handle_non_fomod_install(
 
 // FOMOD install: parse the config, build the dependency context, run the three file passes, then
 // move the staged tree into place.
-// the passes stage into `<temp>/unfomod` and only the final `move_directory_contents` touches
+// The passes stage into `<temp>/unfomod` and only the final `move_directory_contents` touches
 // `mod_path`, so a failure before that point leaves the mod directory as it was.
 fn handle_fomod_install(
     fomod_folder: &Path,
@@ -422,14 +457,7 @@ fn handle_fomod_install(
 ) -> Result<String, InstallError> {
     let logger = Logger::instance();
     let xml_path = fomod_folder.join("ModuleConfig.xml");
-    // the join uses the fixed casing `ModuleConfig.xml` even though find_fomod_folder matched
-    // case-insensitively. windows resolves either spelling, so this opens whatever casing the
-    // archive shipped. that only holds on a case-insensitive filesystem. on a case-sensitive one an
-    // archive shipping `fomod/moduleconfig.xml` passes find_fomod_folder, which lowercases both
-    // names, and then fails the fs::read below as "Cannot parse XML (...)". the engine is
-    // windows-only and CI runs on windows-latest, so nothing exercises the other case. lifting the
-    // limitation means having contains_module_config return the matched entry name so this join can
-    // reuse the shipped casing.
+    // The fixed filename casing requires the supported case-insensitive Windows filesystem.
     let src_base = fomod_folder
         .parent()
         .unwrap_or(fomod_folder)
@@ -447,7 +475,7 @@ fn handle_fomod_install(
     let bytes =
         fs::read(&xml_path).map_err(|e| InstallError::new(format!("Cannot parse XML ({e})")))?;
     let installer = parse_module_config(&bytes, "")
-        // the inner description comes from the XML loader. the failure is the contract; the wording
+        // The inner description comes from the XML loader. The failure is the contract; the wording
         // is not.
         .map_err(|e| InstallError::new(format!("Cannot parse XML ({e})")))?;
     logger.log(&format!("[install] Loaded XML: {}", xml_path.display()));
@@ -511,7 +539,7 @@ fn handle_fomod_install(
                     context.installed_plugins.insert(name);
                 }
             }
-            // the logged count is the whole set, which already holds the five seeded masters, so it
+            // The logged count is the whole set, which already holds the five seeded masters, so it
             // overstates what this scan found.
             logger.log(&format!(
                 "[install] Found {} plugins in game Data directory",
@@ -544,7 +572,7 @@ fn handle_fomod_install(
 
     if !config_json.is_null() {
         logger.log("[install] Validating JSON selections...");
-        // a step or group `name` of the wrong type aborts the whole install; a merely invalid
+        // A step or group `name` of the wrong type aborts the whole install; a merely invalid
         // selection only warns.
         let valid = fomod_service
             .validate_json_selections(&config_json)
@@ -619,7 +647,7 @@ fn file_name_of(p: &Path) -> String {
         .into_owned()
 }
 
-// recursively collect mod-relative file paths into out.
+// Recursively collect mod-relative file paths into out.
 // `out` is added to, never cleared.
 fn collect_installed_files(root: &Path, dir: &Path, out: &mut HashSet<String>) {
     let Ok(entries) = fs::read_dir(dir) else {
@@ -637,12 +665,21 @@ fn collect_installed_files(root: &Path, dir: &Path, out: &mut HashSet<String>) {
     }
 }
 
-// read a JSON config, yielding Value::Null on any failure.
-// an unreadable file and a malformed one are both warnings, never fatal: the caller then proceeds
-// as if no selections were supplied.
+/**
+ * @fn `read_json_config(&str, &str) -> Value`
+ * @brief Read selections while allowing missing or malformed files to fall back.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Read failures return null silently. Parse failures emit a warning. Callers treat
+ * a null result as no supplied selections and continue with default installation behavior.
+ *
+ * @param path Selection-file path.
+ * @param label Context included in warnings.
+ * @return Parsed JSON, or Value::Null on read or parse failure.
+ */
 fn read_json_config(path: &str, label: &str) -> Value {
     let Ok(text) = fs::read_to_string(path) else {
-        // an unreadable file, non-UTF-8 content included, skips the parse and leaves the config
+        // An unreadable file, non-UTF-8 content included, skips the parse and leaves the config
         // null.
         return Value::Null;
     };
@@ -658,10 +695,17 @@ fn read_json_config(path: &str, label: &str) -> Value {
     }
 }
 
-// resolve the selections JSON path, or an empty string when there is none.
-// a non-empty `json_path` is returned verbatim.
+/**
+ * @fn `resolve_json_path(&str, &str) -> String`
+ * @brief Select an explicit JSON path or an existing archive-side file.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param json_path Nonempty values are returned without checking existence.
+ * @param archive_path Archive whose final extension is replaced with .json for lookup.
+ * @return The selected path, or an empty string when automatic lookup finds no file.
+ */
 fn resolve_json_path(json_path: &str, archive_path: &str) -> String {
-    // an explicit path from the caller is trusted as-is.
+    // An explicit path from the caller is trusted as-is.
     if !json_path.is_empty() {
         return json_path.to_string();
     }
