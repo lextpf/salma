@@ -1,12 +1,12 @@
 #pragma once
 
 /**
- * @brief controls public symbol visibility for shared support builds.
- * @author Alex (https://github.com/lextpf)
+ * @brief Controls public symbol visibility for shared support builds.
+ * @author Alex (<https://github.com/lextpf>)
  * @ingroup Core
  *
- * `MO2_API` is empty for the repository's static build. shared builds must define
- * `MO2_CORE_SHARED` for the library and every consumer. the library also defines
+ * `MO2_API` is empty for the repository's static build. Shared builds must define
+ * `MO2_CORE_SHARED` for the library and every consumer. The library also defines
  * `MO2_CORE_EXPORTS` while it builds.
  */
 #ifdef MO2_CORE_SHARED
