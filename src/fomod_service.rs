@@ -1,16 +1,16 @@
 /*!
- * @brief replays a parsed FOMOD selection into file operations.
- * @author Alex (https://github.com/lextpf)
+ * @brief Replays a parsed FOMOD selection into file operations.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * required, selected, automatic, and conditional passes append to one queue. execution sorts by
+ * Required, selected, automatic, and conditional passes append to one queue. execution sorts by
  * priority and document order, so the last write wins.
  *
- * ### :material-alert-circle-outline: failure handling
+ * ### :material-alert-circle-outline: Failure handling
  *
- * malformed step or group names fail the install. plugin entries accept both supported selection
+ * Malformed step or group names fail the install. plugin entries accept both supported selection
  * schemas. copy errors are logged and do not propagate.
  *
- * @warning destination screening normalizes the path before the raw Path::join. a rooted
+ * @warning destination screening normalizes the path before the raw Path::join. A rooted
  * destination can replace the installation base.
  */
 
@@ -30,10 +30,10 @@ use crate::utils::{is_safe_destination, to_lower};
 
 /**
  * @enum SelectionsError
- * @brief the one malformed-input condition that aborts a selections walk.
- * @author Alex (https://github.com/lextpf)
+ * @brief The one malformed-input condition that aborts a selections walk.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * an unusable step or group `name` is an error rather than an empty name, because it fails the
+ * An unusable step or group `name` is an error rather than an empty name, because it fails the
  * whole install: `capi::install` propagates it.
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,10 +56,10 @@ impl std::error::Error for SelectionsError {}
 /**
  * @struct FomodService
  * @brief FOMOD processing, install replay, and plugin flag evaluation.
- * @author Alex (https://github.com/lextpf)
+ * @author Alex (<https://github.com/lextpf>)
  *
- * not thread-safe; use one instance per installation. discard it after an optional-selection error
- * because plugin flags do not roll back.
+ * Use one instance per installation. Optional-file processing accumulates plugin flags, including
+ * flags written before an error. Discard the instance after such an error.
  *
  * | pass | source                    | queued entries                         |
  * |------|---------------------------|----------------------------------------|
@@ -68,7 +68,7 @@ impl std::error::Error for SelectionsError {}
  * | 2    | IR steps absent from JSON | remaining required plugins             |
  * | 3    | all IR steps              | remaining automatic or usable entries  |
  *
- * each pass sees flags written by earlier passes. an error rolls back queued operations and
+ * Each pass sees flags written by earlier passes. An error rolls back queued operations and
  * document order, but not plugin flags.
  */
 #[derive(Debug, Clone, Default)]
@@ -83,11 +83,13 @@ impl FomodService {
     }
 
     /**
-     * @fn set_installer(&mut self, FomodInstaller)
-     * @brief establish the IR required by later processing methods.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `set_installer(&mut self, FomodInstaller)`
+     * @brief Establish the IR required by later processing methods.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * must be called before any other method.
+     * Set the model before processing selections. This does not clear accumulated plugin flags.
+     *
+     * @param installer Owned model for the installation.
      */
     pub fn set_installer(&mut self, installer: FomodInstaller) {
         self.installer = installer;
@@ -102,11 +104,11 @@ impl FomodService {
     }
 
     /**
-     * @fn check_module_dependencies(&self, Option<&FomodDependencyContext>) -> bool
-     * @brief treat absent module dependencies as satisfied.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `check_module_dependencies(&self, Option<&FomodDependencyContext>) -> bool`
+     * @brief Treat absent module dependencies as satisfied.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * never fails: the dependency evaluator is total.
+     * Never fails: the dependency evaluator is total.
      * @return `true` when the dependencies are met or absent.
      */
     pub fn check_module_dependencies(&self, context: Option<&FomodDependencyContext>) -> bool {
@@ -132,11 +134,11 @@ impl FomodService {
     }
 
     /**
-     * @fn process_required_files(&self, &str, &str, &mut Vec<FileOperation>, &mut i32)
-     * @brief skip unsafe destinations and advance order only for queued operations.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `process_required_files(&self, &str, &str, &mut Vec<FileOperation>, &mut i32)`
+     * @brief Skip unsafe destinations and advance order only for queued operations.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * unsafe destinations are skipped by `enqueue_entry`, and `next_doc_order` advances once per
+     * Unsafe destinations are skipped by `enqueue_entry`, and `next_doc_order` advances once per
      * enqueued operation.
      */
     pub fn process_required_files(
@@ -178,11 +180,11 @@ impl FomodService {
     }
 
     /**
-     * @fn validate_json_selections(&self, &Value) -> Result<bool, SelectionsError>
-     * @brief report every violation and treat a missing steps array as valid.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `validate_json_selections(&self, &Value) -> Result<bool, SelectionsError>`
+     * @brief Report every violation and treat a missing steps array as valid.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * validation never stops early, so the log lists every violation.
+     * Validation never stops early, so the log lists every violation.
      * @return `Ok(false)` when any group violates its constraint.
      */
     pub fn validate_json_selections(&self, config_json: &Value) -> Result<bool, SelectionsError> {
@@ -296,6 +298,25 @@ impl FomodService {
         Ok(all_valid)
     }
 
+    /**
+     * @fn `process_optional_files(&mut self, config_json: &Value, src_base: &str, dst_base: &str,
+     *     context: Option<&FomodDependencyContext>, ops: &mut Vec<FileOperation>,
+     *     next_doc_order: &mut i32) -> Result<(), SelectionsError>`
+     * @brief Queue selected, required, and automatic plugin files.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Duplicate step, group, and plugin names bind by occurrence. A missing steps array queues
+     * nothing. Invalid step or group name types roll back this call's operations and document
+     * order; plugin flags remain changed. No files are copied here.
+     *
+     * @param config_json Selection document using either supported plugin-entry schema.
+     * @param src_base Extracted archive root used to resolve file sources.
+     * @param dst_base Installation root used to resolve destinations.
+     * @param context External dependency state, or None when unavailable.
+     * @param ops Queue to append to; existing operations remain on error.
+     * @param next_doc_order Enqueue counter shared with the other installation passes.
+     * @return Success after queuing, or a malformed-name error.
+     */
     pub fn process_optional_files(
         &mut self,
         config_json: &Value,
@@ -346,8 +367,24 @@ impl FomodService {
         result
     }
 
-    // the guarded body of FomodService::process_optional_files.
-    // split out so the caller can apply the rollback on any `Err` return.
+    /**
+     * @fn `process_optional_files_inner(&mut self, steps: &Value, src_base: &str, dst_base: &str,
+     *     context: Option<&FomodDependencyContext>, ops: &mut Vec<FileOperation>,
+     *     next_doc_order: &mut i32) -> Result<(), SelectionsError>`
+     * @brief Apply the optional-file passes to the queue and accumulated flags.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * The caller restores the queue and document order on error. This method can leave all mutable
+     * inputs partly updated, so installation callers must use `process_optional_files`.
+     *
+     * @param steps Steps array already checked by the caller.
+     * @param src_base Extracted archive root.
+     * @param dst_base Installation root.
+     * @param context External dependency state, or None when unavailable.
+     * @param ops Shared queue that receives accepted entries.
+     * @param next_doc_order Shared enqueue counter, advanced for each accepted entry.
+     * @return Success after all passes, or the first malformed-name error.
+     */
     fn process_optional_files_inner(
         &mut self,
         steps: &Value,
@@ -827,9 +864,9 @@ fn validate_cardinality(group_type: FomodGroupType, selected: i32, total: i32) -
 }
 
 /**
- * @fn execute_file_operations(&mut Vec<FileOperation>) -> i32
- * @brief resolve conflicts by priority, then by global document order.
- * @author Alex (https://github.com/lextpf)
+ * @fn `execute_file_operations(&mut Vec<FileOperation>) -> i32`
+ * @brief Resolve conflicts by priority, then by global document order.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `document_order` is a single sequence over the whole install: `enqueue_entry` post-increments it
  * once per queued operation while the required, optional and conditional passes append in that
