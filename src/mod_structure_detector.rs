@@ -1,8 +1,8 @@
 /*!
- * @brief detects installable content roots in archives without a FOMOD.
- * @author Alex (https://github.com/lextpf)
+ * @brief Detects installable content roots in archives without a FOMOD.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * known game-data markers identify a mod root. the scan checks direct child directories and keeps
+ * Known game-data markers identify a mod root. The scan checks direct child directories and keeps
  * filesystem enumeration order.
  */
 
@@ -29,27 +29,29 @@ const MOD_FOLDERS: [&str; 11] = [
 ];
 
 /**
- * @fn has_mod_structure(&Path) -> bool
- * @brief count any existing marker path, including a regular file.
- * @author Alex (https://github.com/lextpf)
+ * @fn `has_mod_structure(&Path) -> bool`
+ * @brief Count any existing marker path, including a regular file.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * matching follows filesystem case rules. a regular file with a marker name also counts.
+ * Matching follows filesystem case rules. A regular file with a marker name also counts.
  *
- * @return true when any MOD_FOLDERS child exists.
+ * @param dir Directory to check for immediate marker paths.
+ * @return True when any `MOD_FOLDERS` child exists; filesystem lookup errors count as absent.
  */
 pub fn has_mod_structure(dir: &Path) -> bool {
     MOD_FOLDERS.iter().any(|folder| dir.join(folder).exists())
 }
 
 /**
- * @fn find_main_mod_folders(&Path) -> Vec<PathBuf>
- * @brief return unsorted direct-child matches and keep partial results on read errors.
- * @author Alex (https://github.com/lextpf)
+ * @fn `find_main_mod_folders(&Path) -> Vec<PathBuf>`
+ * @brief Return unsorted direct-child matches and keep partial results on read errors.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * a read failure logs a warning and returns the candidates collected so far. result order follows
- * filesystem enumeration and is not sorted.
+ * A read failure logs a warning and returns the candidates collected so far. The scan checks
+ * direct child directories only; it does not test the archive root itself or recurse.
  *
- * @return matching direct child directories.
+ * @param archive_root Extracted archive directory to inspect.
+ * @return Matching child directories in filesystem enumeration order.
  */
 pub fn find_main_mod_folders(archive_root: &Path) -> Vec<PathBuf> {
     let logger = Logger::instance();
