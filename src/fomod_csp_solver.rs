@@ -1,10 +1,10 @@
 /*!
- * @brief finds FOMOD selections that best reproduce an installed file tree.
- * @author Alex (https://github.com/lextpf)
+ * @brief Finds FOMOD selections that best reproduce an installed file tree.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ### :material-transit-connection-variant: search phases
+ * ### :material-transit-connection-variant: Search phases
  *
- * phases stop after an exact match or the configured deadline:
+ * Phases stop after an exact match or the configured deadline:
  *
  * @verbatim
  * greedy and local repair
@@ -14,9 +14,9 @@
  *   -> widening global search
  * @endverbatim
  *
- * ### :material-timer-outline: search limits
+ * ### :material-timer-outline: Search limits
  *
- * equal scores keep the first candidate. the backtracker uses an explicit stack, node limits,
+ * Equal scores keep the first candidate. The backtracker uses an explicit stack, node limits,
  * memoization, and lower-bound pruning.
  */
 
@@ -2160,6 +2160,27 @@ fn group_priority(t: FomodGroupType) -> i32 {
     }
 }
 
+/**
+ * @fn `solve_fomod_csp(installer: &FomodInstaller, atoms: &ExpandedAtoms, atom_index: &AtomIndex,
+ *     target: &TargetTree, excluded_dests: &HashSet<String>,
+ *     overrides: Option<&InferenceOverrides>, propagation: Option<&PropagationResult>)
+ *     -> SolverResult`
+ * @brief Search for selections that best reproduce the installed target.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Each candidate is forward-simulated before scoring. Equal scores retain the first candidate.
+ * Node and time limits can end search with an approximate result; callers must inspect its
+ * reproduction counters and `exact_match`.
+ *
+ * @param installer Model whose hierarchy defines the result's selection grid.
+ * @param atoms Expanded entries from the same model.
+ * @param atom_index Destination index built from those atoms.
+ * @param target Installed file evidence, with zero sizes and hashes treated as unknown.
+ * @param excluded_dests Normalized destinations omitted from evidence and scoring.
+ * @param overrides Optional inferred evidence for external conditions.
+ * @param propagation Optional domain narrowing from the same installer and target.
+ * @return Best candidate found, with search attribution and reproduction metrics.
+ */
 pub fn solve_fomod_csp(
     installer: &FomodInstaller,
     atoms: &ExpandedAtoms,
