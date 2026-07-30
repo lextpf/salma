@@ -1,18 +1,24 @@
 /*!
- * @brief coordinates FOMOD selection inference.
- * @author Alex (https://github.com/lextpf)
+ * @brief Coordinates FOMOD selection inference.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ### :material-transit-connection-variant: inference flow
+ * ### :material-transit-connection-variant: Inference flow
  *
- * @verbatim
- * archive list -> XML parse -> atom expansion -> installed scan -> hash
- *              -> cache validation -> propagation -> CSP -> schema-v2 JSON
- * @endverbatim
+ * ```mermaid
+ * flowchart TD
+ *     A[Archive and installed files] --> B[Parse, expand atoms, and hash contested files]
+ *     B --> C{Validate cached selections}
+ *     C -->|Exact match| D[Schema-v2 JSON]
+ *     C -->|Absent or stale| E[Propagation and CSP search]
+ *     E --> D
+ *     C -->|Invalid name type| F[Empty result]
+ * ```
  *
- * ### :material-alert-circle-outline: failure handling
+ * ### :material-alert-circle-outline: Failure handling
  *
- * every operational failure returns an empty string. tier-1 metadata is only a candidate and
- * must reproduce the target exactly before it can bypass the solver.
+ * Missing input paths, missing or unreadable FOMOD XML, invalid XML, and invalid cached name types
+ * return an empty string. Hashing and installed-file scans can retain partial evidence after I/O
+ * errors. Cached selections bypass the solver only when they match all available target evidence.
  */
 
 use std::collections::{HashMap, HashSet};
@@ -44,8 +50,8 @@ use crate::logger::Logger;
 use crate::utils::{fnv1a_hash, normalize_path, to_lower};
 
 /**
- * @brief entry count above which the whole hash cache is cleared.
- * @author Alex (https://github.com/lextpf)
+ * @brief Entry count above which the whole hash cache is cleared.
+ * @author Alex (<https://github.com/lextpf>)
  */
 pub const K_MAX_CACHE_ENTRIES: usize = 100_000;
 
@@ -54,27 +60,28 @@ const K_MAX_HASH_FILE_SIZE: u64 = 256 * 1024 * 1024;
 
 /**
  * @struct CachedHash
- * @brief cached FNV-1a content hash and uncompressed size for one archive entry.
- * @author Alex (https://github.com/lextpf)
+ * @brief Cached FNV-1a content hash and uncompressed size for one archive entry.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CachedHash {
     pub hash: u64,
     /**
-     * @brief uncompressed size of the archive entry in bytes.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Uncompressed size of the archive entry in bytes.
+     * @author Alex (<https://github.com/lextpf>)
      */
     pub size: u64,
 }
 
 /**
  * @struct FomodInferenceService
- * @brief reverse-engineers which FOMOD options were originally selected.
- * @author Alex (https://github.com/lextpf)
+ * @brief Infers FOMOD selections from an installed file tree.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * `capi::inferFomodSelections` builds a fresh instance per call, so on the DLL path the hash cache
- * always starts empty. one C ABI call hashes one archive, so the cap does not clear that cache.
+ * The archive hash cache lasts for this instance. `capi::inferFomodSelections` creates a fresh
+ * instance per call. Cache keys use archive path, size, and modification time; the cache lock is
+ * released before archive I/O.
  */
 #[derive(Debug, Default)]
 pub struct FomodInferenceService {
@@ -90,14 +97,16 @@ impl FomodInferenceService {
     }
 
     /**
-     * @fn infer_selections(&self, &str, &str) -> String
-     * @brief infer FOMOD selections from an archive and its installed files.
-     * @author Alex (https://github.com/lextpf)
+     * @fn `infer_selections(&self, archive_path: &str, mod_path: &str) -> String`
+     * @brief Infer FOMOD selections from an archive and its installed files.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * the guarantee covers error conditions, not panics; `capi::guard` contains those.
-     * @return schema-v2 JSON (`dump(2)`) on success, or an empty string on any of six failures:
-     * archive not found, mod not found, not a FOMOD, the XML entry unreadable, an XML parse error,
-     * or a malformed tier-1 cache blob.
+     * Search may return an approximate selection when no exact match is found within its budget.
+     * Read the reproduction diagnostics before treating the result as a complete reconstruction.
+     *
+     * @param archive_path Existing archive containing the FOMOD and installable files.
+     * @param mod_path Installed mod directory used as the target tree.
+     * @return Schema-v2 JSON, or an empty string for the failures listed in the module overview.
      */
     pub fn infer_selections(&self, archive_path: &str, mod_path: &str) -> String {
         let t_total = Instant::now();
@@ -424,7 +433,23 @@ impl FomodInferenceService {
         result_str
     }
 
-    // hash only contested destinations so equal-size candidates can be distinguished.
+    /**
+     * @fn `hash_contested_files(&self, target: &mut TargetTree, atoms: &mut ExpandedAtoms,
+     *     atom_index: &mut AtomIndex, mod_path: &Path, archive_path: &str,
+     *     excluded: &HashSet<String>)`
+     * @brief Add content evidence where multiple archive sources can produce one destination.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Both atom views receive fetched archive hashes. Installed files larger than 256 MiB and
+     * unreadable files retain their existing evidence. Zero hashes remain unknown during scoring.
+     *
+     * @param target Installed files to enrich with hashes and observed sizes.
+     * @param atoms Expanded atoms for the same installer as `atom_index`.
+     * @param atom_index Destination index containing copies of those atoms.
+     * @param mod_path Root used to read installed file contents.
+     * @param archive_path Archive used to read candidate source contents.
+     * @param excluded Normalized destinations omitted from comparison.
+     */
     pub fn hash_contested_files(
         &self,
         target: &mut TargetTree,
@@ -472,6 +497,19 @@ impl FomodInferenceService {
         );
     }
 
+    /**
+     * @fn `fetch_entry_hashes(&self, archive_path: &str, entries_to_read: &HashSet<String>)
+     *     -> HashResult`
+     * @brief Fetch archive content evidence and reuse hashes for unchanged archive metadata.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Cache misses are read in one archive batch with no cache lock held. Unreadable entries are
+     * absent from the result and are not cached.
+     *
+     * @param archive_path Archive identified by its path, size, and modification time.
+     * @param entries_to_read Normalized archive entry paths.
+     * @return Available source hashes and uncompressed sizes in bytes.
+     */
     fn fetch_entry_hashes(
         &self,
         archive_path: &str,
@@ -526,11 +564,11 @@ impl FomodInferenceService {
 }
 
 /**
- * @fn try_fomod_plus_json(&Path) -> Option<Value>
- * @brief read any cached fomod-plus JSON from mod/meta.ini.
- * @author Alex (https://github.com/lextpf)
+ * @fn `try_fomod_plus_json(&Path) -> Option<Value>`
+ * @brief Read any cached fomod-plus JSON from mod/meta.ini.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * read and parse errors collapse to `None`, so this never fails the inference call.
+ * Read and parse errors collapse to `None`, so this never fails the inference call.
  * @return `Some(json)` only when the `[Settings]` key `fomod plus/fomod` (case-insensitive) holds a
  * JSON object with a non-empty `steps` array; otherwise `None`.
  */
@@ -775,10 +813,15 @@ pub fn compute_overrides(
 }
 
 /**
- * @fn scan_installed_files(&Path) -> HashMap<String, u64>
- * @brief skip unreadable subtrees and record metadata failures with size zero.
- * @author Alex (https://github.com/lextpf)
+ * @fn `scan_installed_files(mod_path: &Path) -> HashMap<String, u64>`
+ * @brief Collect installed file paths and sizes for inference.
+ * @author Alex (<https://github.com/lextpf>)
  *
+ * Unreadable subtrees and entries are skipped. A metadata failure records size zero, which later
+ * comparison treats as unknown. An empty result can also mean the root could not be read.
+ *
+ * @param mod_path Root directory for the recursive scan.
+ * @return Normalized relative file paths mapped to sizes in bytes.
  */
 pub fn scan_installed_files(mod_path: &Path) -> HashMap<String, u64> {
     let mut files: HashMap<String, u64> = HashMap::new();
@@ -951,8 +994,8 @@ fn apply_entry_hashes(
 
 /**
  * @enum Tier1Outcome
- * @brief outcome of validating the tier-1 fomod-plus candidate.
- * @author Alex (https://github.com/lextpf)
+ * @brief Outcome of validating the tier-1 fomod-plus candidate.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug)]
@@ -960,10 +1003,10 @@ pub enum Tier1Outcome {
     Hit(Box<Value>),
     Miss,
     /**
-     * @brief stop when a cached step, group or present name has the wrong JSON type.
-     * @author Alex (https://github.com/lextpf)
+     * @brief Stop when a cached step, group or present name has the wrong JSON type.
+     * @author Alex (<https://github.com/lextpf>)
      *
-     * this fails the whole inference call, which returns `""`.
+     * This fails the whole inference call, which returns `""`.
      */
     Abort,
 }
@@ -1009,8 +1052,26 @@ fn plugin_name_of(src: &Value) -> String {
     String::new()
 }
 
-// malformed names abort. resolution or reproduction misses fall through. only exact reproduction
-// hits.
+/**
+ * @fn `try_tier1_cache(fomod_plus: &Value, installer: &FomodInstaller, atoms: &ExpandedAtoms,
+ *     target: &TargetTree, excluded: &HashSet<String>, overrides: &InferenceOverrides,
+ *     total_ms: i64) -> Tier1Outcome`
+ * @brief Validate cached selections against the current installer and target tree.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Names bind to their first exact match in the installer. A cache hit requires zero missing,
+ * extra, size-mismatched, and hash-mismatched destinations after simulation. Unknown sizes and
+ * hashes cannot disprove a match.
+ *
+ * @param fomod_plus Parsed candidate from the installed mod's metadata.
+ * @param installer Current installer used to resolve cached names.
+ * @param atoms Expanded entries from the same installer.
+ * @param target Installed file evidence used by the solver path.
+ * @param excluded Normalized destinations omitted from comparison.
+ * @param overrides Inferred external-condition evidence used during simulation.
+ * @param total_ms Elapsed run time in milliseconds, copied into cache-hit diagnostics.
+ * @return Hit with schema-v2 JSON, Miss for stale selections, or Abort for invalid name types.
+ */
 pub fn try_tier1_cache(
     fomod_plus: &Value,
     installer: &FomodInstaller,
