@@ -1,17 +1,20 @@
 /*!
- * @brief simulates a candidate FOMOD install and compares it with the target tree.
- * @author Alex (https://github.com/lextpf)
+ * @brief Simulates a candidate FOMOD install and compares it with the target tree.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ### :material-format-list-numbered: application order
+ * ### :material-format-list-numbered: Application order
  *
  * @verbatim
  * required -> selected or required plugins -> automatic entries -> conditional entries
  * @endverbatim
  *
- * ### :material-shield-lock: simulation invariants
+ * ### :material-shield-lock: Simulation invariants
  *
- * overwrite decisions use priority and application order, not document_order. the simulator
- * does not evaluate plugin dependencies. these rules can differ from install replay.
+ * Overwrite decisions use priority and application order, not `document_order`. The simulator
+ * does not evaluate plugin dependencies. These rules can differ from install replay.
+ *
+ * Comparison uses available evidence: a zero size or hash is unknown and cannot cause a mismatch.
+ * An exact score therefore does not imply that every output byte was verified.
  */
 
 use std::collections::{HashMap, HashSet};
@@ -26,10 +29,10 @@ use crate::types::{FomodDependencyContext, PluginType};
 
 /**
  * @struct SimulatedTree
- * @brief the file tree produced by a simulated FOMOD installation.
- * @author Alex (https://github.com/lextpf)
+ * @brief The file tree produced by a simulated FOMOD installation.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * maps a destination path to the single winning [`FomodAtom`] after priority and application-order
+ * Maps a destination path to the single winning [`FomodAtom`] after priority and application-order
  * conflict resolution, so the solver can score a candidate selection without extracting anything.
  */
 #[derive(Debug, Clone, Default)]
@@ -37,8 +40,15 @@ pub struct SimulatedTree {
     pub files: HashMap<String, FomodAtom>,
 }
 
-// an atom overwrites the incumbent when its priority is not lower. equal priorities favor the atom
-// applied later.
+/**
+ * @fn `should_overwrite(existing: &FomodAtom, new_atom: &FomodAtom) -> bool`
+ * @brief Resolve an output conflict using FOMOD priority.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param existing Atom already assigned to the destination.
+ * @param new_atom Atom being applied now.
+ * @return True when the new priority is at least the existing priority, including ties.
+ */
 fn should_overwrite(existing: &FomodAtom, new_atom: &FomodAtom) -> bool {
     new_atom.priority >= existing.priority
 }
@@ -74,7 +84,23 @@ fn compute_step_visibility(
     }
 }
 
-// empty selections still apply required promotion and automatic atoms.
+/**
+ * @fn `simulate(installer: &FomodInstaller, atoms: &ExpandedAtoms, selections: &[Vec<Vec<bool>>],
+ *     context: Option<&FomodDependencyContext>, overrides: Option<&InferenceOverrides>)
+ *     -> SimulatedTree`
+ * @brief Predict the winning archive source at each installed destination.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Required plugins and automatic entries can contribute files even when no plugin is selected.
+ * Missing selection indices count as deselected. Archive files are not extracted.
+ *
+ * @param installer Model whose step, group, and plugin order defines selection indices.
+ * @param atoms Expanded entries from the same model, in its flattened plugin order.
+ * @param selections Selection grid indexed by step, group, then plugin.
+ * @param context External dependency state, or None when unavailable.
+ * @param overrides Optional inferred evidence for visibility and conditional entries.
+ * @return Destination map after the application passes documented in the module overview.
+ */
 pub fn simulate(
     installer: &FomodInstaller,
     atoms: &ExpandedAtoms,
@@ -194,8 +220,24 @@ pub fn simulate_into(
     }
 }
 
-// keep the mismatch classification order synchronized with collect_mismatched_dests and
-// classify_dests.
+/**
+ * @fn `compare_trees_impl(sim: &SimulatedTree, target: &TargetTree, excluded: &HashSet<String>,
+ *     on_missing: impl FnMut(&str) -> bool, on_size_mismatch: impl FnMut(&str) -> bool,
+ *     on_hash_mismatch: impl FnMut(&str) -> bool) -> ReproMetrics`
+ * @brief Count reproduction differences with caller-controlled mismatch filters.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * A target destination takes the first applicable category: missing, size mismatch, hash mismatch,
+ * or reproduced. Rejecting a mismatch in its callback does not count it as reproduced.
+ *
+ * @param sim Candidate output tree.
+ * @param target Installed files with zero size or hash treated as unknown evidence.
+ * @param excluded Normalized destinations ignored in both trees.
+ * @param on_missing Return true to count a missing destination.
+ * @param on_size_mismatch Return true to count a known size mismatch.
+ * @param on_hash_mismatch Return true to count a known hash mismatch when sizes do not mismatch.
+ * @return Filtered target counters and an unfiltered count of extra non-excluded destinations.
+ */
 pub fn compare_trees_impl(
     sim: &SimulatedTree,
     target: &TargetTree,
@@ -243,6 +285,17 @@ pub fn compare_trees_impl(
     m
 }
 
+/**
+ * @fn `compare_trees(sim: &SimulatedTree, target: &TargetTree, excluded: &HashSet<String>)
+ *     -> ReproMetrics`
+ * @brief Score every available reproduction difference between two trees.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param sim Candidate output tree.
+ * @param target Installed file evidence; zero sizes and hashes are unknown.
+ * @param excluded Normalized destinations omitted from all counters.
+ * @return Missing, extra, size mismatch, hash mismatch, and reproduced counts.
+ */
 pub fn compare_trees(
     sim: &SimulatedTree,
     target: &TargetTree,
@@ -252,11 +305,11 @@ pub fn compare_trees(
 }
 
 /**
- * @fn collect_mismatched_dests(&SimulatedTree, &TargetTree, &HashSet<String>) -> Vec<String>
- * @brief list destinations where simulated and target trees differ.
- * @author Alex (https://github.com/lextpf)
+ * @fn `collect_mismatched_dests(&SimulatedTree, &TargetTree, &HashSet<String>) -> Vec<String>`
+ * @brief List destinations where simulated and target trees differ.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the result is sorted byte-wise ascending, which is the only ordering guarantee a caller may rely
+ * The result is sorted byte-wise ascending, which is the only ordering guarantee a caller may rely
  * on.
  */
 pub fn collect_mismatched_dests(
@@ -300,8 +353,8 @@ pub fn collect_mismatched_dests(
 
 /**
  * @enum DestStatus
- * @brief how one destination diverged from the target tree.
- * @author Alex (https://github.com/lextpf)
+ * @brief How one destination diverged from the target tree.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -324,9 +377,9 @@ impl DestStatus {
 }
 
 /**
- * @fn classify_dests(&SimulatedTree, &TargetTree, &HashSet<String>) -> Vec<(String, DestStatus)>
- * @brief classify mismatches and sort them by destination path.
- * @author Alex (https://github.com/lextpf)
+ * @fn `classify_dests(&SimulatedTree, &TargetTree, &HashSet<String>) -> Vec<(String, DestStatus)>`
+ * @brief Classify mismatches and sort them by destination path.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 pub fn classify_dests(
