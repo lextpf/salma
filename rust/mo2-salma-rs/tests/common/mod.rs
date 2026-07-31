@@ -30,6 +30,37 @@ pub fn golden_cases_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/golden/cases")
 }
 
+/// Whether this host is expected to hold the full corpus of source archives.
+///
+/// The committed fixtures reference their archives by a machine-local ABSOLUTE
+/// `source_archive_path`, and no archive is tracked in git, so on CI every
+/// corpus-gated case skips. Those tests then reach a vacuous
+/// `assert!(failures.is_empty())` over an empty vector and report ok, which is
+/// indistinguishable from having actually verified something.
+///
+/// Set `SALMA_REQUIRE_CORPUS=1` on any host that IS supposed to have the corpus
+/// (a developer box, or a CI job that provisions it) to turn a zero-case run
+/// into a hard failure. Unset, the skip stays a documented no-op.
+pub fn require_corpus() -> bool {
+    std::env::var_os("SALMA_REQUIRE_CORPUS").is_some_and(|v| !v.is_empty())
+}
+
+/// Record how many cases a corpus-gated test actually exercised, failing when
+/// nothing ran and [`require_corpus`] says something should have. `what` names
+/// the gate so the message points at the right oracle.
+pub fn note_corpus_coverage(ran: usize, what: &str) {
+    if ran > 0 {
+        return;
+    }
+    assert!(
+        !require_corpus(),
+        "SALMA_REQUIRE_CORPUS is set but {what} exercised 0 cases: the source \
+         archives are absent, or the source_archive_path entries in \
+         rust/tests/golden/cases/*/case.json are stale for this host"
+    );
+    eprintln!("[corpus] no source archives present - {what} not exercised on this host");
+}
+
 /// Sorted names of every committed fixture case that ships a ModuleConfig.xml.
 pub fn committed_cases() -> Vec<String> {
     let mut cases: Vec<String> = fs::read_dir(golden_cases_dir())

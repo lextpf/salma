@@ -399,7 +399,5 @@ fn replaying_committed_selections_reproduces_the_installed_tree() {
         "[task14] install replay: {exact_checked} exact case(s) byte-verified, \
          {approx_checked} non-exact case(s) shape-verified, {skipped} skipped"
     );
-    if exact_checked + approx_checked == 0 {
-        eprintln!("[task14] no corpus archive present - oracle skipped (expected on CI)");
-    }
+    common::note_corpus_coverage(exact_checked + approx_checked, "the install-replay oracle");
 }

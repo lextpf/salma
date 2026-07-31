@@ -244,9 +244,7 @@ fn read_and_extract_match_committed_module_config_over_real_corpus() {
         "archive read/extract failures:\n{}",
         failures.join("\n")
     );
-    if ran == 0 {
-        eprintln!("[corpus] no source archives present - read/extract not exercised on this host");
-    }
+    common::note_corpus_coverage(ran, "archive read/extract parity");
 }
 
 #[test]
@@ -309,8 +307,7 @@ fn list_entries_with_sizes_matches_golden_over_real_corpus() {
     );
     // When any archive was accessible, every one of them must have matched
     // (mismatches is already asserted empty). If nothing ran (pure CI with no
-    // corpus), the test is a documented no-op skip.
-    if ran == 0 {
-        eprintln!("[corpus] no source archives present - byte-parity not exercised on this host");
-    }
+    // corpus), the test is a documented no-op skip unless SALMA_REQUIRE_CORPUS
+    // says this host should have had one.
+    common::note_corpus_coverage(ran, "archive listing byte-parity");
 }
