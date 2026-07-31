@@ -124,16 +124,24 @@ fn set_last_install_success(value: bool) {
     LAST_INSTALL_SUCCESS.store(value, Ordering::SeqCst);
 }
 
-/// Shared body for [`install`] and [`installWithConfig`]. In Milestone 1 both
-/// behave identically with respect to the archive/mod inputs; the install
-/// replay (and `jsonPath` handling for `installWithConfig`) lands in a later
-/// task.
+/// Shared body for [`install`] and [`installWithConfig`], mirroring
+/// `CApi::install` (`src/CApi.cpp:39-70`) and `CApi::installWithConfig`
+/// (`:72-107`), which differ only in the `json_path` they forward.
+///
+/// The success flag becomes true if and only if `install_mod` RETURNED, without
+/// inspecting what it returned. That is the C++ code's predicate
+/// (`CApi.cpp:51-53`, `:87-89`), not the looser one `CApi.hpp:252-256`
+/// describes; see PARITY-NOTES "Task 15".
 ///
 /// # Safety
 ///
 /// `archive_path` and `mod_path` must each be null or a valid nul-terminated
 /// C string.
-unsafe fn install_stub(archive_path: *const c_char, mod_path: *const c_char) -> *const c_char {
+unsafe fn install_impl(
+    archive_path: *const c_char,
+    mod_path: *const c_char,
+    json_path: &str,
+) -> *const c_char {
     match (unsafe { borrow_arg(archive_path) }, unsafe {
         borrow_arg(mod_path)
     }) {
@@ -143,14 +151,27 @@ unsafe fn install_stub(archive_path: *const c_char, mod_path: *const c_char) -> 
         }
         (ArgStr::InvalidUtf8, _) | (_, ArgStr::InvalidUtf8) => {
             // Invalid UTF-8 is handled like a caught exception: the C++
-            // catch-all failure string, flag cleared.
+            // catch-all failure string, flag cleared. The C++ has no such
+            // branch (it forwards the raw bytes); documented in PARITY-NOTES.
             set_last_install_success(false);
             owned_cstring("Unknown fatal error during installation")
         }
-        (ArgStr::Str(_archive), ArgStr::Str(_mod)) => {
-            // TODO(task 14/15): forward to InstallationService::install_mod.
-            set_last_install_success(false);
-            owned_cstring("install not yet implemented in mo2_salma_rs")
+        (ArgStr::Str(archive), ArgStr::Str(modp)) => {
+            let mut service = crate::installation_service::InstallationService::new();
+            match service.install_mod(archive, modp, json_path) {
+                Ok(result) => {
+                    set_last_install_success(true);
+                    owned_cstring(&result)
+                }
+                Err(err) => {
+                    // dropped log site: log_error("[install] Fatal error: {}") /
+                    // ("[installWithConfig] Fatal error: {}")
+                    set_last_install_success(false);
+                    // The C++ returns `e.what()`; InstallError::Display carries
+                    // exactly that text for every salma-authored message.
+                    owned_cstring(&err.to_string())
+                }
+            }
         }
     }
 }
@@ -197,9 +218,13 @@ pub unsafe extern "C" fn install(
     mod_path: *const c_char,
 ) -> *const c_char {
     guard(
-        // SAFETY: pointers are only borrowed inside install_stub, which upholds
+        // SAFETY: pointers are only borrowed inside install_impl, which upholds
         // the same nul-or-valid contract this function documents.
-        || unsafe { install_stub(archive_path, mod_path) },
+        // An empty json_path is NOT "no selections": the service derives a
+        // sibling `<archive stem>.json` and uses it when present, so an archive
+        // with a sidecar is installed WITH those selections. `CApi.hpp:177-182`
+        // states otherwise; the code wins (see PARITY-NOTES "Task 15").
+        || unsafe { install_impl(archive_path, mod_path, "") },
         || {
             set_last_install_success(false);
             owned_cstring("Unknown fatal error during installation")
@@ -210,18 +235,31 @@ pub unsafe extern "C" fn install(
 /// # Safety
 ///
 /// `archive_path` and `mod_path` must each be null or a valid nul-terminated
-/// UTF-8 C string. `json_path` may be null (ignored in Milestone 1). The
-/// returned non-null pointer must be released with [`freeResult`].
+/// UTF-8 C string. `json_path` may be null, which is coerced to `""` exactly as
+/// the C++ does (`src/CApi.cpp:86`). The returned non-null pointer must be
+/// released with [`freeResult`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn installWithConfig(
     archive_path: *const c_char,
     mod_path: *const c_char,
-    _json_path: *const c_char,
+    json_path: *const c_char,
 ) -> *const c_char {
     guard(
-        // SAFETY: same nul-or-valid contract as install(). json_path is unused
-        // until the install replay is ported.
-        || unsafe { install_stub(archive_path, mod_path) },
+        // SAFETY: same nul-or-valid contract as install().
+        || {
+            // Null jsonPath is coerced to the empty string (CApi.cpp:82,86).
+            // Invalid UTF-8 is treated like a caught exception, consistent with
+            // the other two arguments.
+            let json = match unsafe { borrow_arg(json_path) } {
+                ArgStr::Null => "",
+                ArgStr::Str(s) => s,
+                ArgStr::InvalidUtf8 => {
+                    set_last_install_success(false);
+                    return owned_cstring("Unknown fatal error during installation");
+                }
+            };
+            unsafe { install_impl(archive_path, mod_path, json) }
+        },
         || {
             set_last_install_success(false);
             owned_cstring("Unknown fatal error during installation")
@@ -301,14 +339,42 @@ pub unsafe extern "C" fn freeResult(result: *const c_char) {
 /// released with [`freeResult`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn resolveModArchive(
-    _installation_file: *const c_char,
-    _mod_folder: *const c_char,
-    _mods_dir: *const c_char,
+    installation_file: *const c_char,
+    mod_folder: *const c_char,
+    mods_dir: *const c_char,
 ) -> *const c_char {
-    // The C++ implementation returns "" both when installationFile or modFolder
-    // is null and on a resolution miss, so every input maps to "" in this stub.
-    // TODO(task 15): forward valid inputs to mo2core::resolve_mod_archive.
-    guard(|| owned_cstring(""), || owned_cstring(""))
+    guard(
+        // SAFETY: all three are null-or-valid per this function's contract and
+        // are only borrowed for the classification below.
+        || {
+            // Only installationFile and modFolder are null-checked; a null
+            // modsDir is coerced to an empty path and merely skips candidates
+            // 4-6. That asymmetry is intentional in the C++
+            // (`CApi.cpp:147-150` vs `:155`) and is reproduced.
+            let (file, folder) = match (unsafe { borrow_arg(installation_file) }, unsafe {
+                borrow_arg(mod_folder)
+            }) {
+                (ArgStr::Str(f), ArgStr::Str(d)) => (f, d),
+                // Null -> "" per CApi.cpp:147-150. Invalid UTF-8 is treated like
+                // a caught exception, which also yields "" (CApi.cpp:158-169).
+                _ => return owned_cstring(""),
+            };
+            let mods = match unsafe { borrow_arg(mods_dir) } {
+                ArgStr::Str(s) => s,
+                ArgStr::Null | ArgStr::InvalidUtf8 => "",
+            };
+
+            let resolved = crate::archive_resolver::resolve_mod_archive(
+                file,
+                std::path::Path::new(folder),
+                std::path::Path::new(mods),
+            );
+            // The C++ `resolved.empty() ? "" : resolved.string().c_str()` is a
+            // no-op ternary: an empty path already stringifies to "".
+            owned_cstring(&resolved.to_string_lossy())
+        },
+        || owned_cstring(""),
+    )
 }
 
 #[cfg(test)]
@@ -403,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_stub_null_and_placeholder() {
+    fn infer_null_and_failure_contract() {
         let msg = unsafe { take_owned(inferFomodSelections(std::ptr::null(), std::ptr::null())) };
         assert_eq!(msg, "archivePath and modPath must not be null");
 
@@ -414,23 +480,23 @@ mod tests {
     }
 
     // This is the ONLY test that touches LAST_INSTALL_SUCCESS, so the shared
-    // flag cannot race against a parallel test.
+    // process-global flag cannot race against a parallel test. Keep it that way.
     #[test]
-    fn install_stub_reports_not_implemented_and_flag_stays_false() {
-        // Null inputs -> the exact C++ null-argument message; flag stays false.
+    fn install_wires_the_service_and_tracks_the_success_flag() {
+        // Null inputs -> the exact C++ null-argument message; flag cleared.
         let msg = unsafe { take_owned(install(std::ptr::null(), std::ptr::null())) };
         assert_eq!(msg, "archivePath and modPath must not be null");
         assert!(!installSucceeded());
 
-        let archive = CString::new("archive.7z").unwrap();
+        // A real failure now comes from InstallationService, and the returned
+        // string is its `what()` equivalent rather than a placeholder.
+        let archive = CString::new("definitely-absent-archive.7z").unwrap();
         let mod_dir = CString::new("mod").unwrap();
-
-        // Valid inputs -> Milestone 1 placeholder; flag still false.
         let msg = unsafe { take_owned(install(archive.as_ptr(), mod_dir.as_ptr())) };
-        assert_eq!(msg, "install not yet implemented in mo2_salma_rs");
-        assert!(!installSucceeded());
+        assert_eq!(msg, "Archive file not found: definitely-absent-archive.7z");
+        assert!(!installSucceeded(), "a failed install clears the flag");
 
-        // installWithConfig shares the same stub; jsonPath is ignored for now.
+        // installWithConfig reports the same failure and also clears the flag.
         let cfg = CString::new("selections.json").unwrap();
         let msg = unsafe {
             take_owned(installWithConfig(
@@ -439,12 +505,59 @@ mod tests {
                 cfg.as_ptr(),
             ))
         };
-        assert_eq!(msg, "install not yet implemented in mo2_salma_rs");
+        assert_eq!(msg, "Archive file not found: definitely-absent-archive.7z");
         assert!(!installSucceeded());
+
+        // A NULL jsonPath is coerced to "" and must not change the outcome.
+        let msg = unsafe {
+            take_owned(installWithConfig(
+                archive.as_ptr(),
+                mod_dir.as_ptr(),
+                std::ptr::null(),
+            ))
+        };
+        assert_eq!(msg, "Archive file not found: definitely-absent-archive.7z");
+        assert!(!installSucceeded());
+
+        // A SUCCEEDING install sets the flag and returns mod_path verbatim.
+        // Empty archive + empty mod tree is the cheapest success: the non-FOMOD
+        // flat-copy fallback over an empty directory.
+        let root =
+            std::env::temp_dir().join(format!("salma-capi-{}", crate::utils::random_hex_string(8)));
+        let src = root.join("src.zip");
+        std::fs::create_dir_all(&root).expect("scratch");
+        // A minimal but real zip: the archive layer must be able to open it.
+        let svc = crate::archive_service::ArchiveService::new();
+        std::fs::create_dir_all(root.join("payload")).expect("payload dir");
+        std::fs::write(root.join("payload").join("readme.txt"), b"hi").expect("write");
+        svc.create_zip(
+            root.join("payload").to_str().unwrap(),
+            src.to_str().unwrap(),
+        )
+        .expect("build a real zip fixture");
+
+        let out_dir = root.join("out");
+        let c_archive = CString::new(src.to_str().unwrap()).unwrap();
+        let c_out = CString::new(out_dir.to_str().unwrap()).unwrap();
+        let msg = unsafe { take_owned(install(c_archive.as_ptr(), c_out.as_ptr())) };
+        assert_eq!(msg, out_dir.to_string_lossy(), "success returns mod_path");
+        assert!(installSucceeded(), "a successful install sets the flag");
+        assert!(out_dir.join("readme.txt").exists(), "content was installed");
+
+        // The flag is STICKY across other exports: neither inferFomodSelections
+        // nor resolveModArchive clears it (CApi.cpp:109-170 never writes it).
+        let _ = unsafe { take_owned(inferFomodSelections(c_archive.as_ptr(), c_out.as_ptr())) };
+        assert!(installSucceeded(), "infer must not touch the install flag");
+
+        // Restore the shared flag so test ordering cannot leak this success.
+        let _ = unsafe { take_owned(install(std::ptr::null(), std::ptr::null())) };
+        assert!(!installSucceeded());
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
-    fn resolve_mod_archive_stub_returns_empty() {
+    fn resolve_mod_archive_is_wired_to_the_resolver() {
+        // Null installationFile or modFolder -> "" (CApi.cpp:147-150).
         let out = unsafe {
             take_owned(resolveModArchive(
                 std::ptr::null(),
@@ -454,7 +567,9 @@ mod tests {
         };
         assert_eq!(out, "");
 
-        let file = CString::new("mod.7z").unwrap();
+        // An unresolvable name still yields "" - but now because the resolver
+        // missed, not because the export is a stub.
+        let file = CString::new("definitely-absent-mod.7z").unwrap();
         let folder = CString::new("C:/mods/MyMod").unwrap();
         let out = unsafe {
             take_owned(resolveModArchive(
@@ -464,6 +579,31 @@ mod tests {
             ))
         };
         assert_eq!(out, "");
+
+        // A resolvable archive under the mod folder now comes back, which is
+        // the behavior the MO2 plugin depends on: it gates on hasattr and never
+        // falls back once the symbol exists.
+        let root = std::env::temp_dir().join(format!(
+            "salma-capi-res-{}",
+            crate::utils::random_hex_string(8)
+        ));
+        let mod_folder = root.join("MyMod");
+        let name = format!("payload-{}.7z", crate::utils::random_hex_string(12));
+        let archive = mod_folder.join(&name);
+        std::fs::create_dir_all(&mod_folder).expect("scratch");
+        std::fs::write(&archive, b"x").expect("write");
+
+        let c_file = CString::new(name.as_str()).unwrap();
+        let c_folder = CString::new(mod_folder.to_str().unwrap()).unwrap();
+        let out = unsafe {
+            take_owned(resolveModArchive(
+                c_file.as_ptr(),
+                c_folder.as_ptr(),
+                std::ptr::null(),
+            ))
+        };
+        assert_eq!(out, archive.to_string_lossy());
+        std::fs::remove_dir_all(&root).ok();
     }
 
     // This is the ONLY test that touches LOG_CALLBACK, so the shared slot
