@@ -6,12 +6,15 @@
 //! (`ModName-v1.2/meshes/...` instead of `meshes/...`) does not get installed
 //! one level too deep.
 //!
-//! There is no Rust logger yet (Task 17). Every `Logger::instance().log*` call
-//! is dropped; the branch that produced it is kept with a `// dropped log site`
-//! comment so Task 17 can restore it verbatim.
+//! Log call sites mirror the C++ tags and wording so MO2's log window reads
+//! the same. The one unavoidable difference is the error TEXT inside the
+//! "Cannot scan" warning: the C++ interpolates `filesystem_error::what()`, this
+//! interpolates `std::io::Error`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::logger::Logger;
 
 /// The well-known game-data folder names that mark a directory as a mod root,
 /// in the C++ declaration order (`ModStructureDetector.cpp:14-26`).
@@ -76,21 +79,34 @@ pub fn has_mod_structure(dir: &Path) -> bool {
 /// one entry, and otherwise selects by name match, treating any count other
 /// than one as fatal.
 pub fn find_main_mod_folders(archive_root: &Path) -> Vec<PathBuf> {
+    let logger = Logger::instance();
     let mut results = Vec::new();
 
-    let Ok(entries) = fs::read_dir(archive_root) else {
-        // dropped log site: log_warning("[install] Cannot scan \"{}\": {}",
-        // archive_root.string(), e.what())
-        return results;
+    let entries = match fs::read_dir(archive_root) {
+        Ok(entries) => entries,
+        Err(err) => {
+            logger.log_warning(&format!(
+                "[install] Cannot scan \"{}\": {err}",
+                archive_root.display()
+            ));
+            return results;
+        }
     };
 
     for entry in entries {
-        let Ok(entry) = entry else {
-            // Mid-iteration fault. The C++ `filesystem_error` would escape the
-            // loop into the catch and stop the scan with partial results, so
-            // stop here too rather than skipping just this entry.
-            // dropped log site: log_warning("[install] Cannot scan \"{}\": {}")
-            break;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                // Mid-iteration fault. The C++ `filesystem_error` would escape
+                // the loop into the catch and stop the scan with partial
+                // results, so stop here too rather than skipping just this
+                // entry.
+                logger.log_warning(&format!(
+                    "[install] Cannot scan \"{}\": {err}",
+                    archive_root.display()
+                ));
+                break;
+            }
         };
         let path = entry.path();
         // `is_directory()` in the C++; `file_type()` here follows symlinks the
@@ -101,8 +117,10 @@ pub fn find_main_mod_folders(archive_root: &Path) -> Vec<PathBuf> {
             continue;
         }
         if has_mod_structure(&path) {
-            // dropped log site: log("[install]    candidate mod folder: \"{}\"",
-            // entry.path().filename().string())
+            logger.log(&format!(
+                "[install]    candidate mod folder: \"{}\"",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ));
             results.push(path);
         }
     }

@@ -14,10 +14,14 @@ crate-type = ["cdylib", "rlib"]
 
 [target.'cfg(windows)'.dependencies]
 # Minimal Win32 surface for utils::module_directory / executable_directory
-# (GetModuleHandleExW + GetModuleFileNameW), mirroring src/Utils.cpp.
+# (GetModuleHandleExW + GetModuleFileNameW), mirroring src/Utils.cpp, plus
+# GetLocalTime for logger timestamps: the C++ formats with localtime_s, and
+# std has no local-time conversion, so the same OS call keeps the log lines
+# byte-identical including the DST/timezone rules.
 windows-sys = { version = "0.60", features = [
     "Win32_Foundation",
     "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
 ] }
 
 [dependencies]
