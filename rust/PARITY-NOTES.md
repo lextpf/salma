@@ -54,22 +54,25 @@ as in C++ - documented on `freeResult`.
 
 ### Intentional divergences (temporary, Milestone 1 stubs)
 
-- `install` / `installWithConfig` with valid inputs return the placeholder
+RESOLVED as of Task 15. Every stub in this list is gone; the entries are kept
+so the history reads correctly, each annotated with where it was closed.
+
+- ~~`install` / `installWithConfig` with valid inputs return the placeholder
   `"install not yet implemented in mo2_salma_rs"` and set the success flag
-  false. C++ returns the real installed mod path. Placeholder removed when the
-  install replay is ported (Tasks 14/15).
-- `inferFomodSelections` with valid inputs returns `""`. C++ runs the full
-  inference pipeline. The `""` placeholder is indistinguishable from the C++
-  "no FOMOD / pipeline failure" empty result, so callers are not misled about
-  the contract, only about the (not yet implemented) success path. Ported in
-  Tasks 4-12.
-- `resolveModArchive` with valid inputs returns `""`. C++ runs the archive
-  resolution fallback chain. Ported in Task 15.
-- `installWithConfig` ignores `jsonPath` in Milestone 1 (the stub does not
-  install). C++ coerces null `jsonPath` to `""` and reads selections from it.
-- No logger is wired up yet. C++ logs an error line on each caught exception;
-  the Rust stubs catch panics silently. `setLogCallback` retains the pointer in
-  a lock-free atomic but nothing consumes it until Task 17.
+  false.~~ CLOSED in Task 15: both exports call
+  `installation_service::InstallationService::install_mod` and return the
+  installed mod path, setting the flag true on any `Ok`.
+- ~~`inferFomodSelections` with valid inputs returns `""`.~~ CLOSED in Task 12:
+  `capi.rs` constructs `FomodInferenceService` and runs the real pipeline.
+  (This bullet was already stale before Task 15; see the Task 12 section.)
+- ~~`resolveModArchive` with valid inputs returns `""`.~~ CLOSED in Task 15:
+  wired to `archive_resolver::resolve_mod_archive`.
+- ~~`installWithConfig` ignores `jsonPath`.~~ CLOSED in Task 15: `jsonPath` is
+  borrowed, null-coerced to `""` per `CApi.cpp:86`, and forwarded to
+  `install_mod`.
+- STILL OPEN: no logger is wired up. C++ logs an error line on each caught
+  exception; the Rust exports fail silently. `setLogCallback` retains the
+  pointer in a lock-free atomic but nothing consumes it until Task 17.
 
 ### Build-artifact findings (export table)
 
@@ -79,6 +82,19 @@ as in C++ - documented on `freeResult`.
   to byte-identical code today. This is harmless and correct - both currently
   do the same thing - and they will un-fold automatically once `installWithConfig`
   starts consuming `jsonPath` (Task 15). Left as-is; no linker tweaks.
+  RESOLVED in Task 15: `installWithConfig` now borrows and forwards `jsonPath`,
+  so the two bodies differ and the fold is gone (re-verify with `dumpbin
+  /exports` after any release rebuild).
+- `installSucceeded` was ALSO folded away in the stub era, for the same reason
+  and worse: because `set_last_install_success` was only ever called with
+  `false`, LLVM proved the `AtomicBool` could never be true, constant-folded the
+  load, and ICF merged the emptied body into an unrelated `sevenz_rust2` symbol
+  (`dumpbin /disasm` showed literally `xor eax,eax; ret`). Found by the Task 15
+  pre-audit, NOT by any test. Task 15 fixes it by construction - the success
+  path now stores `true` - but the lesson generalizes: an export whose only
+  observable value is a compile-time constant can be optimized into a shared
+  stub, and the export table alone will not reveal it. Re-check with `dumpbin`
+  whenever an export's logic is stubbed out.
 - `setLogCallback` stores the callback into `LOG_CALLBACK`, but nothing reads
   that static until the logger lands (Task 17). The release optimizer therefore
   treated the store as a dead write and eliminated it, folding the emptied
@@ -3018,3 +3034,235 @@ the `src/lib.rs` unittest binary to 476, plus the corpus-gated
 `tests/fomod_service_install_fixtures.rs` (1 end-to-end test, a no-op on CI).
 `cargo test`, `cargo clippy --all-targets -- -D warnings`, and `cargo fmt --check`
 all clean.
+
+## Task 15 - InstallationService + ModStructureDetector + ArchiveResolver + ABI wiring
+
+Milestone 7 completes. `src/InstallationService.hpp`/`.cpp` (682 LOC) ->
+`src/installation_service.rs`, `src/ModStructureDetector.hpp`/`.cpp` (148) ->
+`src/mod_structure_detector.rs`, `src/FomodArchiveResolver.hpp`/`.cpp` (98) ->
+`src/archive_resolver.rs`, plus the `install` / `installWithConfig` /
+`resolveModArchive` wiring in `capi.rs`. With this task every one of the eight
+C ABI exports is backed by real engine code; the only remaining hole is logging
+(Task 17).
+
+Module naming: the plan's architecture sketch spells these `archive_resolver.rs`
+and `mod_structure_detector.rs`, while the crate's other modules mirror their C++
+TU name verbatim (`FomodArchiveResolver.cpp` would give
+`fomod_archive_resolver.rs`). The sketch is explicitly "e.g."; the plan's own
+names were kept and the mapping is stated in each module's header.
+
+### API mapping (C++ -> Rust)
+
+| C++ | Rust |
+| --- | --- |
+| `InstallationService::install_mod` | `InstallationService::install_mod` |
+| `InstallationService::find_fomod_folder` | `find_fomod_folder` (free fn) |
+| `InstallationService::handle_non_fomod_install` | `handle_non_fomod_install` (free fn) |
+| `InstallationService::handle_fomod_install` | `handle_fomod_install` (free fn) |
+| `InstallationService::resolve_json_path` | `resolve_json_path` (free fn) |
+| `ModStructureDetector::has_mod_structure` | `has_mod_structure` |
+| `ModStructureDetector::find_main_mod_folders` | `find_main_mod_folders` |
+| `mo2core::resolve_mod_archive` | `resolve_mod_archive` |
+| the inline candidate vector (`FAR:26-44`) | `build_candidates` (extracted, see below) |
+
+The private members become free functions so the in-module tests can drive each
+stage directly, the same shape Task 12 used for `FomodInferenceService`.
+`build_candidates` is a Rust-only split: it takes the downloads directory as a
+parameter instead of reading `SALMA_DOWNLOADS_PATH`, so the search ORDER is
+testable without mutating process-global environment state, which would race the
+other tests in the same binary.
+
+### Exceptions-return-Result contract
+
+The C++ throws `std::runtime_error` for every fatal condition and
+`CApi::install` returns `e.what()` verbatim. `install_mod` returns
+`Result<String, InstallError>` where `InstallError` is a newtype over the exact
+`what()` string, and `capi` hands it straight back. The seven salma-authored
+messages are byte-exact:
+
+| C++ site | Message |
+| --- | --- |
+| `IS:45` | `Archive file not found: {path}` |
+| `IS:126` | `Install aborted: disk full while copying files. Free space and retry.` |
+| `IS:257` | `Multiple mod folders detected but no moduleName in JSON to disambiguate.` |
+| `IS:275` | `moduleName '{lowercased}' did not match any folder.` |
+| `IS:276` | `moduleName '{lowercased}' matched multiple folders.` |
+| `IS:319` | `Cannot parse XML ({description})` |
+| `IS:413` | `Module-level dependencies not met - installation cannot proceed` |
+
+Messages that originate in a LIBRARY (bit7z / libarchive extraction failures,
+pugixml's `xml_parse_result::description()`, `std::filesystem_error`) cannot be
+byte-matched: the Rust backends carry their own wording. The FAILURE is parity,
+the TEXT is not. This is visible to a caller only as a different human-readable
+error string, never as a different success/failure verdict.
+
+### Accepted divergences (Task 15)
+
+- **`parent_path` trailing separator - FIXED, not accepted.** Worth recording
+  because `Path::parent()` is the obvious and WRONG mapping. C++ path iteration
+  appends an empty final element for a trailing separator, so
+  `parent_path("C:\MO2\mods\")` is `"C:\MO2\mods"`; Rust's `.parent()` discards
+  the separator and yields `"C:\MO2"`, one level too high, silently shifting
+  candidates 4-6 of the resolver chain. Callers do not normalize
+  (`Mo2FomodController.cpp:439`, `scripts/mo2-salma.py:931`), so this was
+  reachable. `archive_resolver::parent_path` models the C++ rule and is pinned
+  by `parent_path_keeps_the_directory_when_it_ends_in_a_separator` and
+  `trailing_separator_mods_dir_shifts_the_whole_chain`.
+- **UNC root-name decomposition is NOT modeled.** MSVC's `_Parse_root_name`
+  treats `\\server` as the root name; Rust's `Prefix::UNC` claims
+  `\\server\share`, so a UNC `mods_dir` decomposes differently. No caller
+  produces one and a UNC MO2 mods directory is exotic. Verbatim `\\?\` paths are
+  likewise out of scope.
+- **Malformed selections JSON yields a NULL document, not a partial one.**
+  nlohmann's DOM parser writes the successfully parsed prefix into the target
+  before throwing, so the C++ `config` can be PARTIALLY populated after the
+  caught `parse_error` (`IS:190-206`, `:324-341`). `crate::json::parse` is
+  all-or-nothing, so the port uses `Value::Null`. Observable only for a
+  truncated document whose valid prefix already carried `moduleName` /
+  `gamePath` / `gameVersion` / a usable `steps` array. Reproducing it would mean
+  emulating nlohmann's incremental DOM construction.
+- **`fs::exists` error handling.** The C++ uses throwing overloads: in
+  `ModStructureDetector::has_mod_structure` a non-not-found error propagates and
+  aborts the enclosing scan, and in the resolver a throwing candidate aborts the
+  whole chain (caught at `CApi.cpp:158`), potentially masking a later candidate
+  that would have hit. `Path::exists()` reports `false` for every error and both
+  loops continue. Unreachable for well-formed inputs; modeling it would require
+  mapping raw OS error codes.
+- **`fs::relative` vs lexical prefix strip** in the installed-file scan: the C++
+  RESOLVES symlinks, the port strips a prefix lexically. Same divergence already
+  recorded for the Task 12 scan.
+- **Non-ASCII paths.** MSVC constructs `fs::path` from a narrow `std::string`
+  through the ACTIVE ANSI CODE PAGE, so a UTF-8 path arriving over the C ABI is
+  mangled by the C++ DLL under a non-UTF-8 ACP and such archives fail to resolve
+  or install. Rust keeps the UTF-8 bytes and converts to UTF-16 correctly, so it
+  SUCCEEDS where C++ fails. A behavioral superset, not parity; deliberately not
+  reproduced.
+- **Invalid UTF-8 at the boundary** maps to `Unknown fatal error during
+  installation` for install and `""` for resolve, where C++ forwards the raw
+  bytes. Pre-existing Milestone-1 divergence, now also applied to `jsonPath`.
+- **OOM.** `_strdup` can return NULL, which the Python consumer maps to `""`;
+  `CString::into_raw` cannot, so Rust aborts instead. Unreachable in practice.
+
+### C++ bugs and doc drift reproduced, not fixed
+
+- **`installed_files` is populated with ORIGINAL-CASE relative paths**
+  (`IS:395-397` applies only backslash -> slash), but
+  `FomodDependencyEvaluator::evaluate_file_dependency` looks them up through
+  `normalize_path`, which lowercases. Any installed file whose relative path is
+  not already all-lowercase can therefore NEVER match a `fileDependency`, so
+  re-install detection silently falls through to the archive-root probe. Latent
+  C++ bug, reproduced. Pinned by
+  `installed_file_scan_preserves_case_and_uses_forward_slashes`. Do NOT "fix"
+  it: lowercasing would flip fileDependency results on re-installs and change
+  which files get installed.
+- **`find_fomod_folder` has NO shallowest-path preference**, unlike
+  `FomodInferenceService.cpp:850-853` which explicitly tracks `best_depth` with
+  the comment "prefer shallowest path". Install takes the first pre-order DFS
+  hit. For a multi-FOMOD archive, INFER and INSTALL can therefore disagree about
+  which `ModuleConfig.xml` is authoritative. Reproduced.
+- **`src_base` and `context.archive_root` diverge for a nested FOMOD**
+  (`IS:306` vs `:345`), so a `fileDependency` resolves against the extraction
+  root while file copies source from the fomod's parent. Reproduced; the two
+  roots are deliberately not unified.
+- **The moduleName guard is a WEAKER hand-rolled duplicate of
+  `is_safe_mod_name`** (`IS:209-235` vs `Utils.cpp:214-256`, whose comment even
+  says "Mirrors the list in InstallationService.cpp"). It misses the empty,
+  whitespace, absolute, dot, and trailing-dot rejections, so a moduleName of `.`
+  or a space-padded name survives. The port calls neither `is_safe_mod_name` nor
+  `is_safe_destination` here - using them would reject inputs the C++ accepts.
+- **The `..` rejection is a raw substring search** over the lowercased name, so
+  a benign `up..down` is rejected. Reproduced.
+- **`resolve_json_path` does ZERO validation of a caller-supplied path** - no
+  existence, extension, `is_inside`, or traversal check (`IS:473-475`). The
+  `is_inside` guard applies only to the DERIVED path, where it is nearly always
+  trivially true. `InstallationService.hpp:180-181` claims it "Validates with
+  is_inside" without that qualification. All caller-side validation lives in
+  `InstallationController.cpp:483-513`, which is mo2-server, NOT part of this
+  port. Reproduced.
+- **A bare-filename `archive_path` derives a RELATIVE JSON path** resolved
+  against the process CWD, and skips the `is_inside` guard entirely because
+  `parent_dir` is empty (`IS:479-490`). Reproduced.
+- **`fs::path::stem` strips only the LAST extension**, so `mod.tar.gz` derives
+  `mod.tar.json`. Rust's `file_stem()` matches.
+- **The temp directory LEAKS when either `create_directories` fails**, because
+  both run before the `try` (`IS:60`, `:65` vs `try` at `:68`). Reproduced: the
+  port returns before its cleanup for the same two calls.
+- **`has_mod_structure` probes with `fs::exists`, not `is_directory`**, so a
+  plain FILE named `textures` marks a directory as a mod root
+  (`ModStructureDetector.cpp:29`). The header describes it as a folder check.
+  Reproduced and pinned by `a_file_named_like_a_mod_folder_also_counts`.
+- **`find_main_mod_folders` returns the PARTIAL list** collected before a
+  filesystem error, because `results` is declared outside the `try`
+  (`MSD.cpp:38` vs `:41`). `ModStructureDetector.hpp:78-79` claims it "Returns
+  empty on filesystem iteration errors". Code wins; reproduced.
+- **`InstallationService.hpp:91` lists "Invalid JSON in selections file" as a
+  FATAL error**, but the code CATCHES `json::parse_error` and only logs a
+  warning (`IS:195-199`, `:334-338`). Code wins; a malformed selections file is
+  not fatal. Pinned by `malformed_json_config_reads_as_null_not_an_error`.
+- **`CApi.hpp:252-256` documents `installSucceeded` as "true if the last result
+  was a valid mod path"**, but `CApi.cpp:51-53` / `:87-89` store `true`
+  unconditionally on the non-throwing return WITHOUT inspecting the string. The
+  two agree only because `install_mod` returns `mod_path` on every non-throwing
+  path; they diverge for `Ok("")`, reachable by passing an empty `modPath`
+  (`create_directories("")` does not throw, and Rust's `create_dir_all("")` is
+  likewise `Ok`). The port implements the CODE predicate: the flag is true iff
+  `install_mod` returned `Ok(_)`, whatever the value.
+- **`CApi.hpp:177-182` claims an empty `jsonPath` means "optional steps are
+  skipped because no selections exist"**, but an empty `json_path` triggers the
+  archive-stem derivation in `resolve_json_path`, so an archive with a sibling
+  `<stem>.json` is installed WITH those selections. Code wins.
+- **`resolveModArchive` null-checks only two of its three pointers**: a NULL
+  `modsDir` is coerced to an empty path while a NULL `installationFile` or
+  `modFolder` short-circuits to `""` (`CApi.cpp:147-150` vs `:155`). Asymmetric
+  but intentional per the header; reproduced exactly.
+- **`FomodArchiveResolver.hpp:20-29` advertises a 6-step "first hit wins" chain,
+  but step 1 is an EARLY RETURN**: an absolute-but-missing `archive_value`
+  returns empty without evaluating steps 2-6. No observable consequence (an
+  absolute right-hand side replaces the base in every join, so all five
+  candidates would be identical and would all miss), but the structure differs
+  from the doc. Pinned by `absolute_missing_value_does_not_fall_through`.
+- **`mod_folder` is joined with NO emptiness guard while `mods_dir` has one**
+  (`FAR:34` vs `:35`), so an empty `modFolder` turns candidate 3 into a probe
+  relative to the process CWD - non-deterministic inside a DLL loaded by MO2.
+  Reproduced; no guard added.
+- **`FomodArchiveResolver.hpp:35` claims an "Absolute resolved path on hit"**,
+  but nothing absolutizes: a relative `mod_folder` or `mods_dir` yields a
+  relative result handed back through the ABI as such. Reproduced.
+- **A first-level `mods_dir` like `C:\mods` makes candidate 6 byte-identical to
+  candidate 5**, because C++ `parent_path("C:\")` is `"C:\"` and keeps
+  `has_parent_path()` true. A redundant stat, harmless. Pinned by
+  `candidate_order_respects_empty_and_shallow_mods_dir`.
+
+### The plugin's legacy fallback is dead code (engine finding)
+
+`scripts/mo2-salma.py:238` gates on `hasattr(lib, "resolveModArchive")`, and
+`hasattr` on a ctypes `CDLL` resolves the symbol via `GetProcAddress`. Because
+the Rust DLL genuinely EXPORTS the symbol, the plugin has always taken the DLL
+branch and returned whatever it got - which, while the export was a stub, was
+`""` for every input. The `SALMA_DOWNLOADS_PATH` fallback at `:246-254` is
+therefore unreachable and could not rescue it. A stub that returns a
+valid-looking empty answer is worse than a missing export, which would at least
+have failed the `hasattr` check and reached the fallback. Fixed by implementing
+the export; `scripts/` is a never-modify path and was not touched.
+
+### Verification
+
+- 41 new unit tests: 16 in `installation_service.rs`, 16 in `archive_resolver.rs`,
+  9 in `mod_structure_detector.rs`, bringing the `src/lib.rs` unittest binary from
+  476 to 517 (587 total across the workspace). The three obsolete Milestone-1
+  stub assertions in `capi.rs` were replaced with real ones, including an
+  end-to-end install through the ABI that builds a zip fixture, installs it,
+  asserts the returned string is `mod_path`, asserts the success flag flips true,
+  and asserts the flag is NOT cleared by a subsequent `inferFomodSelections`.
+- **Differential install gate (the real oracle).** Both DLLs loaded in one
+  process via ctypes, each curated case installed with each DLL from the same
+  archive and the same committed schema-v2 `expected.json` selections, then the
+  produced trees diffed by relative path and size:
+  **16 SAME, 0 DIFF, 0 SKIP** across all 16 committed cases, covering zip / 7z /
+  rar, the non-FOMOD content-root fallback (`sevenz_empty_no_moduleconfig`), and
+  the 177-file 11-step FOMOD (`zip_11step_cbbe_3ba`). Each DLL frees only its own
+  strings, since the two use different allocators. The script is scratch, not
+  committed; Task 16 turns this into `rust/tools/run_harness.py`.
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
+  `cargo test --release` (587 passed, 0 failed) all clean; `smoke_ctypes.py`
+  passes against the release DLL.
