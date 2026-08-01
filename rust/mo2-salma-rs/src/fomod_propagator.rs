@@ -49,6 +49,7 @@ use crate::fomod_csp_types::InferenceOverrides;
 use crate::fomod_dependency_evaluator::evaluate_plugin_type;
 use crate::fomod_ir::{FomodGroupType, FomodInstaller, compute_flat_starts};
 use crate::inference_diagnostics::{ReasonCode, ReasonDetail};
+use crate::logger::Logger;
 use crate::types::{FomodDependencyContext, PluginType};
 
 /// Output of the constraint propagation pre-pass. Mirror of
@@ -448,9 +449,10 @@ pub fn propagate(
 
     result.fully_resolved = total_resolved == total_groups;
 
-    // The C++ emits a final `logger.log("[propagate] resolved N/M groups,
-    // fully_resolved=...")` here; there is no Rust logger until Task 17, so the
-    // log site is dropped (documented in PARITY-NOTES.md "Task 7").
+    let fully_resolved = result.fully_resolved;
+    Logger::instance().log(&format!(
+        "[propagate] resolved {total_resolved}/{total_groups} groups, fully_resolved={fully_resolved}"
+    ));
 
     result
 }

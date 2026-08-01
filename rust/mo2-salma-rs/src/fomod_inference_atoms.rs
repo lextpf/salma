@@ -8,9 +8,9 @@
 //! Resolves IR file entries into concrete [`FomodAtom`]s by matching against
 //! the archive entry list, builds the destination index and exclusion set the
 //! solver scores against, builds the [`TargetTree`] from the installed files,
-//! and assembles the schema-v2 inference response. C++ log_warning call sites
-//! (unsafe destinations, out-of-bounds selection indices, output-tree cap) emit
-//! nothing until the Task 17 logger lands; each is marked with a comment.
+//! and assembles the schema-v2 inference response. The C++ `log_warning` call
+//! sites (unsafe destinations, out-of-bounds selection indices, output-tree
+//! cap) are reproduced verbatim.
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,6 +23,7 @@ use crate::inference_diagnostics::{
     serialize_confidence, serialize_reason, serialize_run_diagnostics,
 };
 use crate::json::Value;
+use crate::logger::Logger;
 use crate::utils::{is_safe_destination, normalize_path};
 
 /// Inference-side wrapper for path-traversal validation. Thin forwarder to
@@ -40,7 +41,7 @@ pub fn is_safe_dest(dest: &str) -> bool {
 /// must be lexicographically sorted) to find all archive members under the
 /// source directory, producing one atom per match. For single-file entries,
 /// produces exactly one atom. Unsafe destinations (path traversal) are
-/// skipped (C++ logs a warning; no logging until Task 17). A top-level
+/// skipped with a warning. A top-level
 /// `meta.ini` destination is skipped as well, mirroring
 /// [`build_target_tree`]'s exclusion of the installed-side MO2 metadata file.
 ///
@@ -97,8 +98,9 @@ pub fn expand_entry(
                 continue;
             }
             if !is_safe_dest(&norm_dest) {
-                // C++ logs "[infer] Skipping atom with unsafe destination";
-                // no logging until Task 17.
+                Logger::instance().log_warning(&format!(
+                    "[infer] Skipping atom with unsafe destination: {norm_dest}"
+                ));
                 continue;
             }
 
@@ -125,8 +127,10 @@ pub fn expand_entry(
             return;
         }
         if !is_safe_dest(&entry.destination) {
-            // C++ logs "[infer] Skipping atom with unsafe destination";
-            // no logging until Task 17.
+            Logger::instance().log_warning(&format!(
+                "[infer] Skipping atom with unsafe destination: {}",
+                entry.destination
+            ));
             return;
         }
 
@@ -411,9 +415,8 @@ fn lookup_step_diag(diag: &InferenceDiagnostics, s: usize) -> Option<&StepDiagno
 ///
 /// Walks the installer's step/group/plugin hierarchy and cross-references the
 /// solver's 3-D boolean selection grid to classify each plugin as selected or
-/// deselected. Out-of-bounds selection indices default to `false` (deselected);
-/// the C++ logs a warning there, which the port omits until the Task 17 logger
-/// lands.
+/// deselected. Out-of-bounds selection indices log a warning and default to
+/// `false` (deselected).
 ///
 /// The returned object carries `schema_version`, `steps`, and `diagnostics`;
 /// [`add_output_tree`] adds the `outputTree` sibling afterward (its C++ home is
@@ -457,13 +460,24 @@ pub fn assemble_json(
             let mut j_selected = Value::array();
             let mut j_deselected = Value::array();
             for (pi, plugin) in group.plugins.iter().enumerate() {
-                let sel = result
+                // The C++ warns only on the out-of-bounds branch, so the lookup
+                // keeps the Option instead of collapsing to `unwrap_or(false)`.
+                let sel = match result
                     .selections
                     .get(si)
                     .and_then(|g| g.get(gi))
                     .and_then(|p| p.get(pi))
                     .copied()
-                    .unwrap_or(false);
+                {
+                    Some(value) => value,
+                    None => {
+                        Logger::instance().log_warning(&format!(
+                            "[infer] assemble_json: selection index out of bounds \
+                             (step={si}, group={gi}, plugin={pi}), defaulting to false"
+                        ));
+                        false
+                    }
+                };
                 let plugin_diag = lookup_plugin_diag(diagnostics, si, gi, pi);
                 let j_plugin = build_plugin_object(&plugin.name, sel, plugin_diag);
                 if sel {
@@ -507,7 +521,9 @@ pub fn add_output_tree(out: &mut Value, sim: &SimulatedTree) {
     let truncated = total > MAX_OUTPUT_TREE_ENTRIES;
     if truncated {
         entries.truncate(MAX_OUTPUT_TREE_ENTRIES);
-        // The C++ logs a cap warning here; no logger until Task 17.
+        Logger::instance().log_warning(&format!(
+            "[infer] Output tree capped at {MAX_OUTPUT_TREE_ENTRIES} of {total} entries"
+        ));
     }
 
     let mut tree = Value::array();

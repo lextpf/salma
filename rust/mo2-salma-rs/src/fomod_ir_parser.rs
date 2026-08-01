@@ -42,6 +42,7 @@ use crate::fomod_ir::{
     FomodGroup, FomodInstaller, FomodPlugin, FomodStep, FomodTypePattern, parse_condition_op,
     parse_group_type,
 };
+use crate::logger::Logger;
 use crate::utils::{
     get_ordered_nodes, normalize_path, parse_plugin_type_string, resolve_file_destination,
     xml_bool_attribute_true,
@@ -912,7 +913,10 @@ fn compile_condition_impl(deps_node: Node, depth: i32) -> FomodCondition {
 
     if depth > MAX_DEPENDENCY_DEPTH {
         // Bail out with an always-false empty Or to safely reject overly deep
-        // conditions. (C++ logs a warning here; no logger until Task 17.)
+        // conditions.
+        Logger::instance().log_warning(
+            "[fomod] Condition nesting exceeds maximum depth, treating as always-false",
+        );
         cond.op = FomodConditionOp::Or;
         return cond;
     }
@@ -926,12 +930,15 @@ fn compile_condition_impl(deps_node: Node, depth: i32) -> FomodCondition {
         }
         child_count += 1;
         if child_count > MAX_CONDITION_CHILDREN {
-            // C++ logs a truncation warning here; no logger until Task 17.
+            Logger::instance().log_warning(&format!(
+                "[fomod] Condition node has more than {MAX_CONDITION_CHILDREN} children, truncating"
+            ));
             break;
         }
 
         let mut leaf = FomodCondition::default();
-        match node_child.tag_name().name() {
+        let child_name = node_child.tag_name().name();
+        match child_name {
             "flagDependency" => {
                 leaf.r#type = FomodConditionType::Flag;
                 leaf.flag_name = attr_or(node_child, "flag", "").to_string();
@@ -975,7 +982,14 @@ fn compile_condition_impl(deps_node: Node, depth: i32) -> FomodCondition {
                     .push(compile_condition_impl(node_child, depth + 1));
             }
             _ => {
-                // Unknown condition element skipped (C++ logs a warning).
+                // `child_name` is roxmltree's LOCAL name, while the C++ logs
+                // pugixml's qualified name (prefix included). Every match arm
+                // above compares against the same local name, so the port is
+                // self-consistent; only a prefixed unknown element renders
+                // differently (see PARITY-NOTES).
+                Logger::instance().log_warning(&format!(
+                    "[fomod] Unknown condition element \"{child_name}\" skipped"
+                ));
             }
         }
     }
