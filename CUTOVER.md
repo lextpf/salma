@@ -25,15 +25,15 @@ C++ `mo2-salma.dll`, and all eight are backed by real engine code.
 Evidence, all reproducible from this repo:
 
 - `cargo test --release` - 594 tests, 0 failures.
-- `python rust/tools/compare_infer.py rust/target/release/mo2_salma_rs.dll --curated`
+- `python tools/compare_infer.py target/release/mo2_salma_rs.dll --curated`
   - 1 EXACT / 15 METRICS_EQUAL / 0 DIVERGE. Full corpus: 197 fixtures, 0 DIVERGE.
-- `python rust/tools/run_harness.py` - the repo's own `test_all.py` over corpus
+- `python tools/run_harness.py` - the repo's own `test_all.py` over corpus
   mods 1-300: 52 passed, 0 failed, and **zero per-mod disagreements** against
   the C++ baseline. `--one` runs `test_one.py --full` (byte-for-byte) and passes
   on one mod per archive format.
-- `python rust/tools/smoke_ctypes.py rust/target/release/mo2_salma_rs.dll` - raw
+- `python tools/smoke_ctypes.py target/release/mo2_salma_rs.dll` - raw
   ABI surface.
-- `python rust/tools/smoke_plugin.py` - the MO2 plugin's OWN `find_dll` /
+- `python tools/smoke_plugin.py` - the MO2 plugin's OWN `find_dll` /
   `load_dll` / `_configure_dll` / `_check_api_version`, run verbatim against the
   packaged DLL. 12 checks.
 
@@ -102,7 +102,7 @@ divergences" and the per-task divergence sections.
 .\build.bat
 ```
 
-Formats, lints, builds release, and stages `rust\target\package\mo2-salma.dll`,
+Formats, lints, builds release, and stages `target\package\mo2-salma.dll`,
 printing its SHA-256. The rename from `mo2_salma_rs.dll` happens in
 `package.py` and only there: during the parity phase the two names are kept
 distinct so a stray copy can never be mistaken for the C++ build.
@@ -110,7 +110,7 @@ distinct so a stray copy can never be mistaken for the C++ build.
 To stage without the fmt/clippy/build steps (an existing release build):
 
 ```powershell
-python rust\tools\package.py --no-build
+python tools\package.py --no-build
 ```
 
 ### 2. Back up the deployed C++ DLL
@@ -127,7 +127,7 @@ Do not skip this. It is the rollback.
 .\deploy.bat
 ```
 
-`deploy.bat` now prefers `rust\target\package\mo2-salma.dll` over the C++
+`deploy.bat` now prefers `target\package\mo2-salma.dll` over the C++
 `build\bin\Release\mo2-salma.dll`, so a plain run ships the Rust engine and also
 refreshes `scripts\mo2-salma.py` in the plugins directory. It prints a cutover
 warning before copying.
@@ -135,14 +135,14 @@ warning before copying.
 The equivalent direct copy, if you want to leave the Python plugin alone:
 
 ```powershell
-copy /Y rust\target\package\mo2-salma.dll "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll"
+copy /Y target\package\mo2-salma.dll "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll"
 ```
 
 **To deploy the C++ build instead**, delete or rename the staged Rust artifact
 first, since it takes precedence:
 
 ```powershell
-del rust\target\package\mo2-salma.dll
+del target\package\mo2-salma.dll
 .\deploy.bat
 ```
 
@@ -154,7 +154,7 @@ other name or directory is still visible to `git add`.
 ### 4. Verify it took
 
 ```powershell
-python rust\tools\smoke_plugin.py --dll "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll"
+python tools\smoke_plugin.py --dll "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll"
 ```
 
 Then confirm by hash and by log, which is what actually distinguishes the two

@@ -1,7 +1,7 @@
 # PARITY-NOTES
 
 Running log of behavioral parity decisions and divergences between the Rust
-port (`rust/`, DLL `mo2_salma_rs.dll`) and the C++ source of truth
+port (the crate, DLL `mo2_salma_rs.dll`) and the C++ source of truth
 (`src/`, DLL `mo2-salma.dll`). The C++ engine is authoritative; every entry
 records where the Rust side matches it and where it intentionally does not yet.
 
@@ -117,7 +117,7 @@ produces (it encodes paths as UTF-8).
 ## Task 3 - Utils port
 
 Port of `src/Utils.hpp` + `src/Utils.cpp` to
-`rust/src/utils.rs` (plus `types.rs` for `PluginType` from
+`src/utils.rs` (plus `types.rs` for `PluginType` from
 `src/Types.hpp`). All 59 TEST()/TEST_F() cases in `tests/utils_test.cpp` are
 ported 1:1 into `utils.rs`'s `#[cfg(test)]` module (snake_case names, same
 inputs and expected outputs), plus 16 Rust-only tests covering the functions
@@ -143,7 +143,7 @@ the C++ suite does not exercise directly.
   committed bytes of two golden `ModuleConfig.xml` files
   (`zip_exactlyone_mu_joint_fix` -> `91d7af004eea83d1`,
   `sevenz_3step_tk_dodge` -> `777a83236a2c8541`) against constants computed
-  once with `rust/tools/gen_golden.py`'s `fnv1a_hex` reference.
+  once with `tools/gen_golden.py`'s `fnv1a_hex` reference.
 - `FomodCSPPrecompute.cpp hash_combine` -> `utils::hash_combine`: this helper
   lives in the CSP module in C++, not in Utils; it is hosted in `utils.rs` so
   Task 8 can consume it. Exact formula
@@ -272,8 +272,8 @@ the C++ suite does not exercise directly.
 
 ## Task 4 - FomodIR + XML parser
 
-Port of `src/FomodIR.hpp` to `rust/src/fomod_ir.rs` and
-`src/FomodIRParser.hpp`/`.cpp` to `rust/src/fomod_ir_parser.rs`,
+Port of `src/FomodIR.hpp` to `src/fomod_ir.rs` and
+`src/FomodIRParser.hpp`/`.cpp` to `src/fomod_ir_parser.rs`,
 including the pugixml document-load semantics the C++ callers rely on
 (`doc.load_buffer` with DEFAULT options at `src/FomodInferenceService.cpp:908`,
 `doc.load_file` at `src/InstallationService.cpp:316`). The reference pugixml
@@ -335,7 +335,7 @@ behavior below was read from that exact source, not from docs.
   as UTF-8), matching encoding_auto. Validated by a probe-table unit test
   mirroring the C++ branch order and an identical-parse test across UTF-8,
   UTF-8 BOM, UTF-16LE/BE (BOM and BOM-less), and UTF-32LE/BE.
-- Corpus scan (committed `rust/tests/golden/cases/*/ModuleConfig.xml`, 15
+- Corpus scan (committed `tests/golden/cases/*/ModuleConfig.xml`, 15
   files; the gitignored `full/` tree has no ModuleConfig.xml on this machine,
   only JSON fixtures): 11 UTF-16 LE with BOM (`FF FE`), 2 UTF-8 with BOM
   (sevenz_4step_lewdmarks, sevenz_9step_the_pure), 2 UTF-8 without BOM
@@ -608,7 +608,7 @@ behavior below was read from that exact source, not from docs.
 
 ### Fixture tests (`tests/fomod_ir_fixtures.rs`)
 
-- All 15 committed `rust/tests/golden/cases/*/ModuleConfig.xml` parse through
+- All 15 committed `tests/golden/cases/*/ModuleConfig.xml` parse through
   `parse_module_config` with the case's REAL archive prefix, derived from
   case.json `module_config_entry` exactly as
   `FomodInferenceService.cpp:878-882` does (normalize, strip the
@@ -838,7 +838,7 @@ each, naming the C++ ground truth, the Rust site, and the validation used.
 ## Task 5 - Dependency evaluator + atom expansion
 
 Port of `src/FomodDependencyEvaluator.hpp`/`.cpp` to
-`rust/src/fomod_dependency_evaluator.rs`, `src/FomodAtom.hpp` to
+`src/fomod_dependency_evaluator.rs`, `src/FomodAtom.hpp` to
 `fomod_atom.rs`, and `src/FomodInferenceAtoms.hpp`/`.cpp` to
 `fomod_inference_atoms.rs`, plus `FomodDependencyContext` (`src/Types.hpp:85`)
 added to `types.rs`. 67 new tests: 38 evaluator micro-tests, 4 atom-datatype
@@ -1716,7 +1716,7 @@ resumes at Task 9.
 ## Task 9 - CSP solver phases
 
 Port of `src/FomodCSPSolver.cpp` + `src/FomodCSPSolverPhases.cpp` to
-`rust/src/fomod_csp_solver.rs`. The C++ splits the solver core and
+`src/fomod_csp_solver.rs`. The C++ splits the solver core and
 the five phase functions across two TUs; the port folds them into one module so
 the large private helper set (rebuild_flags, evaluate_candidate, lower_bound,
 contested_signature, the backtracker, etc.) stays module-private. Only
@@ -2195,7 +2195,7 @@ assumption (central-directory order is preserved verbatim).
 directives for the Win32 import libraries the sources need. Without them the
 final link fails with ~13 LNK2019 unresolved externals (`RegOpenKeyExW`,
 `CryptAcquireContextW`, `OpenProcessToken`, `AdjustTokenPrivileges`,
-`SetFileSecurityW`, ...). `rust/build.rs` emits
+`SetFileSecurityW`, ...). `build.rs` emits
 `cargo:rustc-link-lib=advapi32` and `cargo:rustc-link-lib=user32`, gated to
 Windows via `CARGO_CFG_TARGET_OS` (the correct TARGET signal in a build script).
 
@@ -2685,7 +2685,7 @@ missing-dir. `src/json.rs`: strict number grammar, `u64` round-trip, raw control
 bytes / signed `\u`, and the depth cap (at the cap, past it, a 100k-deep hostile
 blob, and a wide-but-shallow document proving depth is per-path).
 `tests/fomod_inference_service_fixtures.rs` drives the whole orchestration over
-the committed corpus cases. The real gate remains `rust/tools/compare_infer.py`.
+the committed corpus cases. The real gate remains `tools/compare_infer.py`.
 
 ## Task 13 - Port the fomod_inference GoogleTest suite
 
@@ -2799,7 +2799,7 @@ side changes.
 ## Task 14 - FileOperations + FomodService install replay
 
 Milestone 7 begins. `src/FileOperations.hpp`/`.cpp` ->
-`rust/src/file_operations.rs`, `src/FomodService.hpp`/`.cpp` ->
+`src/file_operations.rs`, `src/FomodService.hpp`/`.cpp` ->
 `src/fomod_service.rs`, and the `FileOperation` / `FileOpType` / `InstallResult`
 structs from `src/Types.hpp` -> `src/types.rs`. This is the install REPLAY: it
 turns a parsed `FomodInstaller` IR plus a JSON selections document into the
@@ -3262,14 +3262,14 @@ the export; `scripts/` is a never-modify path and was not touched.
   rar, the non-FOMOD content-root fallback (`sevenz_empty_no_moduleconfig`), and
   the 177-file 11-step FOMOD (`zip_11step_cbbe_3ba`). Each DLL frees only its own
   strings, since the two use different allocators. The script is scratch, not
-  committed; Task 16 turns this into `rust/tools/run_harness.py`.
+  committed; Task 16 turns this into `tools/run_harness.py`.
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and
   `cargo test --release` (587 passed, 0 failed) all clean; `smoke_ctypes.py`
   passes against the release DLL.
 
 ## Task 16 - Round-trip validation with the Rust DLL
 
-Milestone 7 gate. `rust/tools/run_harness.py` drives the repo's UNMODIFIED
+Milestone 7 gate. `tools/run_harness.py` drives the repo's UNMODIFIED
 `test_all.py` / `test_one.py` against the Rust DLL and, for comparison, against
 the C++ DLL.
 
@@ -3283,8 +3283,8 @@ the C++ DLL.
 
 On a developer box candidate 1 exists and holds the DEPLOYED C++ DLL, so a naive
 run silently validates the wrong binary. `run_harness.py` copies the DLL under
-test to `rust/target/harness/salma/mo2-salma.dll` and points `SALMA_DEPLOY_PATH`
-at `rust/target/harness` for the SUBPROCESS ONLY, so candidate 1 becomes the
+test to `target/harness/salma/mo2-salma.dll` and points `SALMA_DEPLOY_PATH`
+at `target/harness` for the SUBPROCESS ONLY, so candidate 1 becomes the
 staged file. No repo script is touched and no env change escapes the child.
 
 Which binary actually ran is proven three ways, not assumed:
@@ -3393,7 +3393,7 @@ harness result, stated rather than papered over.
 ## Task 17 - Logger parity, packaging, CUTOVER.md
 
 Milestone 8. `src/Logger.hpp`/`.cpp` (593 LOC) -> `src/logger.rs`, plus
-`rust/tools/package.py`, `rust/tools/smoke_plugin.py`, and `rust/CUTOVER.md`.
+`tools/package.py`, `tools/smoke_plugin.py`, and `CUTOVER.md`.
 
 ### Logger mechanism (at parity)
 
@@ -3413,7 +3413,7 @@ Behaviors reproduced exactly:
   executable. MO2 runs as ModOrganizer.exe with the DLL under its plugins tree,
   so anchoring on the exe would put the log in the wrong place. Verified: a
   ctypes-driven install from a Python process wrote
-  `rust/target/release/logs/salma.log`, beside the DLL.
+  `target/release/logs/salma.log`, beside the DLL.
 - **Line format** `YYYY-MM-DD HH:MM:SS.mmm LEVEL message`, LOCAL time, zero
   padded in every field including 3-digit milliseconds. Diffed against real C++
   `build/bin/Release/logs/salma.log` lines; identical.
@@ -3587,8 +3587,8 @@ reader now, so the hack is unnecessary.
 
 ### Packaging
 
-`rust/tools/package.py` builds release and stages the DLL to
-`rust/target/package/mo2-salma.dll`, printing size and SHA-256. The rename from
+`tools/package.py` builds release and stages the DLL to
+`target/package/mo2-salma.dll`, printing size and SHA-256. The rename from
 `mo2_salma_rs.dll` happens ONLY here: during the parity phase the two names stay
 distinct so a stray copy can never be mistaken for the C++ build.
 `--keep-rust-name` skips the rename, `--no-build` stages an existing build.
@@ -3598,7 +3598,7 @@ data files and `logs/` is created next to the DLL on first use.
 
 ### Plugin-loader smoke test
 
-`rust/tools/smoke_plugin.py` copies `scripts/mo2-salma.py` VERBATIM into a
+`tools/smoke_plugin.py` copies `scripts/mo2-salma.py` VERBATIM into a
 staging tree (asserting a byte-identical copy), places the packaged DLL at the
 plugin's own first search candidate (`<plugin dir>/salma/mo2-salma.dll`), stubs
 `mobase` and `PyQt6` (MO2-only imports, stubbed at module scope so every line of
@@ -3652,33 +3652,49 @@ in parallel. Suite: 587 -> 594, 0 failures; `cargo fmt --check` and
 
 ## Layout, scripts and pipelines
 
-The crate was flattened to mirror the C++ side of the repo. It had been a
-one-member cargo workspace, which put sources two levels below `rust/`:
+The crate reached the repo root in two steps. It began as a one-member cargo
+workspace under `rust/`, which put sources three levels below the root:
 
-| Before | After |
-| --- | --- |
-| `rust/Cargo.toml` (workspace) + `rust/mo2-salma-rs/Cargo.toml` (package) | one `rust/Cargo.toml` |
-| `rust/mo2-salma-rs/src/` | `rust/src/` |
-| `rust/mo2-salma-rs/tests/` | `rust/tests/` |
-| `rust/mo2-salma-rs/build.rs` | `rust/build.rs` |
-| `rust/tests/golden/` | unchanged, now beside the tests that read it |
+| Originally | Then | Now |
+| --- | --- | --- |
+| `rust/Cargo.toml` (workspace) + `rust/mo2-salma-rs/Cargo.toml` (package) | one `rust/Cargo.toml` | `Cargo.toml` |
+| `rust/mo2-salma-rs/src/` | `rust/src/` | `src/`, beside the C++ |
+| `rust/mo2-salma-rs/tests/` | `rust/tests/` | `tests/`, beside the C++ |
+| `rust/mo2-salma-rs/build.rs` | `rust/build.rs` | `build.rs` |
+| `rust/tools/` | unchanged | `tools/` |
+| `rust/PARITY-NOTES.md`, `rust/CUTOVER.md` | unchanged | root |
 
-`rust/src` + `rust/tests` now matches the C++ `src` + `tests`. The two `tests/`
-directories merged cleanly: cargo only treats `.rs` files DIRECTLY under
-`tests/` as integration targets, so `tests/golden/` (data) and `tests/common/`
-(a shared module, not a target) are both ignored by the target scanner.
+`rust/` no longer exists. The two languages now share `src/` and `tests/`
+without colliding, because every tool is already extension-scoped: cargo reads
+only `*.rs`, CMake takes an explicit file list, and clang-format and doxide glob
+`*.cpp`/`*.hpp`. Since the port is file-for-file, `src/FomodService.cpp` and
+`src/fomod_service.rs` sort adjacently, which makes the mapping visible.
 
-Nothing outside the crate had to move. All five Python tools resolve from the
-REPO ROOT rather than the crate directory, so `rust/tools/`, `rust/target/` and
-the `rust/tests/golden` paths they reference were already correct.
+Merging the two `tests/` directories is safe for the same reason plus one more:
+cargo only treats `.rs` files DIRECTLY under `tests/` as integration targets, so
+`tests/golden/` (data) and `tests/common/` (a shared module) are skipped by the
+target scanner, and the C++ `tests/*.cpp` are invisible to it.
 
-Four crate-relative fixture paths did need fixing, and only one of them was
+The Python tools needed two rounds of fixing. In the first move nothing changed,
+because all of them resolve from the REPO ROOT rather than the crate directory.
+In the second they all broke at once: each walked up three parents to find the
+root (`tools/x.py` -> `rust/tools` -> `rust` -> root) and now needs two, and
+every `rust/` path segment inside them had to go.
+
+Four crate-relative fixture paths broke in the FIRST move, and only one was
 caught by a compile error - the other three were runtime `env!` joins that
-failed as a test assertion:
-`tests/common/mod.rs`, `tests/fomod_atoms_fixtures.rs`,
-`tests/fomod_ir_fixtures.rs` and `src/utils.rs` all joined
-`CARGO_MANIFEST_DIR` with `../tests/golden/cases`; with the manifest now at
-`rust/`, the `../` had to go.
+surfaced as a failing assertion. `tests/common/mod.rs`,
+`tests/fomod_atoms_fixtures.rs`, `tests/fomod_ir_fixtures.rs` and `src/utils.rs`
+all joined `CARGO_MANIFEST_DIR` with `../tests/golden/cases`; dropping the `../`
+fixed them. The second move needed no further change there, because the manifest
+and the corpus moved together.
+
+One real bug slipped through the second move and was caught in the Task 18
+review rather than by any gate: `deploy.bat` still pointed at
+`rust\target\package\mo2-salma.dll`. That path no longer exists, so the script
+would have fallen through to its C++ fallback and silently deployed the WRONG
+ENGINE. No test covers `deploy.bat` (it writes into a live MO2 install), which
+is exactly why it survived a green gate run.
 
 ### Scripts
 
@@ -3689,7 +3705,7 @@ gaining `rust-` siblings.
   -> `cargo build --release` -> `package.py --no-build`.
 - `test.bat` - `cargo test --release` -> `smoke_ctypes.py` -> `smoke_plugin.py`.
   All three are corpus-free; the corpus-backed checks are named in its header.
-- `deploy.bat` - prefers `rust/target/package/mo2-salma.dll`, falls back to the
+- `deploy.bat` - prefers `target/package/mo2-salma.dll`, falls back to the
   C++ `build/bin/Release/mo2-salma.dll`, and a repo-root `mo2-salma.dll` still
   overrides both. It now prints a cutover warning, because MO2 loads whatever
   sits at the deploy path and `getApiVersion` reports `1.2.0` for both engines.
@@ -3729,16 +3745,18 @@ Rust-only changes. README gains `rust` and `eslint` badges beside `build` and
 `sonar.yml` now scans BOTH engines. Three things were needed, and only the first
 is obvious:
 
-1. `sonar.sources=src,rust/src` and `sonar.tests=tests,rust/tests`.
+1. `sonar.sources` and `sonar.tests` cover Rust. After the root move both
+   languages live in `src/` and `tests/`, so the original single entries suffice.
 2. The Rust analyzer runs Clippy ITSELF (`sonar.rust.clippy.enabled` defaults
    to true) by shelling out to cargo, so the runner needs the toolchain plus the
    clippy component. `sonar.yml` installs them. Without this the scan does not
    fail, it silently reports zero Rust files, which reads as a clean pass.
 3. It looks for `Cargo.toml` in the PROJECT ROOT by default, and ours is at
-   `rust/Cargo.toml`, so `sonar.rust.cargo.manifestPaths` points at it
-   explicitly.
+   the crate manifest, so `sonar.rust.cargo.manifestPaths` names it explicitly.
+   That is the analyzer's own default now that `Cargo.toml` is at the root, but
+   it is stated anyway so a future move cannot silently drop Rust from the scan.
 
-`rust/tests/golden/**` is excluded: it is committed fixture DATA (XML and JSON),
+`tests/golden/**` is excluded: it is committed fixture DATA (XML and JSON),
 not code, and would otherwise be scanned as source.
 
 None of the three is verifiable from a local checkout - they need a real
