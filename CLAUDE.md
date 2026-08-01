@@ -16,7 +16,7 @@ End with omissions. After each task, state what you changed and what you intenti
 
 salma is a wizardless FOMOD installer, processor, and selection-inference engine for Skyrim modding (Mod Organizer 2 integration). C++23 backend + React frontend, Windows-only (MSVC 2022).
 
-On the `rust-core` branch the engine is being ported to Rust. Both engines are present: the Rust port is what the root scripts build and what ships, and the C++ in `src/` is retained as the parity oracle the port is validated against. See "The Rust port" below.
+The engine is Rust (`src/*.rs`, built to `mo2-salma.dll`). The C++ that remains in `src/*.cpp` is the Crow HTTP server behind the web dashboard, which the Rust port does not cover; it reaches the engine through the same C ABI the MO2 plugin uses. See "Architecture" below.
 
 ## Build, test, run
 
@@ -39,20 +39,20 @@ cargo test  --release   # 594 tests
 cargo clippy --all-targets --release -- -D warnings
 ```
 
-### Building the C++ side
+### Building the C++ server
 
-No script builds it any more. VCPKG_ROOT must be set (the CMake preset reads it for the toolchain). Dependencies are vcpkg manifest-mode (`vcpkg.json`) on the `x64-windows-static-md` triplet, supplied by the overlay in `cmake/`. First configure can take several minutes while vcpkg builds the cache.
+No script builds it any more. VCPKG_ROOT must be set (the CMake preset reads it for the toolchain). Dependencies are vcpkg manifest-mode (`vcpkg.json`) on the `x64-windows-static-md` triplet, supplied by the overlay in `cmake/`. Only Crow, nlohmann-json and gtest remain, so configure takes ~20s; libarchive, pugixml and bit7z went with the engine.
 
 ```powershell
 cmake --preset default                                    # Release configure (preset "debug" for Debug)
 cmake --build build --config Release                      # everything
-cmake --build build --config Release --target mo2-core    # the DLL (mo2-salma.dll), no HTTP
+cmake --build build --config Release --target salma-support # static helpers (Utils, Logger, SecurityContext)
 cmake --build build --config Release --target mo2-server  # the EXE (Crow HTTP server)
 cmake --build build --config Release --target salma_tests # GoogleTest binary
 .\build\bin\Release\mo2-server.exe                        # run the server on 127.0.0.1:5000
 ```
 
-Build outputs land in `build/bin/Release/`: `mo2-salma.dll`, `mo2-server.exe`, `salma_tests.exe`. You need this build for the parity tools (`tools/gen_golden.py`, `tools/run_harness.py`) which diff the Rust DLL against the C++ one.
+Build outputs land in `build/bin/Release/`: `mo2-server.exe`, `salma_tests.exe`, plus the copied `mo2-salma.dll`. `mo2-server` loads `mo2-salma.dll` at runtime; CMake copies it beside the exe from `target/package/` as a post-build step, so run `build.bat` before building the C++ or the dashboard will start and then fail every engine request.
 
 ### Tests
 
@@ -107,9 +107,9 @@ Start `mo2-server.exe` on :5000 before `npm run dev`, or every `/api/*` call the
 ## CI gates (must pass before merge)
 
 - `build.yml` is the primary gate and builds the RUST engine (the C++ is no longer built in CI): `cargo fmt --check`, `cargo clippy --all-targets --release -- -D warnings`, release build, `cargo test --release`, then the corpus-free Python checks (`package.py`, `smoke_ctypes.py`, `smoke_plugin.py`) and an artifact upload of the deployable `mo2-salma.dll`. Its second job builds the web dashboard (`npm run build` = tsc type-check then vite). Triggered by changes under `src/`, `tests/`, `tools/`, `web/`, the root cargo files, to `build.bat`/`test.bat`, or to `scripts/mo2-salma.py`.
-- `test.yml` runs `ctest --preset ci` and is now the ONLY workflow that builds the C++. It configures and builds independently, so it still works with the C++ out of `build.yml`. It is what keeps the parity oracle compiling.
+- `test.yml` runs `ctest --preset ci` and is the ONLY workflow that builds the C++. It configures and builds independently. It gates the Crow server and `src/SalmaEngine.cpp`, the bridge from the server to the engine DLL.
 - `eslint.yaml` runs `npm run lint` over `web/`, and only fires on `web/**` changes.
-- `sonar.yml` runs a SonarCloud scan over BOTH engines (`sonar.sources=src`, which now holds both languages). The Rust analyzer shells out to cargo + clippy itself, so the workflow installs the toolchain; and `sonar.rust.cargo.manifestPaths=Cargo.toml` is stated explicitly so a future move cannot silently drop Rust from the scan. `tests/golden/**` is excluded as test data.
+- `sonar.yml` runs a SonarCloud scan over both languages (`sonar.sources=src`, which holds the Rust engine and the C++ server). The Rust analyzer shells out to cargo + clippy itself, so the workflow installs the toolchain; and `sonar.rust.cargo.manifestPaths=Cargo.toml` is stated explicitly so a future move cannot silently drop Rust from the scan. `tests/golden/**` is excluded as test data.
 - clang-tidy and clang-format no longer run anywhere automatically. clang-tidy was a `build.bat` step and clang-format was a `build.yml` step; both scripts now drive Rust. Run them by hand if you touch C++.
 
 `build.yml` is path-triggered and runs on any branch. `test.yml`, `eslint.yaml` and `sonar.yml` trigger on `main` only, so they gate the merge rather than each push.
@@ -134,19 +134,20 @@ Start `mo2-server.exe` on :5000 before `npm run dev`, or every `/api/*` call the
 
 ## Architecture
 
-salma ships three artifacts over one shared core library. Improving inference once benefits both the MO2 plugin and the web UI; there is no duplicated logic to keep in sync.
+salma ships three artifacts over one engine. Improving inference once benefits both the MO2 plugin and the web UI; there is no duplicated logic to keep in sync. **Both consumers reach the engine through the same flat `extern "C"` ABI**, so neither can drift from the other.
 
-- `mo2-core` (SHARED, output `mo2-salma.dll`) - all engine logic in namespace `mo2core`, plus the flat `extern "C"` ABI. No Crow, no HTTP. MO2 loads it through `scripts/mo2-salma.py` via ctypes.
-- `mo2-server` (EXE) - links `mo2-core` and adds the Crow HTTP layer in namespace `mo2server`. Serves the SPA and the `/api/*` REST endpoints.
+- `mo2-salma.dll` (RUST, `src/*.rs`) - all engine logic, plus the eight-symbol C ABI. No HTTP. MO2 loads it through `scripts/mo2-salma.py` via ctypes; `mo2-server` loads it via `LoadLibrary`.
+- `mo2-server` (EXE, C++) - the Crow HTTP layer in namespace `mo2server`. Serves the SPA and the `/api/*` REST endpoints, and calls the engine through `src/SalmaEngine.cpp`.
+- `salma-support` (STATIC, C++) - what is left of `mo2core`: `Utils`, `Logger`, `SecurityContext`. Linked into `mo2-server` and `salma_tests`. Deliberately not a DLL named `mo2-salma`; that name belongs to the Rust artifact.
 - `web/dist/` - the Vite-built React SPA, served by `mo2-server`.
 
-`Export.hpp` defines the `MO2_API` macro (dllexport when building mo2-core, dllimport for consumers).
+`Export.hpp` defines `MO2_API`, which now expands to nothing because `salma-support` is static. The dllexport/dllimport spellings survive behind `MO2_CORE_SHARED` in case a DLL target returns.
 
-### The Rust port
+### The engine (`src/*.rs`)
 
-The Rust crate at the repo root is a full port of `mo2-core` and is the engine the root scripts build. It produces `mo2_salma_rs.dll`, exporting the same eight `extern "C"` symbols, and `tools/package.py` renames it to `mo2-salma.dll` at cutover. It does NOT port `mo2-server` or the web layer; there is no Crow equivalent.
+The Rust crate at the repo root IS the engine; the C++ engine it was ported from has been deleted. It produces `mo2_salma_rs.dll`, and `tools/package.py` renames it to `mo2-salma.dll` for deployment. It does NOT cover `mo2-server` or the web layer; there is no Crow equivalent, which is why the C++ server remains.
 
-The layout deliberately mirrors the C++ side, one module per C++ translation unit with the name snake_cased:
+The module names still mirror the C++ translation units they were ported from, snake_cased, which is how PARITY-NOTES cross-references resolve:
 
 ```
 Cargo.toml          root, one package, no workspace
@@ -176,7 +177,9 @@ Single entry point: `mo2core::FomodInferenceService::infer_selections(archive_pa
 
 ### C ABI boundary
 
-`CApi.hpp`/`CApi.cpp` (namespace `CApi`) is the flat `extern "C"` surface used by the Python plugin and tests. Each function is a thin wrapper that returns a heap string the caller must release with `freeResult()`. Key exports: `install`, `installWithConfig` (primary plugin install path, with a selections JSON), `inferFomodSelections`, `resolveModArchive`, `setLogCallback`, `getApiVersion`, `installSucceeded`.
+`src/capi.rs` is the flat `extern "C"` surface, used by BOTH consumers: the MO2 Python plugin via ctypes, and `mo2-server` via `src/SalmaEngine.cpp`. Each function returns a heap string the caller must release with `freeResult()`. The eight exports: `install`, `installWithConfig` (primary plugin install path, with a selections JSON), `inferFomodSelections`, `resolveModArchive`, `setLogCallback`, `getApiVersion`, `installSucceeded`, `freeResult`.
+
+`SalmaEngine` restores two behaviors the ABI flattens away: a failed install THROWS (the controllers catch `std::exception`, and the ABI only returns an error string plus a false `installSucceeded()`), and the call is mutex-serialized because `installSucceeded()` is a process-global flag while the server runs installs on overlapping background jobs. Covered by `tests/salma_engine_test.cpp`.
 
 ### HTTP server
 
@@ -184,14 +187,14 @@ Single entry point: `mo2core::FomodInferenceService::infer_selections(archive_pa
 
 - `InstallationController` - `/api/installation/upload|install|status`; parses multipart, runs installs async on a `BackgroundJob`.
 - `Mo2Controller` - one class whose handlers are split across TUs by concern: `Mo2ConfigController.cpp` (`/api/config`), `Mo2FomodController.cpp` (status/fomods/scan), `Mo2LogController.cpp`, `Mo2PluginController.cpp` (deploy/purge), `Mo2TestController.cpp`. Shared helpers in `Mo2Helpers.*`.
-- `SecurityMiddleware` enforces an Origin allowlist and requires the `X-Salma-Csrf` header on state-changing methods; `/api/csrf-token` issues the token. `SecurityContext` (in mo2-core so tests can link it without Crow) holds the CSRF token and allowlist.
+- `SecurityMiddleware` enforces an Origin allowlist and requires the `X-Salma-Csrf` header on state-changing methods; `/api/csrf-token` issues the token. `SecurityContext` (in `salma-support` so tests can link it without Crow) holds the CSRF token and allowlist.
 
 ### Install replay and cross-cutting
 
-- `InstallationService::install_mod` - top-level install orchestrator: extract to temp -> detect FOMOD -> `FomodService` (replay) or `ModStructureDetector` (non-FOMOD content-root copy) -> cleanup. A fresh instance per C-API call (not thread-safe by design).
-- `FomodService` - install replay: dependency checks -> required/optional/conditional file passes -> `execute_file_operations` (stable sort by priority then document order). Uses `FomodDependencyEvaluator` to evaluate `FomodCondition` trees, shared with the propagator and simulator.
-- `Logger` (Meyer singleton, thread-safe) - writes to `logs/salma.log` next to the DLL with 10 MiB rotation, plus a lock-free atomic callback into the host (MO2 Python plugin). Subsystem tags by convention: `[infer]`, `[install]`, `[server]`, `[crow]`.
+- `installation_service.rs` - top-level install orchestrator: extract to temp -> detect FOMOD -> `fomod_service` (replay) or `mod_structure_detector` (non-FOMOD content-root copy) -> cleanup. A fresh instance per C-API call (not thread-safe by design).
+- `fomod_service.rs` - install replay: dependency checks -> required/optional/conditional file passes -> `execute_file_operations` (stable sort by priority then document order). Uses `fomod_dependency_evaluator` to evaluate `FomodCondition` trees, shared with the propagator and simulator.
+- `logger.rs` (and the C++ `Logger.cpp` for the server) - writes to `logs/salma.log` next to the owning module with 10 MiB rotation, plus a lock-free atomic callback into the host (MO2 Python plugin). Subsystem tags by convention: `[infer]`, `[install]`, `[solver]`, `[archive]`, `[fomod]`, `[server]`, `[crow]`.
 - `BackgroundJob<T>` (header-only) - generic async runner backing installs, scans, and plugin actions; safe to detach on shutdown via a shared-ptr-held state.
 - `ConfigService` - reads/writes `salma.json` next to the exe (only persisted key: `mo2ModsPath`) via atomic write-then-rename; derives `fomod_output_dir` from the mods path.
-- `Utils.hpp` - shared `to_lower`, `normalize_path`, `random_hex_string`, `get_ordered_nodes`, FNV-1a hashing, and path-safety guards (`is_safe_destination`, `is_inside`, `is_safe_mod_name`).
+- `utils.rs` / `Utils.hpp` - shared `to_lower`, `normalize_path`, `random_hex_string`, FNV-1a hashing, and path-safety guards (`is_safe_destination`, `is_inside`, `is_safe_mod_name`). The C++ copy kept only what the server uses; its pugixml-typed XML helpers went with the parser.
 - Security guardrails worth knowing before touching extraction or upload code: 256 MiB per-archive-entry cap (`kMaxEntrySize`), 512 MiB upload cap (`kMaxUploadBytes`, returns 413 early), path-traversal rejection in `ArchiveService`, and shell-metachar/whitelist sanitization in the deploy/purge/test controllers before any `cmd.exe` spawn.
