@@ -7,7 +7,6 @@
 #include <expected>
 #include <filesystem>
 #include <optional>
-#include <pugixml.hpp>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -166,32 +165,6 @@ MO2_API std::string normalize_path(const std::string& p);
  * @return A lowercase hex string of exactly @p length characters.
  */
 MO2_API std::string random_hex_string(size_t length = 12);
-
-/**
- * @brief Respect the FOMOD `order` attribute on installSteps, optionalFileGroups, and plugins.
- *
- * Values: "Ascending" (default, alphabetical by name), "Descending", "Explicit" (document order).
- *
- * When two nodes share the same `name` attribute under Ascending/Descending,
- * their relative order is unspecified (`std::ranges::sort` on equal keys is
- * not stable).
- *
- * @param parent      XML node whose `order` attribute is read.
- * @param child_name  Tag name of the child nodes to collect and sort.
- * @return Sorted vector of child nodes.
- */
-MO2_API std::vector<pugi::xml_node> get_ordered_nodes(const pugi::xml_node& parent,
-                                                      const char* child_name);
-
-/**
- * @brief Parse an XML boolean attribute using XML Schema semantics.
- *
- * Returns true for "true"/"1" (case-insensitive), false otherwise.
- * A null/missing attribute returns false.
- * @param attr  The XML attribute to evaluate.
- * @return @c true if the attribute value is "true" or "1".
- */
-MO2_API bool xml_bool_attribute_true(const pugi::xml_attribute& attr);
 
 /**
  * @brief Map a FOMOD plugin type name string to its PluginType enum value.

@@ -13,55 +13,30 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 enable_testing()
 
-# --- mo2-core (shared library) ---
+# --- salma-support (static library) ---
+#
+# What is left of the C++ after the engine moved to Rust: the shared helpers the
+# Crow server still needs. The engine itself is mo2-salma.dll, built from the
+# Rust crate at the repo root and reached through src/SalmaEngine.cpp.
+#
+# This is deliberately no longer a SHARED library named mo2-salma. That name now
+# belongs to the Rust artifact, and having two different DLLs claim it is how you
+# ship the wrong engine by accident.
 
-find_package(pugixml CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
-find_package(LibArchive REQUIRED)
-find_package(unofficial-bit7z CONFIG REQUIRED)
 
-add_library(mo2-core SHARED
+add_library(salma-support STATIC
     src/Utils.cpp
     src/Logger.cpp
     src/SecurityContext.cpp
-    src/FileOperations.cpp
-    src/ArchiveService.cpp
-    src/ModStructureDetector.cpp
-    src/FomodArchiveResolver.cpp
-    src/FomodDependencyEvaluator.cpp
-    src/FomodService.cpp
-    src/FomodIRParser.cpp
-    src/FomodForwardSimulator.cpp
-    src/FomodCSPPrecompute.cpp
-    src/FomodCSPOptions.cpp
-    src/FomodCSPSolver.cpp
-    src/FomodCSPSolverPhases.cpp
-    src/FomodPropagator.cpp
-    src/FomodInferenceAtoms.cpp
-    src/FomodInferenceService.cpp
-    src/InferenceDiagnostics.cpp
-    src/InstallationService.cpp
-    src/CApi.cpp
 )
 
-target_include_directories(mo2-core
+target_include_directories(salma-support
     PUBLIC ${CMAKE_SOURCE_DIR}/src
 )
 
-target_link_libraries(mo2-core
-    PRIVATE pugixml::pugixml
+target_link_libraries(salma-support
     PRIVATE nlohmann_json::nlohmann_json
-    PRIVATE LibArchive::LibArchive
-    PRIVATE unofficial::bit7z::bit7z64
-)
-
-target_compile_definitions(mo2-core PRIVATE MO2_CORE_EXPORTS LIBARCHIVE_STATIC)
-
-set_target_properties(mo2-core PROPERTIES
-    OUTPUT_NAME "mo2-salma"
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
 
 # --- mo2-server (executable) ---
@@ -82,10 +57,11 @@ add_executable(mo2-server
     src/MultipartHandler.cpp
     src/SecurityMiddleware.cpp
     src/StaticFileHandler.cpp
+    src/SalmaEngine.cpp
 )
 
 target_link_libraries(mo2-server
-    PRIVATE mo2-core
+    PRIVATE salma-support
     PRIVATE Crow::Crow
     PRIVATE nlohmann_json::nlohmann_json
 )
@@ -105,15 +81,14 @@ include(GoogleTest)
 
 add_executable(salma_tests
     tests/utils_test.cpp
-    tests/fomod_inference_test.cpp
-    tests/inference_diagnostics_test.cpp
     tests/security_context_test.cpp
+    tests/salma_engine_test.cpp
+    src/SalmaEngine.cpp
 )
 
 target_link_libraries(salma_tests
-    PRIVATE mo2-core
+    PRIVATE salma-support
     PRIVATE GTest::gtest_main
-    PRIVATE pugixml::pugixml
 )
 
 set_target_properties(salma_tests PROPERTIES
@@ -145,99 +120,60 @@ add_custom_command(TARGET mo2-server POST_BUILD
     COMMENT "Copying test suite and scripts to output directory"
 )
 
+# The server loads the engine from mo2-salma.dll at runtime (src/SalmaEngine.cpp
+# searches beside the exe first). CMake does not build it - it is the Rust
+# artifact staged by `python tools/package.py` - so copy it next to the exe when
+# it is there. Without this the dashboard starts but every install/infer request
+# fails with "mo2-salma.dll not found".
+if(EXISTS "${CMAKE_SOURCE_DIR}/target/package/mo2-salma.dll")
+    add_custom_command(TARGET mo2-server POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/target/package/mo2-salma.dll"
+            "${OUTDIR}/"
+        COMMENT "Copying the Rust engine DLL next to mo2-server")
+else()
+    message(WARNING
+        "target/package/mo2-salma.dll not found. mo2-server needs it at runtime; "
+        "run build.bat (or python tools/package.py) and reconfigure, or copy it "
+        "next to mo2-server.exe by hand.")
+endif()
+
 # --- Release bundle: install layout + CPack ZIP ---
 #
 # Two CPack components combine into one salma-mo2-<ver>.zip:
 #   - MO2_PLUGIN: drops into <MO2 instance>/plugins/ (mo2-salma.py + salma/*)
 #   - DASHBOARD:  standalone server, web/dist, and helper scripts
 #
-# The C-API ABI version is the source of truth - it lives in src/CApi.hpp as
-# MO2_SALMA_API_VERSION. CMake reads it via regex so the bundle filename
-# always matches the ABI string the DLL reports at runtime.
-file(READ "${CMAKE_SOURCE_DIR}/src/CApi.hpp" _capi_h_content)
-string(REGEX MATCH "MO2_SALMA_API_VERSION[ \t]+\"([0-9]+\\.[0-9]+\\.[0-9]+)\""
-       _ver_match "${_capi_h_content}")
+# The C-API ABI version is the source of truth. It moved to the Rust engine with
+# the rest of the C ABI and now lives in src/capi.rs as MO2_SALMA_API_VERSION.
+# CMake reads it via regex so the bundle filename always matches the ABI string
+# the DLL reports at runtime.
+file(READ "${CMAKE_SOURCE_DIR}/src/capi.rs" _capi_rs_content)
+string(REGEX MATCH "MO2_SALMA_API_VERSION:[ \t]*&str[ \t]*=[ \t]*\"([0-9]+\\.[0-9]+\\.[0-9]+)\""
+       _ver_match "${_capi_rs_content}")
 set(SALMA_API_VERSION "${CMAKE_MATCH_1}")
 if(NOT SALMA_API_VERSION)
     message(FATAL_ERROR
-        "Failed to parse MO2_SALMA_API_VERSION from src/CApi.hpp - "
-        "the regex in CMakeLists.txt is out of sync with the header.")
+        "Failed to parse MO2_SALMA_API_VERSION from src/capi.rs - "
+        "the regex in CMakeLists.txt is out of sync with the Rust constant.")
 endif()
 file(WRITE "${CMAKE_BINARY_DIR}/VERSION" "${SALMA_API_VERSION}\n")
-
-# Resolve 7z.dll for bundling. Override with -DSALMA_7Z_DLL=<path>;
-# otherwise check SEVENZIP_PATH (file or dir), then Program Files. If
-# nothing matches we leave SALMA_7Z_DLL empty and warn - deployed installs
-# will then fall back to a system 7-Zip at runtime (see ArchiveService.cpp).
-if(NOT DEFINED SALMA_7Z_DLL)
-    if(DEFINED ENV{SEVENZIP_PATH})
-        set(_seven "$ENV{SEVENZIP_PATH}")
-        if(EXISTS "${_seven}" AND _seven MATCHES "\\.dll$")
-            set(SALMA_7Z_DLL "${_seven}")
-        elseif(EXISTS "${_seven}/7z.dll")
-            set(SALMA_7Z_DLL "${_seven}/7z.dll")
-        endif()
-    endif()
-    if(NOT DEFINED SALMA_7Z_DLL)
-        # CMake's $ENV{NAME} parser rejects parentheses in NAME, so query
-        # ProgramFiles via $ENV{} and fall back to the standard literal path
-        # for the (x86) variant. file(TO_CMAKE_PATH) normalizes the
-        # backslashes Windows returns to forward slashes - otherwise paths
-        # like "C:\Program Files/7-Zip/7z.dll" trip CMake's `\P` escape
-        # warning when serialized into cmake_install.cmake.
-        set(_pf_env "$ENV{ProgramFiles}")
-        if(_pf_env)
-            file(TO_CMAKE_PATH "${_pf_env}" _pf_env)
-        endif()
-        foreach(_root
-                "${_pf_env}"
-                "C:/Program Files"
-                "C:/Program Files (x86)")
-            if(_root AND EXISTS "${_root}/7-Zip/7z.dll")
-                set(SALMA_7Z_DLL "${_root}/7-Zip/7z.dll")
-                break()
-            endif()
-        endforeach()
-    endif()
-endif()
-if(NOT DEFINED SALMA_7Z_DLL OR NOT EXISTS "${SALMA_7Z_DLL}")
-    message(WARNING
-        "SALMA_7Z_DLL not set or not found. The release bundle will not include "
-        "7z.dll - deployed installs will need a system 7-Zip at runtime. "
-        "Set -DSALMA_7Z_DLL=<path> or the SEVENZIP_PATH env var to bundle a codec.")
-    set(SALMA_7Z_DLL "")
-endif()
-
-# Normalize to forward slashes regardless of source (-DSALMA_7Z_DLL override,
-# SEVENZIP_PATH env, or Program Files). A backslash path from a Windows shell
-# (e.g. D:\a\salma\salma\7z\7z.dll) serializes verbatim into cmake_install.cmake
-# and trips CMake's string escape parser on tokens like \a at install/cpack time.
-if(SALMA_7Z_DLL)
-    file(TO_CMAKE_PATH "${SALMA_7Z_DLL}" SALMA_7Z_DLL)
-endif()
 
 # MO2_PLUGIN component
 install(FILES "${CMAKE_SOURCE_DIR}/scripts/mo2-salma.py"
         DESTINATION plugins
         COMPONENT MO2_PLUGIN)
-install(TARGETS mo2-core
-        RUNTIME DESTINATION plugins/salma
-        COMPONENT MO2_PLUGIN)
-if(SALMA_7Z_DLL)
-    install(FILES "${SALMA_7Z_DLL}"
-            DESTINATION plugins/salma
-            COMPONENT MO2_PLUGIN)
-endif()
-
+# The plugin DLL is the RUST artifact, which CMake does not build. Staged by
+# `python tools/package.py` into target/package/mo2-salma.dll and installed from
+# there when present, so `cpack` still produces a complete MO2_PLUGIN bundle.
+install(FILES "${CMAKE_SOURCE_DIR}/target/package/mo2-salma.dll"
+        DESTINATION plugins/salma
+        COMPONENT MO2_PLUGIN
+        OPTIONAL)
 # DASHBOARD component
 install(TARGETS mo2-server
         RUNTIME DESTINATION dashboard
         COMPONENT DASHBOARD)
-if(SALMA_7Z_DLL)
-    install(FILES "${SALMA_7Z_DLL}"
-            DESTINATION dashboard
-            COMPONENT DASHBOARD)
-endif()
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/web/dist/"
         DESTINATION dashboard/web/dist
         COMPONENT DASHBOARD

@@ -120,34 +120,6 @@ std::string random_hex_string(size_t length)
     return out;
 }
 
-std::vector<pugi::xml_node> get_ordered_nodes(const pugi::xml_node& parent, const char* child_name)
-{
-    std::string order = parent.attribute("order").as_string("Ascending");
-    std::vector<pugi::xml_node> nodes;
-    for (auto child : parent.children(child_name))
-    {
-        nodes.push_back(child);
-    }
-
-    auto name_projection = [](const pugi::xml_node& n)
-    { return std::string(n.attribute("name").as_string()); };
-
-    if (order == "Descending")
-        std::ranges::sort(nodes, std::ranges::greater{}, name_projection);
-    else if (order == "Ascending")
-        std::ranges::sort(nodes, std::ranges::less{}, name_projection);
-    // "Explicit" = document order (already correct from iteration)
-    return nodes;
-}
-
-bool xml_bool_attribute_true(const pugi::xml_attribute& attr)
-{
-    if (!attr)
-        return false;
-
-    auto value = to_lower(attr.as_string());
-    return value == "true" || value == "1";
-}
 
 PluginType parse_plugin_type_string(const std::string& type_name)
 {
