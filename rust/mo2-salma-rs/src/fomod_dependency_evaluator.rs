@@ -11,14 +11,17 @@
 //!
 //! The C++ `LeafEvaluator<Mode>` compile-time template dispatch becomes two
 //! plain leaf functions selected by the public entry points; the observable
-//! behavior is identical. C++ log_warning call sites (depth exceeded, unknown
-//! file-dependency state, malformed version component) emit nothing until the
-//! Task 17 logger lands; each is marked with a comment.
+//! behavior is identical. All three C++ `log_warning` call sites (depth
+//! exceeded, unknown file-dependency state, malformed version component) are
+//! reproduced. Two carry tags that differ from the rest of the engine and are
+//! kept as the C++ has them: the depth warning is `[fomod-ir]`, and the
+//! unknown-state warning has no tag at all.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use crate::fomod_ir::{FomodCondition, FomodConditionOp, FomodConditionType, FomodPlugin};
+use crate::logger::Logger;
 use crate::types::{FomodDependencyContext, PluginType};
 use crate::utils::{normalize_path, to_lower};
 
@@ -106,9 +109,21 @@ fn parse_version_parts(version_string: &str) -> Vec<i32> {
         }
         for token in tokens {
             // std::stoi throws on empty tokens (invalid_argument) and on i32
-            // overflow (out_of_range); C++ catches both, logs a warning (no
-            // logging until Task 17), and pushes 0.
-            parts.push(token.parse::<i32>().unwrap_or(0));
+            // overflow (out_of_range); C++ catches both, warns, and pushes 0.
+            // The trailing reason is the ONE divergence: the C++ interpolates
+            // the MSVC `what()` ("invalid stoi argument" / "stoi argument out of
+            // range") while this interpolates `ParseIntError`'s Display
+            // ("cannot parse integer from empty string" / "number too large to
+            // fit in target type"). Same trigger, same recovery, other wording.
+            match token.parse::<i32>() {
+                Ok(value) => parts.push(value),
+                Err(err) => {
+                    Logger::instance().log_warning(&format!(
+                        "[fomod] Malformed version component \"{token}\": {err}"
+                    ));
+                    parts.push(0);
+                }
+            }
         }
     }
     while parts.len() < 3 {
@@ -255,8 +270,14 @@ fn eval_file_dep(file_path: &str, state: &str, ctx: Option<&FomodDependencyConte
         return !file_exists;
     }
 
-    // "Active" (default). C++ logs a warning for any other state string and
-    // treats it as Active; no logging until Task 17.
+    // "Active" (default). Any other state string warns and is treated as Active.
+    // This is the one engine message with NO subsystem tag; the C++ builds it by
+    // string concatenation rather than `std::format` and never prefixed it.
+    if state != "Active" {
+        Logger::instance().log_warning(&format!(
+            "Unknown file dependency state: {state} for file: {file_path}, treating as Active"
+        ));
+    }
     file_exists
 }
 
@@ -381,8 +402,11 @@ fn evaluate_condition_core(
     match condition.r#type {
         FomodConditionType::Composite => {
             if depth > MAX_DEPENDENCY_DEPTH {
-                // C++ logs "[fomod-ir] Condition tree exceeds maximum depth,
-                // treating as unmet"; no logging until Task 17.
+                // Note the tag: this is `[fomod-ir]`, not the `[fomod]` the rest
+                // of this module uses. Reproduced as-is.
+                Logger::instance().log_warning(
+                    "[fomod-ir] Condition tree exceeds maximum depth, treating as unmet",
+                );
                 return false;
             }
             let is_and = condition.op == FomodConditionOp::And;

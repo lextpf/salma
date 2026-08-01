@@ -28,6 +28,7 @@ use crate::fomod_csp_types::{ReproMetrics, SolverResult};
 use crate::fomod_ir::FomodInstaller;
 use crate::fomod_propagator::PropagationResult;
 use crate::json::Value;
+use crate::logger::Logger;
 
 /// Stable enumeration of reasons the inference engine can attach to a plugin,
 /// group, or step decision. Mirror of `mo2core::ReasonCode` in
@@ -1110,8 +1111,25 @@ impl InferenceDiagnosticsBuilder {
         }
 
         self.finalized = true;
-        // The C++ logs a one-line diagnostics summary here; no logger until
-        // Task 17.
+
+        // One-line run summary. The C++ `{:.2f}` becomes `{:.2}`; both round the
+        // exact binary value half-to-even, and this is a log line rather than
+        // part of the JSON schema, so it is not a byte-parity surface.
+        let run = &self.diag.run;
+        Logger::instance().log(&format!(
+            "[infer] Diagnostics: confidence={:.2} ({}), phase={}, repro=miss:{}/extra:{}/sm:{}/hm:{}",
+            run.confidence.composite,
+            run.confidence.band,
+            if run.phase_reached.is_empty() {
+                "n/a"
+            } else {
+                &run.phase_reached
+            },
+            run.repro.missing,
+            run.repro.extra,
+            run.repro.size_mismatch,
+            run.repro.hash_mismatch
+        ));
     }
 
     /// Access the accumulated diagnostics. Mirror of `diagnostics()`.
