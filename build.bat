@@ -1,129 +1,95 @@
 @echo off
 REM ===========================================================================================
-REM build.bat - Complete build pipeline for salma
+REM build.bat - Complete build pipeline for salma (Rust engine)
 REM ===========================================================================================
 REM This script:
-REM   1. clang-format - in-place formatting of src/*.cpp / src/*.hpp / tests/*.cpp
-REM   2. cmake        - CMake configure with vcpkg manifest install and VS 17 2022 generator
-REM   3. clang-tidy   - static analysis (sequential; fails the build on any reported issue)
-REM   4. build        - release build of the Release configuration via cmake --build
-REM   5. doxide       - API documentation generation via doxide + mkdocs build
+REM   1. cargo fmt    - in-place formatting of rust/src and rust/tests
+REM   2. cargo clippy - static analysis over all targets; any warning fails the build
+REM   3. cargo build  - release build of the cdylib -> rust\target\release\mo2_salma_rs.dll
+REM   4. package.py   - stage the deployable artifact as mo2-salma.dll with its SHA-256
+REM
+REM The C++ engine is no longer built here. It still lives in src/ as the parity
+REM oracle for rust\tools\gen_golden.py and run_harness.py; build it directly with
+REM   cmake --preset default
+REM   cmake --build build --config Release
+REM
+REM CARGO_BUILD_JOBS is capped below. Cargo defaults to one job per core, and on a
+REM high-core machine the resulting parallel rustc + link peak has been observed to
+REM take the toolchain down (rustc STATUS_HEAP_CORRUPTION). Set CARGO_BUILD_JOBS
+REM before calling this script to override.
 REM ===========================================================================================
 
 setlocal enabledelayedexpansion
 
 echo ============================================================================
-echo                            SALMA BUILD PIPELINE
+echo                       SALMA BUILD PIPELINE (Rust)
 echo ============================================================================
 echo.
 
-REM ============================================================================
-REM STEP 1: Run clang-format
-REM ============================================================================
-echo [1/5] Running clang-format...
-echo ----------------------------------------------------------------------------
+set "REPO_ROOT=%~dp0"
+if "%REPO_ROOT:~-1%"=="\" set "REPO_ROOT=%REPO_ROOT:~0,-1%"
+set "RUST_DIR=%REPO_ROOT%\rust"
 
-where clang-format >nul 2>&1
+if not defined CARGO_BUILD_JOBS set "CARGO_BUILD_JOBS=4"
+echo Using CARGO_BUILD_JOBS=%CARGO_BUILD_JOBS%
+echo.
+
+where cargo >nul 2>&1
 if errorlevel 1 (
-    echo SKIP: clang-format not found in PATH
-) else (
-    for %%f in (src\*.cpp src\*.hpp tests\*.cpp) do (
-        if exist "%%f" clang-format -i "%%f"
-    )
-    echo Formatting complete.
+    echo ERROR: cargo not found in PATH. Install Rust from https://rustup.rs
+    exit /b 1
 )
-echo.
 
 REM ============================================================================
-REM STEP 2: CMake Configuration
+REM STEP 1: Format
 REM ============================================================================
-echo [2/5] Configuring with CMake...
+echo [1/4] Running cargo fmt...
 echo ----------------------------------------------------------------------------
-cmake --preset default
-if %ERRORLEVEL% neq 0 (
-    echo ERROR: CMake configuration failed
-    exit /b %ERRORLEVEL%
-)
-echo.
-
-REM ============================================================================
-REM STEP 3: Run clang-tidy
-REM ============================================================================
-echo [3/5] Running clang-tidy...
-echo ----------------------------------------------------------------------------
-
-where clang-tidy >nul 2>&1
+cargo fmt --manifest-path "%RUST_DIR%\Cargo.toml"
 if errorlevel 1 (
-    echo SKIP: clang-tidy not found in PATH
-) else (
-    if not exist "build-cdb\compile_commands.json" (
-        echo   Generating compile_commands.json via Ninja sidecar...
-        cmake --preset compile-db >nul
-        if !ERRORLEVEL! neq 0 (
-            echo ERROR: compile-db configure failed
-            exit /b 1
-        )
-    )
-
-    for %%f in (src\*.cpp tests\*.cpp) do (
-        if exist "%%f" (
-            echo   tidy: %%f
-            clang-tidy --quiet --header-filter="[/\\]%%~nf\.hpp$" -p build-cdb "%%f"
-            if !ERRORLEVEL! neq 0 (
-                echo ERROR: clang-tidy reported issues in %%f
-                exit /b 1
-            )
-        )
-    )
-    echo clang-tidy complete.
+    echo ERROR: cargo fmt failed
+    exit /b 1
 )
+echo Formatting complete.
 echo.
 
 REM ============================================================================
-REM STEP 4: Build Release
+REM STEP 2: Clippy
 REM ============================================================================
-echo [4/5] Building Release...
+echo [2/4] Running cargo clippy...
 echo ----------------------------------------------------------------------------
-cmake --build build --config Release
-if %ERRORLEVEL% neq 0 (
+cargo clippy --manifest-path "%RUST_DIR%\Cargo.toml" --all-targets --release -- -D warnings
+if errorlevel 1 (
+    echo ERROR: clippy reported issues
+    exit /b 1
+)
+echo Clippy clean.
+echo.
+
+REM ============================================================================
+REM STEP 3: Build Release
+REM ============================================================================
+echo [3/4] Building Release...
+echo ----------------------------------------------------------------------------
+cargo build --manifest-path "%RUST_DIR%\Cargo.toml" --release
+if errorlevel 1 (
     echo ERROR: Build failed
-    exit /b %ERRORLEVEL%
+    exit /b 1
 )
 echo.
 
 REM ============================================================================
-REM STEP 5: Generate Documentation (doxide + mkdocs)
+REM STEP 4: Package the deployable artifact
 REM ============================================================================
-echo [5/5] Generating documentation...
+echo [4/4] Staging the deployable DLL...
 echo ----------------------------------------------------------------------------
-where doxide >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo SKIP: doxide not found in PATH
+where python >nul 2>&1
+if errorlevel 1 (
+    echo SKIP: python not found in PATH, artifact not staged
 ) else (
-    doxide build
-    if !ERRORLEVEL! neq 0 (
-        echo ERROR: doxide build failed [exit code !ERRORLEVEL!]
-        exit /b 1
-    )
-    python scripts/_promote_subgroups.py
-    if !ERRORLEVEL! neq 0 (
-        echo ERROR: _promote_subgroups.py failed [exit code !ERRORLEVEL!]
-        exit /b 1
-    )
-    python scripts/_clean_docs.py
-    if !ERRORLEVEL! neq 0 (
-        echo ERROR: _clean_docs.py failed [exit code !ERRORLEVEL!]
-        exit /b 1
-    )
-)
-
-where mkdocs >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo SKIP: mkdocs not found in PATH
-) else (
-    mkdocs build
-    if !ERRORLEVEL! neq 0 (
-        echo ERROR: mkdocs build failed [exit code !ERRORLEVEL!]
+    python "%RUST_DIR%\tools\package.py" --no-build
+    if errorlevel 1 (
+        echo ERROR: package.py failed
         exit /b 1
     )
 )
@@ -137,15 +103,10 @@ echo                           BUILD PIPELINE COMPLETE
 echo ============================================================================
 echo.
 echo Build Output:
-echo   Release: build\bin\Release\mo2-salma.dll
-echo            build\bin\Release\mo2-server.exe
-echo   Linkage: Dynamic (/MD, x64-windows-static-md)
+echo   Built:      rust\target\release\mo2_salma_rs.dll
+echo   Deployable: rust\target\package\mo2-salma.dll
 echo.
-echo Documentation:
-echo   - Md:   docs\  (if doxide available)
-echo   - Html: site\  (if mkdocs available)
-echo.
-echo  *** Run deploy.bat to install the plugin as an MO2 mod ***
+echo  *** Run test.bat to verify, deploy.bat to install into MO2 ***
 echo.
 echo ============================================================================
 
