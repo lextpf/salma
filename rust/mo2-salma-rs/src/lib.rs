@@ -7,10 +7,12 @@
 //! All eight exports are now backed by real engine code. `inferFomodSelections`
 //! drives the inference pipeline (Task 12) and `install` / `installWithConfig` /
 //! `resolveModArchive` drive the install orchestrator and archive resolver
-//! (Task 15). The one remaining gap is logging: there is no Rust `Logger` yet,
-//! so the DLL emits nothing to `logs/salma.log` and never invokes a registered
-//! `setLogCallback` (Task 17). Every dropped call site is marked in place with a
-//! `// dropped log site` comment.
+//! (Task 15). Logging is in place too (Task 17): [`logger`] writes
+//! `logs/salma.log` next to the DLL and routes through a registered
+//! `setLogCallback`, and every C++ engine call site is reproduced. The handful
+//! that have no Rust counterpart - sites whose trigger is a C++ exception, a
+//! `bad_alloc`, or a library this port does not link - are marked in place and
+//! catalogued in `rust/PARITY-NOTES.md` under "Task 17".
 //!
 //! Ported so far:
 //! - [`utils`] - shared helpers, mirror of `src/Utils.hpp`/`src/Utils.cpp`

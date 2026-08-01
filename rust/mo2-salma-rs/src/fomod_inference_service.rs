@@ -52,6 +52,7 @@ use crate::inference_diagnostics::{
     serialize_confidence, serialize_reason, serialize_run_diagnostics,
 };
 use crate::json::{self, Value};
+use crate::logger::Logger;
 use crate::utils::{fnv1a_hash, normalize_path, to_lower};
 
 /// Upper bound on cache entries before the entire cache is cleared. Mirror of the
@@ -103,18 +104,52 @@ impl FomodInferenceService {
     /// error paths collapse to `""`, mirroring the C++ outer try/catch.
     pub fn infer_selections(&self, archive_path: &str, mod_path: &str) -> String {
         let t_total = Instant::now();
+        let logger = Logger::instance();
+
+        // (SVC 775-783) The banner reports the archive's extension WITH its dot
+        // and its size in MB to one decimal. An unreadable size is reported as
+        // 0.0 rather than failing, exactly as the C++ `error_code` overload does.
+        let archive_ext = Path::new(archive_path)
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
+        let archive_size_mb = fs::metadata(archive_path)
+            .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+            .unwrap_or(0.0);
+
+        logger.log("[infer] ========================================");
+        logger.log(&format!(
+            "[infer] Archive: \"{archive_path}\" ({archive_size_mb:.1} MB, {archive_ext})"
+        ));
+        logger.log(&format!("[infer] Mod path: \"{mod_path}\""));
+        logger.log("[infer] 0/9 Starting inference");
 
         // (F1) Pre-try existence checks (SVC 787-794): both OUTSIDE the catch.
         if !Path::new(archive_path).exists() {
+            logger.log_error(&format!("[infer] Archive not found: {archive_path}"));
             return String::new();
         }
         if !Path::new(mod_path).exists() {
+            logger.log_error(&format!("[infer] Mod path not found: {mod_path}"));
             return String::new();
         }
 
         // (F1) Read the Tier-1 fomod-plus blob now, but only as a CANDIDATE.
         // Reading never fails the call (its own errors collapse to `None`).
+        let t_step = Instant::now();
         let fomod_plus = try_fomod_plus_json(Path::new(mod_path));
+        // The C++ tests `!is_null() && !empty()`; `None` here covers both.
+        if fomod_plus.is_some() {
+            logger.log(&format!(
+                "[infer] Tier 1 candidate: fomod-plus JSON found, will validate ({}ms)",
+                t_step.elapsed().as_millis()
+            ));
+        } else {
+            logger.log(&format!(
+                "[infer] Tier 1 miss: no fomod-plus data ({}ms)",
+                t_step.elapsed().as_millis()
+            ));
+        }
 
         // (F2) Everything below the C++ `try` maps a failure to "" via early
         // return; no Result crosses FFI.
@@ -124,9 +159,15 @@ impl FomodInferenceService {
         // its own stage (the C++ resets a shared `t_step` before each one, SVC
         // 824/945/1283); measuring from `t_total` would report cumulative elapsed
         // time in `diagnostics.timings_ms`.
+        logger.log("[infer] 1/9 Listing archive entries");
         let t_step = Instant::now();
         let listing = archive_service.list_entries_with_sizes(archive_path);
         let t_list = t_step.elapsed().as_millis() as i64;
+        logger.log(&format!(
+            "[infer] Step 1 list_entries: {} entries, {} sizes ({t_list}ms)",
+            listing.paths.len(),
+            listing.sizes.len()
+        ));
 
         // Build the sorted normalized entry index and the normalized sizes map.
         // (SVC 836-848) NOTE the size lookup uses the ORIGINAL entry path against
@@ -149,6 +190,7 @@ impl FomodInferenceService {
         sorted_norm_entries.sort();
 
         // Step 2: Find the FOMOD ModuleConfig entry (prefer shallowest path).
+        logger.log("[infer] 2/9 Finding FOMOD config");
         const MODULE_CFG_SUFFIX: &str = "fomod/moduleconfig.xml";
         let mut xml_entry_norm = String::new();
         let mut best_depth = usize::MAX;
@@ -171,7 +213,10 @@ impl FomodInferenceService {
         }
 
         if xml_entry_norm.is_empty() {
-            // Not a FOMOD mod.
+            logger.log(&format!(
+                "[infer] Not a FOMOD mod, total: {}ms",
+                t_total.elapsed().as_millis()
+            ));
             return String::new();
         }
 
@@ -185,36 +230,78 @@ impl FomodInferenceService {
             String::new()
         };
 
+        logger.log(&format!(
+            "[infer] Step 2 found XML: \"{xml_entry_norm}\" (prefix: \"{fomod_prefix}\")"
+        ));
+
         // Step 3: Read ModuleConfig.xml into memory.
+        logger.log("[infer] 3/9 Reading ModuleConfig.xml");
+        let t_step = Instant::now();
         let mut xml_set: HashSet<String> = HashSet::new();
         xml_set.insert(xml_entry_norm.clone());
         let xml_data = archive_service.read_entries_batch(archive_path, &xml_set);
         let Some(xml_bytes) = xml_data.get(&xml_entry_norm) else {
-            // Failed to read ModuleConfig.xml from archive.
+            logger.log_error("[infer] Failed to read ModuleConfig.xml from archive");
             return String::new();
         };
+        logger.log(&format!(
+            "[infer] Step 3 read XML: {} bytes ({}ms)",
+            xml_bytes.len(),
+            t_step.elapsed().as_millis()
+        ));
 
         // Step 4: Parse XML and build the IR.
+        logger.log("[infer] 4/9 Parsing FOMOD XML");
+        let t_step = Instant::now();
         let installer = match parse_module_config(xml_bytes, &fomod_prefix) {
             Ok(installer) => installer,
-            Err(_) => return String::new(),
+            Err(err) => {
+                // The C++ interpolates pugixml's `xml_parse_result::description()`;
+                // this interpolates roxmltree's error Display. Same trigger,
+                // different wording (see PARITY-NOTES "Task 17").
+                logger.log_error(&format!("[infer] XML parse failed: {err}"));
+                return String::new();
+            }
         };
+        logger.log(&format!(
+            "[infer] Step 4 parse IR: {} steps, {} cond patterns ({}ms)",
+            installer.steps.len(),
+            installer.conditional_patterns.len(),
+            t_step.elapsed().as_millis()
+        ));
 
         let mut diag_builder = InferenceDiagnosticsBuilder::new(&installer);
 
         // Step 5: Expand atoms.
+        logger.log("[infer] 5/9 Expanding file atoms");
+        let t_step = Instant::now();
         let mut atoms = expand_all_atoms(&installer, &sorted_norm_entries, &norm_entry_sizes);
+        let mut total_atoms = 0;
+        atoms.for_each(|_| total_atoms += 1);
         let mut atom_index = build_atom_index(&atoms);
         let excluded = compute_excluded_dests(&atom_index);
+        logger.log(&format!(
+            "[infer] Step 5 expand atoms: {total_atoms} total, {} dests, {} excluded ({}ms)",
+            atom_index.len(),
+            excluded.len(),
+            t_step.elapsed().as_millis()
+        ));
 
         // Step 6: Build the target tree from the installed-file scan. (SVC 945-948
         // times the scan AND the tree build, not just the walk.)
+        logger.log("[infer] 6/9 Scanning installed files");
         let t_step = Instant::now();
         let installed = scan_installed_files(Path::new(mod_path));
         let mut target = build_target_tree(&installed);
         let t_scan = t_step.elapsed().as_millis() as i64;
+        logger.log(&format!(
+            "[infer] Step 6 target tree: {} files ({t_scan}ms)",
+            target.len()
+        ));
 
         // Step 7: Hash contested files for disambiguation (mutates target + atoms).
+        logger.log("[infer] 7/9 Hashing contested files");
+        let t_step = Instant::now();
         self.hash_contested_files(
             &mut target,
             &mut atoms,
@@ -223,6 +310,10 @@ impl FomodInferenceService {
             archive_path,
             &excluded,
         );
+        logger.log(&format!(
+            "[infer] Step 7 hash contested ({}ms)",
+            t_step.elapsed().as_millis()
+        ));
 
         // Step 7b: Pre-compute conditional + step-visibility overrides.
         let overrides = compute_overrides(&installer, &atoms, &atom_index, &target, &excluded);
@@ -262,6 +353,7 @@ impl FomodInferenceService {
         }
 
         // Step 7c: Constraint propagation pre-pass.
+        let t_step = Instant::now();
         let propagation = propagate(
             &installer,
             &atoms,
@@ -271,9 +363,18 @@ impl FomodInferenceService {
             &overrides,
             None,
         );
+        let total_groups: usize = installer.steps.iter().map(|s| s.groups.len()).sum();
+        logger.log(&format!(
+            "[infer] Step 7c propagate: resolved={}/{total_groups} groups, fully_resolved={} ({}ms)",
+            propagation.resolved_groups.len(),
+            propagation.fully_resolved,
+            t_step.elapsed().as_millis()
+        ));
+
         diag_builder.absorb_propagation(&propagation);
 
         // Step 8: CSP solve (with propagation-narrowed domains).
+        logger.log("[infer] 8/9 Solving (this may take a while)");
         let t_solve_start = Instant::now();
         let result = solve_fomod_csp(
             &installer,
@@ -289,9 +390,15 @@ impl FomodInferenceService {
             },
         );
         let t_solve = t_solve_start.elapsed().as_millis() as i64;
+        logger.log(&format!(
+            "[infer] Step 8 solve: {} nodes, exact={} ({t_solve}ms)",
+            result.nodes_explored, result.exact_match
+        ));
         diag_builder.absorb_solver(&result);
 
         // Step 9: Assemble JSON.
+        logger.log("[infer] 9/9 Assembling result");
+        let t_step = Instant::now();
         let total_ms = t_total.elapsed().as_millis() as i64;
         diag_builder.set_run_timings(t_list, t_scan, t_solve, total_ms);
         diag_builder.set_target_file_count(target.len() as i32);
@@ -305,7 +412,19 @@ impl FomodInferenceService {
             Some(&overrides),
         );
         add_output_tree(&mut json_result, &out_sim);
-        json_result.dump(2)
+        let result_str = json_result.dump(2);
+        logger.log(&format!(
+            "[infer] Step 9 assemble JSON: {} bytes ({}ms)",
+            result_str.len(),
+            t_step.elapsed().as_millis()
+        ));
+
+        logger.log(&format!(
+            "[infer] DONE total={total_ms}ms | list={t_list}ms scan={t_scan}ms solve={t_solve}ms"
+        ));
+        logger.log("[infer] ========================================");
+
+        result_str
     }
 
     /// Hash contested files (target + atoms) for disambiguation. Mirror of
@@ -329,6 +448,9 @@ impl FomodInferenceService {
         {
             let mut cache = self.cache.lock().unwrap();
             if cache.len() > K_MAX_CACHE_ENTRIES {
+                Logger::instance().log(&format!(
+                    "[infer] Hash cache exceeded {K_MAX_CACHE_ENTRIES} entries, clearing"
+                ));
                 cache.clear();
             }
         }
@@ -338,6 +460,12 @@ impl FomodInferenceService {
         if contested_dests.is_empty() {
             return;
         }
+
+        Logger::instance().log(&format!(
+            "[infer] Hashing {} contested dests ({} archive entries)",
+            contested_dests.len(),
+            entries_to_read.len()
+        ));
 
         // Phase 2: Fetch entry hashes (cache lookup + archive read).
         let hashes = self.fetch_entry_hashes(archive_path, &entries_to_read);
@@ -365,11 +493,13 @@ impl FomodInferenceService {
         let mut missing_entries: HashSet<String> = HashSet::new();
 
         let archive_sig = build_archive_signature(archive_path);
+        let mut cache_hits = 0usize;
         {
             let cache = self.cache.lock().unwrap();
             for entry_path in entries_to_read {
                 let key = format!("{archive_sig}\n{entry_path}");
                 if let Some(hit) = cache.get(&key) {
+                    cache_hits += 1;
                     result.source_hashes.insert(entry_path.clone(), hit.hash);
                     result.source_sizes.insert(entry_path.clone(), hit.size);
                 } else {
@@ -396,6 +526,13 @@ impl FomodInferenceService {
                 cache.insert(key, value);
             }
         }
+
+        // `missing_entries` is the miss count and is still intact here: the C++
+        // reads `missing_entries.size()` after its batch read too.
+        Logger::instance().log(&format!(
+            "[infer] Contested hash cache: hits={cache_hits}, misses={}",
+            missing_entries.len()
+        ));
 
         result
     }
@@ -431,7 +568,7 @@ pub fn try_fomod_plus_json(mod_path: &Path) -> Option<Value> {
     let mut in_settings = false;
     for (idx, line) in getline_split(&bytes).enumerate() {
         if idx + 1 > 10000 {
-            // meta.ini exceeds 10000 lines: abort the parse.
+            Logger::instance().log_warning("[infer] meta.ini exceeds 10000 lines, aborting parse");
             return None;
         }
         let trimmed = trim_bytes(line, b" \t\r\n");
@@ -463,13 +600,16 @@ pub fn try_fomod_plus_json(mod_path: &Path) -> Option<Value> {
         }
 
         if value.is_empty() || value == b"{}" || value == b"\"{}\"" {
-            // fomod-plus JSON found but empty - reject.
+            Logger::instance().log("[infer] fomod-plus JSON found but empty - rejecting");
             return None;
         }
 
         // nlohmann rejects ill-formed UTF-8 with parse_error 316, which the C++
-        // catches like any other parse failure -> Tier-1 miss.
+        // catches like any other parse failure -> Tier-1 miss. It reaches the
+        // same "Failed to parse" line, so the log is emitted here too.
         let Ok(value) = std::str::from_utf8(value) else {
+            Logger::instance()
+                .log("[infer] Failed to parse fomod-plus JSON: invalid UTF-8 in value");
             return None;
         };
 
@@ -481,11 +621,18 @@ pub fn try_fomod_plus_json(mod_path: &Path) -> Option<Value> {
                     .map(|s| s.is_array() && !s.is_empty())
                     .unwrap_or(false);
                 if has_steps {
+                    Logger::instance().log("[infer] Using fomod-plus JSON from meta.ini (Tier 1)");
                     return Some(j);
                 }
+                Logger::instance().log("[infer] fomod-plus JSON has no steps - rejecting");
                 return None;
             }
-            Err(_) => return None,
+            Err(err) => {
+                // The C++ interpolates nlohmann's `parse_error::what()`; this
+                // interpolates the port's own parser error.
+                Logger::instance().log(&format!("[infer] Failed to parse fomod-plus JSON: {err}"));
+                return None;
+            }
         }
     }
     None
@@ -577,6 +724,9 @@ pub fn compute_overrides(
         }
     }
 
+    // Both counters exist only to be logged below.
+    let mut cond_unique_forced = 0;
+    let mut cond_ambiguous_skipped = 0;
     for ci in 0..atoms.per_conditional.len() {
         let mut has_unique_cond_only_hit = false;
         for atom in &atoms.per_conditional[ci] {
@@ -596,12 +746,16 @@ pub fn compute_overrides(
                 has_unique_cond_only_hit = true;
                 break;
             }
-            // else: ambiguous, keep scanning (counter is log-only in the C++).
+            cond_ambiguous_skipped += 1;
         }
         if has_unique_cond_only_hit {
             overrides.conditional_active[ci] = ExternalConditionOverride::ForceTrue;
+            cond_unique_forced += 1;
         }
     }
+    Logger::instance().log(&format!(
+        "[infer] Step 7b conditional evidence: unique_forced={cond_unique_forced}, ambiguous_skipped={cond_ambiguous_skipped}"
+    ));
 
     // Step visibility via STEP-UNIQUE evidence: ForceTrue iff a step has at least
     // one target-hit dest reached by its own plugins that no other step reaches.
@@ -618,8 +772,13 @@ pub fn compute_overrides(
                             step_dests[si].insert(atom.dest_path.clone());
                         }
                     }
+                } else {
+                    // IR/atom desync: skip, do NOT panic.
+                    Logger::instance().log_warning(&format!(
+                        "[infer] compute_overrides: flat_idx {flat_idx} out of range ({}), possible IR/atom desync",
+                        atoms.per_plugin.len()
+                    ));
                 }
-                // else: flat_idx out of range (IR/atom desync) - skip, do NOT panic.
                 flat_idx += 1;
             }
         }
@@ -640,6 +799,26 @@ pub fn compute_overrides(
             }
         }
     }
+
+    // Closing tallies over both override vectors; log-only.
+    let tally = |modes: &[ExternalConditionOverride]| {
+        let mut t = 0;
+        let mut f = 0;
+        let mut u = 0;
+        for mode in modes {
+            match mode {
+                ExternalConditionOverride::ForceTrue => t += 1,
+                ExternalConditionOverride::ForceFalse => f += 1,
+                ExternalConditionOverride::Unknown => u += 1,
+            }
+        }
+        (t, f, u)
+    };
+    let (cond_true, cond_false, cond_unknown) = tally(&overrides.conditional_active);
+    let (step_true, step_false, step_unknown) = tally(&overrides.step_visible);
+    Logger::instance().log(&format!(
+        "[infer] Step 7b overrides: cond true/false/unknown={cond_true}/{cond_false}/{cond_unknown}, steps true/false/unknown={step_true}/{step_false}/{step_unknown}"
+    ));
 
     overrides
 }
@@ -670,11 +849,27 @@ pub fn scan_installed_files(mod_path: &Path) -> HashMap<String, u64> {
     while let Some(dir) = stack.pop() {
         let read_dir = match fs::read_dir(&dir) {
             Ok(rd) => rd,
-            Err(_) => continue, // tolerate permission-denied / transient errors
+            Err(err) => {
+                // Tolerate permission-denied / transient errors; the C++ reports
+                // the same condition through its recursive iterator's
+                // `error_code` ("Error iterating"). It names the ROOT mod path
+                // because its single iterator spans the whole tree; this walk is
+                // per-directory, so it names the directory that actually failed.
+                Logger::instance()
+                    .log_warning(&format!("[infer] Error iterating {}: {err}", dir.display()));
+                continue;
+            }
         };
         for entry in read_dir.flatten() {
-            let Ok(file_type) = entry.file_type() else {
-                continue;
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(err) => {
+                    Logger::instance().log_warning(&format!(
+                        "[infer] Error processing entry in {}: {err}",
+                        mod_path.display()
+                    ));
+                    continue;
+                }
             };
             let path = entry.path();
             if file_type.is_dir() {
@@ -815,9 +1010,15 @@ fn apply_entry_hashes(
         };
         let sz = meta.len();
         if sz > K_MAX_HASH_FILE_SIZE {
-            // Skip oversized files (256 MiB cap).
+            Logger::instance().log_warning(&format!(
+                "[infer] Skipping oversized file for hashing ({sz} bytes): {dest}"
+            ));
             continue;
         }
+        // The C++ pairs this read with a `bad_alloc` handler that warns
+        // "Failed to allocate {} bytes for hashing: {}". Rust's allocator aborts
+        // rather than unwinding on OOM, so that handler has no counterpart and
+        // the line is unreachable here (recorded in PARITY-NOTES "Task 17").
         let Ok(buf) = fs::read(&full_path) else {
             continue;
         };
@@ -936,6 +1137,8 @@ pub fn try_tier1_cache(
         .collect();
 
     let mut cache_resolved = true;
+    // Names the first unresolvable entry, for the "cache stale" warning only.
+    let mut stale_what = String::new();
     'steps: for src_step in fomod_plus.get("steps").into_iter().flat_map(array_iter) {
         // The C++ evaluates `src_step.value("name", "")` FIRST, before the
         // find_step lookup that may break the loop, so every step up to and
@@ -945,6 +1148,7 @@ pub fn try_tier1_cache(
         };
         let Some(si) = installer.steps.iter().position(|s| s.name == step_name) else {
             cache_resolved = false;
+            stale_what = format!("step \"{step_name}\"");
             break;
         };
         let step = &installer.steps[si];
@@ -958,6 +1162,7 @@ pub fn try_tier1_cache(
             };
             let Some(gi) = step.groups.iter().position(|g| g.name == group_name) else {
                 cache_resolved = false;
+                stale_what = format!("group \"{group_name}\" in step \"{step_name}\"");
                 break 'steps;
             };
             let group = &step.groups[gi];
@@ -969,6 +1174,9 @@ pub fn try_tier1_cache(
                 let plugin_name = plugin_name_of(src_plugin);
                 let Some(pi) = group.plugins.iter().position(|p| p.name == plugin_name) else {
                     cache_resolved = false;
+                    stale_what = format!(
+                        "plugin \"{plugin_name}\" in group \"{group_name}\" of step \"{step_name}\""
+                    );
                     break 'steps;
                 };
                 grid[si][gi][pi] = true;
@@ -977,16 +1185,39 @@ pub fn try_tier1_cache(
     }
 
     if !cache_resolved {
-        return Tier1Outcome::Miss; // stale cache - fall through
+        Logger::instance().log_warning(&format!(
+            "[infer] Tier 1 cache stale: {stale_what} not found in installer - falling through"
+        ));
+        return Tier1Outcome::Miss;
     }
 
     // Forward-simulate the cached selection with the same atoms + overrides the
     // solver path uses, then diff against the target.
+    let t_step = Instant::now();
     let sim = simulate(installer, atoms, &grid, None, Some(overrides));
-    if !compare_trees(&sim, target, excluded).exact() {
-        return Tier1Outcome::Miss; // does not reproduce - fall through
+    let repro = compare_trees(&sim, target, excluded);
+    Logger::instance().log(&format!(
+        "[infer] Tier 1 validate: missing={} extra={} size_mismatch={} hash_mismatch={} ({}ms)",
+        repro.missing,
+        repro.extra,
+        repro.size_mismatch,
+        repro.hash_mismatch,
+        t_step.elapsed().as_millis()
+    ));
+
+    if !repro.exact() {
+        Logger::instance().log_warning(&format!(
+            "[infer] Tier 1 cache did not reproduce target (missing={} extra={} size_mismatch={} hash_mismatch={}) - falling through to normal inference",
+            repro.missing, repro.extra, repro.size_mismatch, repro.hash_mismatch
+        ));
+        return Tier1Outcome::Miss;
     }
 
+    // `total_ms` was measured by the caller just before this call, which is the
+    // same instant the C++ `ms_since(t_total)` reads here.
+    Logger::instance().log(&format!(
+        "[infer] Tier 1 hit: cache reproduces target exactly, total: {total_ms}ms"
+    ));
     Tier1Outcome::Hit(Box::new(build_tier1_json(fomod_plus, &sim, total_ms)))
 }
 
