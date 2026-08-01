@@ -1,13 +1,21 @@
 name: rust
 
+# The Rust engine is the primary build. The C++ engine still lives in src/ as
+# the parity oracle and keeps its own build.yml / test.yml gates.
 on:
   push:
     paths:
       - "rust/**"
+      - "scripts/mo2-salma.py"
+      - "build.bat"
+      - "test.bat"
       - ".github/workflows/rust.yml"
   pull_request:
     paths:
       - "rust/**"
+      - "scripts/mo2-salma.py"
+      - "build.bat"
+      - "test.bat"
       - ".github/workflows/rust.yml"
 
 jobs:
@@ -34,10 +42,29 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --release -- -D warnings
 
       - name: Build (release)
         run: cargo build --release
 
       - name: Test (release)
         run: cargo test --release
+
+      # The three checks below are corpus-free, so they run on a clean runner.
+      # The corpus-backed parity checks (compare_infer.py, run_harness.py) need
+      # the mod archives and the C++ oracle DLL, neither of which exists here.
+      - name: Package the deployable DLL
+        run: python tools/package.py --no-build
+
+      - name: Smoke test the C ABI
+        run: python tools/smoke_ctypes.py target/release/mo2_salma_rs.dll
+
+      - name: Smoke test the MO2 plugin loader
+        run: python tools/smoke_plugin.py
+
+      - name: Upload the deployable DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: mo2-salma-dll
+          path: rust/target/package/mo2-salma.dll
+          if-no-files-found: error
