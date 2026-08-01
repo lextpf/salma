@@ -3720,7 +3720,39 @@ The corpus-backed gates deliberately stay out of CI: `compare_infer.py` and
 `run_harness.py` need the mod archives and the C++ oracle DLL, neither of which
 exists on a clean runner.
 
-`build.yml`, `test.yml`, `lint.yaml` and `sonar.yml` are unchanged and still
-gate the C++ and the web frontend. They only trigger on `main`, so they do not
-run on this branch's pushes. Whether the C++ gates should survive the merge is a
-cutover decision, not a layout one, and is left open deliberately.
+`lint.yaml` became `eslint.yaml`, named for the tool it actually runs, and
+gained a `web/**` path filter. It was already scoped to `web/` by
+`working-directory`, but fired on every push to `main` including C++ and
+Rust-only changes. README gains `rust` and `eslint` badges beside `build` and
+`tests`.
+
+`sonar.yml` now scans BOTH engines. Three things were needed, and only the first
+is obvious:
+
+1. `sonar.sources=src,rust/src` and `sonar.tests=tests,rust/tests`.
+2. The Rust analyzer runs Clippy ITSELF (`sonar.rust.clippy.enabled` defaults
+   to true) by shelling out to cargo, so the runner needs the toolchain plus the
+   clippy component. `sonar.yml` installs them. Without this the scan does not
+   fail, it silently reports zero Rust files, which reads as a clean pass.
+3. It looks for `Cargo.toml` in the PROJECT ROOT by default, and ours is at
+   `rust/Cargo.toml`, so `sonar.rust.cargo.manifestPaths` points at it
+   explicitly.
+
+`rust/tests/golden/**` is excluded: it is committed fixture DATA (XML and JSON),
+not code, and would otherwise be scanned as source.
+
+None of the three is verifiable from a local checkout - they need a real
+SonarCloud run to confirm - so treat the first green scan as the actual proof.
+
+`build.yml` and `test.yml` are unchanged. They still gate the C++ and the web
+frontend correctly, and needed nothing for the Rust work. They only trigger on
+`main`, so they do not run on this branch's pushes. Whether the C++ gates should
+survive the merge is a cutover decision, not a layout one, and is left open
+deliberately.
+
+Their triggers were deliberately NOT path-filtered the way `eslint.yaml` was. A
+Rust-only PR does run the full vcpkg C++ build for nothing, but if either is
+configured as a required status check in branch protection, a path filter makes
+the check never report and the PR waits on it forever. Adding the filters is
+safe only together with changing branch protection, which cannot be done from
+the repo.
