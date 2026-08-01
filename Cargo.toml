@@ -36,6 +36,7 @@ windows-sys = { version = "0.60", features = [
 
 [dependencies]
 roxmltree = "0.21"
+serde_json = "1.0"
 # Archive backends (Task 11). Pure-Rust zip + 7z; unrar links the proprietary
 # unRAR C sources (read-only decompress; see PARITY-NOTES "Task 11" for the
 # license note and the build.rs Win32 link requirement).

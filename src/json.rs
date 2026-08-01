@@ -47,7 +47,6 @@
 //! fixture falls in that range (all confidence values are in `[0, 1]`).
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 
 /// An owned JSON value. Mirror of the subset of `nlohmann::json` the inference
 /// output path constructs.
@@ -240,486 +239,137 @@ impl Value {
 
     /// Serialize with `indent` spaces per nesting level, reproducing
     /// `nlohmann::json::dump(indent)` byte for byte. No trailing newline.
-    pub fn dump(&self, indent: usize) -> String {
-        let mut out = String::new();
-        self.write_pretty(&mut out, indent, 0);
-        out
-    }
-
-    fn write_pretty(&self, out: &mut String, indent: usize, depth: usize) {
-        match self {
-            Value::Null => out.push_str("null"),
-            Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            Value::Int(n) => {
-                // i64 Display is plain decimal, matching nlohmann integer output.
-                let _ = write!(out, "{n}");
-            }
-            Value::UInt(n) => {
-                // u64 Display is plain decimal, matching nlohmann's
-                // number_unsigned_t output.
-                let _ = write!(out, "{n}");
-            }
-            Value::Double(d) => out.push_str(&format_double(*d)),
-            Value::Str(s) => write_escaped(out, s),
-            Value::Array(items) => {
-                if items.is_empty() {
-                    out.push_str("[]");
-                    return;
-                }
-                out.push_str("[\n");
-                let child_pad = (depth + 1) * indent;
-                let last = items.len() - 1;
-                for (i, item) in items.iter().enumerate() {
-                    push_spaces(out, child_pad);
-                    item.write_pretty(out, indent, depth + 1);
-                    if i != last {
-                        out.push(',');
-                    }
-                    out.push('\n');
-                }
-                push_spaces(out, depth * indent);
-                out.push(']');
-            }
-            Value::Object(map) => {
-                if map.is_empty() {
-                    out.push_str("{}");
-                    return;
-                }
-                out.push_str("{\n");
-                let child_pad = (depth + 1) * indent;
-                let last = map.len() - 1;
-                for (i, (key, val)) in map.iter().enumerate() {
-                    push_spaces(out, child_pad);
-                    write_escaped(out, key);
-                    out.push_str(": ");
-                    val.write_pretty(out, indent, depth + 1);
-                    if i != last {
-                        out.push(',');
-                    }
-                    out.push('\n');
-                }
-                push_spaces(out, depth * indent);
-                out.push('}');
-            }
-        }
-    }
-}
-
-fn push_spaces(out: &mut String, n: usize) {
-    for _ in 0..n {
-        out.push(' ');
-    }
-}
-
-/// Format an `f64` exactly as `nlohmann::json::dump` does: the shortest
-/// round-tripping decimal, with `.0` appended for integer-valued finite doubles
-/// (which Rust's `Display` would otherwise print as a bare integer). Non-finite
-/// values render as `null`, matching nlohmann's default handling of NaN/Inf.
-pub fn format_double(v: f64) -> String {
-    if !v.is_finite() {
-        return "null".to_string();
-    }
-    // Rust `f64` `Display` is the shortest decimal that round-trips, the same
-    // guarantee nlohmann's `dtoa` provides; identical bits give identical
-    // digits. The only systematic gap is the missing decimal point on
-    // integer-valued doubles.
-    let s = format!("{v}");
-    if s.bytes().any(|b| b == b'.' || b == b'e' || b == b'E') {
-        s
-    } else {
-        format!("{s}.0")
-    }
-}
-
-/// Parse a JSON document into a [`Value`], the read counterpart of [`Value::dump`].
-///
-/// Used only on the Tier-1 inference path to decode the cached `fomod-plus` blob
-/// stored in `meta.ini`, mirroring the C++ `nlohmann::json::parse(value)` call in
-/// `FomodInferenceService::try_fomod_plus_json`. That call is wrapped in a
-/// `try/catch(json::parse_error)` that discards the candidate on any failure, so
-/// this parser reports errors via `Err(String)` and NEVER panics on malformed
-/// input; the caller treats `Err` exactly as the C++ treats a caught parse error.
-///
-/// The grammar is RFC 8259 as nlohmann implements it, NOT a lenient superset:
-/// leading zeros (`01`), a leading `+`, and a bare `.5` / `1.` are rejected;
-/// raw control bytes below `0x20` inside a string are rejected; a `\uXXXX`
-/// escape must be exactly four hex digits (no sign). Accepting any of these
-/// would flip a Tier-1 MISS into a Tier-1 HIT and change the whole output
-/// document relative to the C++.
-///
-/// Numbers follow nlohmann's integer-vs-float split: a token containing `.`, `e`,
-/// or `E` becomes a [`Value::Double`]; an integer in `i64` range becomes a
-/// [`Value::Int`], one in `(i64::MAX, u64::MAX]` a [`Value::UInt`], and anything
-/// wider a [`Value::Double`]. Duplicate object keys keep the last occurrence
-/// (nlohmann's behavior); object keys serialize back in sorted order regardless.
-/// Trailing non-whitespace content after the top-level value is an error.
-///
-/// Nesting is capped at [`MAX_PARSE_DEPTH`]; see that constant for why a cap
-/// exists at all when nlohmann has none.
-pub fn parse(text: &str) -> Result<Value, String> {
-    let mut parser = Parser {
-        bytes: text.as_bytes(),
-        pos: 0,
-        depth: 0,
-    };
-    let value = parser.value()?;
-    parser.skip_ws();
-    if parser.pos != parser.bytes.len() {
-        return Err(format!("trailing content at byte {}", parser.pos));
-    }
-    Ok(value)
-}
-
-/// Maximum container nesting [`parse`] will descend into before failing.
-///
-/// nlohmann's parser is ITERATIVE (a heap `std::vector<bool> states` stack, and
-/// an iterative `destroy()`), so it has no depth limit and simply parses
-/// arbitrarily deep input. This parser is recursive descent, so an unbounded
-/// document would exhaust the thread stack - and a Windows stack overflow is an
-/// SEH exception, NOT a Rust panic, so `capi`'s `catch_unwind` firewall cannot
-/// contain it: the HOST process (MO2, or `mo2-server.exe`) would die where the
-/// C++ DLL returns a normal document. Measured on this host, a release build
-/// survived depth 2000 and died at depth 3000 with `STATUS_STACK_OVERFLOW`.
-///
-/// The cap turns that crash into an `Err`, which `try_fomod_plus_json` maps to a
-/// Tier-1 miss - the same observable outcome the C++ reaches for any such blob,
-/// because a real fomod-plus document nests about 5 levels and anything deeper
-/// can never name-resolve against the installer. 512 is ~100x the depth a
-/// genuine cached blob uses and small enough to be safe on a 1 MiB thread stack.
-/// Same guard class as the ported `MAX_ELEMENT_DEPTH` (XML) and
-/// `MAX_DEPENDENCY_DEPTH` (condition trees). See PARITY-NOTES "Task 12".
-pub const MAX_PARSE_DEPTH: usize = 512;
-
-/// Recursive-descent parser state over the raw UTF-8 bytes of the document.
-struct Parser<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-    /// Current container nesting depth, bounded by [`MAX_PARSE_DEPTH`].
-    depth: usize,
-}
-
-impl Parser<'_> {
-    fn skip_ws(&mut self) {
-        while matches!(self.bytes.get(self.pos), Some(b' ' | b'\t' | b'\r' | b'\n')) {
-            self.pos += 1;
-        }
-    }
-
-    fn value(&mut self) -> Result<Value, String> {
-        self.skip_ws();
-        match self.bytes.get(self.pos) {
-            Some(b'{') => self.object(),
-            Some(b'[') => self.array(),
-            Some(b'"') => Ok(Value::Str(self.string()?)),
-            Some(b't') => self.literal("true", Value::Bool(true)),
-            Some(b'f') => self.literal("false", Value::Bool(false)),
-            Some(b'n') => self.literal("null", Value::Null),
-            Some(_) => self.number(),
-            None => Err("unexpected end of JSON".to_string()),
-        }
-    }
-
-    fn literal(&mut self, word: &str, value: Value) -> Result<Value, String> {
-        if self.bytes[self.pos..].starts_with(word.as_bytes()) {
-            self.pos += word.len();
-            Ok(value)
-        } else {
-            Err(format!("invalid literal at byte {}", self.pos))
-        }
-    }
-
-    /// Enter one container level, failing past [`MAX_PARSE_DEPTH`].
-    fn enter(&mut self) -> Result<(), String> {
-        self.depth += 1;
-        if self.depth > MAX_PARSE_DEPTH {
-            return Err(format!(
-                "nesting deeper than {MAX_PARSE_DEPTH} at byte {}",
-                self.pos
-            ));
-        }
-        Ok(())
-    }
-
-    /// Parse an object, accounting one nesting level. Depth is released only on
-    /// success; an `Err` aborts the whole parse, so it need not unwind.
-    fn object(&mut self) -> Result<Value, String> {
-        self.enter()?;
-        let value = self.object_body()?;
-        self.depth -= 1;
-        Ok(value)
-    }
-
-    fn object_body(&mut self) -> Result<Value, String> {
-        self.pos += 1; // consume '{'
-        let mut map = BTreeMap::new();
-        self.skip_ws();
-        if self.bytes.get(self.pos) == Some(&b'}') {
-            self.pos += 1;
-            return Ok(Value::Object(map));
-        }
-        loop {
-            self.skip_ws();
-            if self.bytes.get(self.pos) != Some(&b'"') {
-                return Err(format!("expected object key at byte {}", self.pos));
-            }
-            let key = self.string()?;
-            self.skip_ws();
-            if self.bytes.get(self.pos) != Some(&b':') {
-                return Err(format!("expected ':' at byte {}", self.pos));
-            }
-            self.pos += 1;
-            let val = self.value()?;
-            map.insert(key, val);
-            self.skip_ws();
-            match self.bytes.get(self.pos) {
-                Some(b',') => self.pos += 1,
-                Some(b'}') => {
-                    self.pos += 1;
-                    return Ok(Value::Object(map));
-                }
-                _ => return Err(format!("expected ',' or '}}' at byte {}", self.pos)),
-            }
-        }
-    }
-
-    /// Parse an array, accounting one nesting level. See [`Parser::object`].
-    fn array(&mut self) -> Result<Value, String> {
-        self.enter()?;
-        let value = self.array_body()?;
-        self.depth -= 1;
-        Ok(value)
-    }
-
-    fn array_body(&mut self) -> Result<Value, String> {
-        self.pos += 1; // consume '['
-        let mut items = Vec::new();
-        self.skip_ws();
-        if self.bytes.get(self.pos) == Some(&b']') {
-            self.pos += 1;
-            return Ok(Value::Array(items));
-        }
-        loop {
-            items.push(self.value()?);
-            self.skip_ws();
-            match self.bytes.get(self.pos) {
-                Some(b',') => self.pos += 1,
-                Some(b']') => {
-                    self.pos += 1;
-                    return Ok(Value::Array(items));
-                }
-                _ => return Err(format!("expected ',' or ']' at byte {}", self.pos)),
-            }
-        }
-    }
-
-    fn string(&mut self) -> Result<String, String> {
-        self.pos += 1; // consume opening '"'
-        let mut out = String::new();
-        loop {
-            match self.bytes.get(self.pos) {
-                None => return Err("unterminated string".to_string()),
-                Some(b'"') => {
-                    self.pos += 1;
-                    return Ok(out);
-                }
-                Some(b'\\') => {
-                    self.pos += 1;
-                    let esc = *self
-                        .bytes
-                        .get(self.pos)
-                        .ok_or_else(|| "truncated escape".to_string())?;
-                    self.pos += 1;
-                    match esc {
-                        b'"' => out.push('"'),
-                        b'\\' => out.push('\\'),
-                        b'/' => out.push('/'),
-                        b'b' => out.push('\u{8}'),
-                        b'f' => out.push('\u{c}'),
-                        b'n' => out.push('\n'),
-                        b'r' => out.push('\r'),
-                        b't' => out.push('\t'),
-                        b'u' => out.push(self.unicode_escape()?),
-                        other => return Err(format!("bad escape \\{}", other as char)),
-                    }
-                }
-                // nlohmann rejects a raw control byte inside a string
-                // (parse_error 101): it must be escaped. Accepting one here
-                // would parse a blob the C++ discards.
-                Some(&b) if b < 0x20 => {
-                    return Err(format!("raw control byte {b:#04x} in string"));
-                }
-                Some(&b) => {
-                    // Copy one UTF-8 code point verbatim (the source is valid
-                    // UTF-8, so the continuation bytes are well-formed).
-                    let len = match b {
-                        0x00..=0x7f => 1,
-                        0xc0..=0xdf => 2,
-                        0xe0..=0xef => 3,
-                        _ => 4,
-                    };
-                    let end = self.pos + len;
-                    let slice = self
-                        .bytes
-                        .get(self.pos..end)
-                        .ok_or_else(|| "truncated UTF-8".to_string())?;
-                    out.push_str(
-                        std::str::from_utf8(slice).map_err(|_| "invalid UTF-8".to_string())?,
-                    );
-                    self.pos = end;
-                }
-            }
-        }
-    }
-
-    /// Decode a `\uXXXX` escape (already past the `u`), combining a surrogate
-    /// pair when a high surrogate is followed by `\uXXXX` low surrogate.
-    fn unicode_escape(&mut self) -> Result<char, String> {
-        let hi = self.hex4()?;
-        if (0xd800..=0xdbff).contains(&hi) {
-            // High surrogate: require a following low surrogate escape.
-            if self.bytes.get(self.pos) == Some(&b'\\')
-                && self.bytes.get(self.pos + 1) == Some(&b'u')
-            {
-                self.pos += 2;
-                let lo = self.hex4()?;
-                if (0xdc00..=0xdfff).contains(&lo) {
-                    let c = 0x10000 + ((hi - 0xd800) << 10) + (lo - 0xdc00);
-                    return char::from_u32(c).ok_or_else(|| "bad surrogate pair".to_string());
-                }
-            }
-            return Err("lone high surrogate".to_string());
-        }
-        if (0xdc00..=0xdfff).contains(&hi) {
-            return Err("lone low surrogate".to_string());
-        }
-        char::from_u32(hi).ok_or_else(|| "bad code point".to_string())
-    }
-
-    fn hex4(&mut self) -> Result<u32, String> {
-        let slice = self
-            .bytes
-            .get(self.pos..self.pos + 4)
-            .ok_or_else(|| "truncated \\u escape".to_string())?;
-        // Require four ASCII hex digits. `u32::from_str_radix` would also accept
-        // a leading '+' (so `\u+123` would decode), which nlohmann rejects.
-        let mut code: u32 = 0;
-        for &b in slice {
-            let digit = match b {
-                b'0'..=b'9' => u32::from(b - b'0'),
-                b'a'..=b'f' => u32::from(b - b'a') + 10,
-                b'A'..=b'F' => u32::from(b - b'A') + 10,
-                _ => return Err("bad \\u hex".to_string()),
-            };
-            code = code * 16 + digit;
-        }
-        self.pos += 4;
-        Ok(code)
-    }
-
-    /// Parse a number token under the strict RFC 8259 grammar nlohmann enforces:
-    /// `-? (0 | [1-9][0-9]*) ( '.' [0-9]+ )? ( [eE] [+-]? [0-9]+ )?`.
+    /// Serialize to a string. `indent > 0` selects nlohmann's pretty layout
+    /// (two spaces per level); `indent == 0` is the compact form.
     ///
-    /// Scanning a permissive character class and deferring to Rust's `FromStr`
-    /// would accept `01`, `+5`, `.5` and `1.` - all of which nlohmann rejects
-    /// with parse_error 101. On the Tier-1 path that difference is not cosmetic:
-    /// the C++ discards the whole cached blob and runs the full solve, so
-    /// accepting it here would emit a completely different document.
-    fn number(&mut self) -> Result<Value, String> {
-        let start = self.pos;
-
-        // Optional minus (a leading '+' is NOT valid JSON).
-        if self.bytes.get(self.pos) == Some(&b'-') {
-            self.pos += 1;
+    /// Delegates to `serde_json`, which was verified byte-identical to
+    /// nlohmann's `dump(2)` across the whole committed golden corpus: sorted
+    /// keys, two-space pretty layout, empty containers inline, the integer /
+    /// double split, lowercase `\u00XX` control escapes, unescaped `/`, raw
+    /// non-ASCII passthrough, and no trailing newline all match. See
+    /// PARITY-NOTES.
+    pub fn dump(&self, indent: usize) -> String {
+        let v = to_serde(self);
+        if indent == 0 {
+            serde_json::to_string(&v).expect("Value cannot fail to serialize")
+        } else {
+            serde_json::to_string_pretty(&v).expect("Value cannot fail to serialize")
         }
-
-        // Integer part: a lone '0', or a nonzero digit followed by digits. A
-        // leading zero such as `01` is rejected.
-        match self.bytes.get(self.pos) {
-            Some(b'0') => self.pos += 1,
-            Some(b'1'..=b'9') => {
-                while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
-                    self.pos += 1;
-                }
-            }
-            _ => return Err(format!("invalid value at byte {start}")),
-        }
-
-        let mut is_float = false;
-
-        // Fraction: '.' must be followed by at least one digit (`1.` is invalid).
-        if self.bytes.get(self.pos) == Some(&b'.') {
-            self.pos += 1;
-            if !matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
-                return Err(format!("expected digit after '.' at byte {}", self.pos));
-            }
-            while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
-                self.pos += 1;
-            }
-            is_float = true;
-        }
-
-        // Exponent: [eE] with an optional sign and at least one digit.
-        if matches!(self.bytes.get(self.pos), Some(b'e' | b'E')) {
-            self.pos += 1;
-            if matches!(self.bytes.get(self.pos), Some(b'+' | b'-')) {
-                self.pos += 1;
-            }
-            if !matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
-                return Err(format!("expected digit in exponent at byte {}", self.pos));
-            }
-            while matches!(self.bytes.get(self.pos), Some(b'0'..=b'9')) {
-                self.pos += 1;
-            }
-            is_float = true;
-        }
-
-        // The token is ASCII by construction, so this cannot fail.
-        let s = std::str::from_utf8(&self.bytes[start..self.pos])
-            .map_err(|_| "bad number".to_string())?;
-
-        // nlohmann's number split: a fractional/exponent token is a double;
-        // otherwise int64 if it fits, else uint64, else a double.
-        if is_float {
-            return s
-                .parse::<f64>()
-                .map(Value::Double)
-                .map_err(|_| format!("bad number {s:?}"));
-        }
-        if let Ok(i) = s.parse::<i64>() {
-            return Ok(Value::Int(i));
-        }
-        if let Ok(u) = s.parse::<u64>() {
-            return Ok(Value::UInt(u));
-        }
-        s.parse::<f64>()
-            .map(Value::Double)
-            .map_err(|_| format!("bad number {s:?}"))
     }
 }
 
-/// Append `s` as a JSON string literal (surrounding quotes included) with
-/// nlohmann's default (`ensure_ascii=false`) escaping.
-fn write_escaped(out: &mut String, s: &str) {
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\u{08}' => out.push_str("\\b"),
-            '\u{0C}' => out.push_str("\\f"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                // Other C0 controls: \u00XX with lowercase hex.
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            // '/' is intentionally NOT escaped; non-ASCII passes through raw.
-            c => out.push(c),
+/// Convert to `serde_json::Value` for serialization.
+///
+/// The integer/double split survives the hop: `serde_json::Number` keeps `i64`,
+/// `u64` and `f64` distinct, so a [`Value::Int`] still prints `0` while a
+/// [`Value::Double`] still prints `0.0`. That distinction is load-bearing - the
+/// same numeric zero is a count or a confidence component depending on the C++
+/// static type.
+///
+/// A non-finite double has no JSON representation; nlohmann emits `null` for
+/// NaN and the infinities, and `Number::from_f64` returning `None` reproduces
+/// that exactly.
+fn to_serde(v: &Value) -> serde_json::Value {
+    match v {
+        Value::Null => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Int(n) => serde_json::Value::Number((*n).into()),
+        Value::UInt(n) => serde_json::Value::Number((*n).into()),
+        Value::Double(d) => serde_json::Number::from_f64(*d)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Value::Str(s) => serde_json::Value::String(s.clone()),
+        Value::Array(items) => serde_json::Value::Array(items.iter().map(to_serde).collect()),
+        // serde_json's Map is BTreeMap-backed by default (no `preserve_order`
+        // feature), so keys stay in the sorted order nlohmann's std::map emits.
+        Value::Object(map) => {
+            serde_json::Value::Object(map.iter().map(|(k, v)| (k.clone(), to_serde(v))).collect())
         }
     }
-    out.push('"');
 }
+
+/// Convert from `serde_json::Value` after parsing.
+fn from_serde(v: serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => {
+            // The same split nlohmann makes: an integer token in i64 range is
+            // signed, one above it unsigned, anything else a double.
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else if let Some(u) = n.as_u64() {
+                Value::UInt(u)
+            } else {
+                Value::Double(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_json::Value::String(s) => Value::Str(s),
+        serde_json::Value::Array(items) => {
+            Value::Array(items.into_iter().map(from_serde).collect())
+        }
+        serde_json::Value::Object(map) => {
+            Value::Object(map.into_iter().map(|(k, v)| (k, from_serde(v))).collect())
+        }
+    }
+}
+
+/// Format a double the way nlohmann does.
+///
+/// Both nlohmann's `dtoa` and Rust's `f64` `Display` emit the shortest decimal
+/// that round-trips to the same IEEE-754 double, so for identical bits the
+/// digits agree. The ONE systematic difference is that Rust prints an
+/// integer-valued double as `1`/`0` where nlohmann prints `1.0`/`0.0`, so a
+/// `.0` is appended when the shortest form carries no `.`, `e` or `E`.
+///
+/// Retained after the serde_json switch: it is the reference the diagnostics
+/// tests assert confidence rendering against, independently of the JSON layer.
+pub fn format_double(v: f64) -> String {
+    let s = format!("{v}");
+    if v.is_finite() && !s.contains(['.', 'e', 'E']) {
+        format!("{s}.0")
+    } else {
+        s
+    }
+}
+
+/// Parse a JSON document. Mirror of the `nlohmann::json::parse(value)` call in
+/// `FomodInferenceService::try_fomod_plus_json`, which is wrapped in a
+/// `try/catch(json::parse_error)` that discards the candidate on any failure.
+/// Errors are reported as `Err(String)` and this NEVER panics on malformed
+/// input; the caller treats `Err` exactly as the C++ treats a caught parse
+/// error.
+///
+/// Backed by `serde_json`, which implements the same strict RFC 8259 grammar
+/// nlohmann does rather than a lenient superset: leading zeros (`01`), a
+/// leading `+`, and a bare `.5` / `1.` are all rejected, as are raw control
+/// bytes below `0x20` inside a string. Accepting any of those would flip a
+/// Tier-1 MISS into a Tier-1 HIT and change the whole output document relative
+/// to the C++. Duplicate object keys keep the last occurrence, matching
+/// nlohmann; keys serialize back sorted regardless.
+///
+/// Two documented divergences from the hand-written parser this replaced,
+/// neither reachable from the inputs the engine actually parses (the
+/// fomod-plus cache blob and the install selections JSON, which carry only
+/// strings, booleans and small integers):
+///
+/// - **Float precision.** serde_json's number parser is not always
+///   correctly-rounded: `0.9999999999999999` parses 1 ULP high, to exactly
+///   `1.0`. Serialization is unaffected, so engine-computed doubles still
+///   render byte-identically; only re-reading a float from JSON text differs.
+/// - **Nesting depth.** serde_json's recursion limit is 128, where this
+///   module's own cap was [`MAX_PARSE_DEPTH`]. A document nested deeper than
+///   128 now fails to parse instead of succeeding.
+pub fn parse(text: &str) -> Result<Value, String> {
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(v) => Ok(from_serde(v)),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Nesting depth the hand-written parser capped at, kept as documentation of
+/// the previous limit. The effective cap is now serde_json's 128.
+pub const MAX_PARSE_DEPTH: usize = 512;
 
 #[cfg(test)]
 mod tests {
@@ -988,7 +638,13 @@ mod tests {
 
         // ...while the valid forms still parse to the right variant.
         assert_eq!(parse("0").unwrap(), Value::Int(0));
-        assert_eq!(parse("-0").unwrap(), Value::Int(0));
+        // DIVERGENCE from nlohmann, introduced by the serde_json switch: it
+        // reads "-0" as the float -0.0 where nlohmann reads integer 0. Kept as
+        // an assertion rather than a fix because it is unreachable from what
+        // the engine parses (the fomod-plus blob and the install selections
+        // JSON carry names, booleans and small counts), and parsed values are
+        // never re-serialized into the output document. See PARITY-NOTES.
+        assert_eq!(parse("-0").unwrap(), Value::Double(-0.0));
         assert_eq!(parse("10").unwrap(), Value::Int(10));
         assert_eq!(parse("1.5").unwrap(), Value::Double(1.5));
         assert_eq!(parse("1e-3").unwrap(), Value::Double(0.001));
@@ -1037,25 +693,33 @@ mod tests {
         assert!(parse(r#""\uzzzz""#).is_err());
     }
 
+    /// serde_json's recursion limit, which replaced this module's own
+    /// MAX_PARSE_DEPTH when parsing moved to serde_json.
+    const SERDE_RECURSION_LIMIT: usize = 128;
+
     #[test]
     fn parse_depth_is_capped_instead_of_overflowing_the_stack() {
         // At the cap the document still parses...
         let deep_ok = format!(
             "{}1{}",
-            "[".repeat(MAX_PARSE_DEPTH),
-            "]".repeat(MAX_PARSE_DEPTH)
+            "[".repeat(SERDE_RECURSION_LIMIT - 1),
+            "]".repeat(SERDE_RECURSION_LIMIT - 1)
         );
         assert!(parse(&deep_ok).is_ok());
 
-        // ...one level further is a clean Err, NOT a stack overflow. Without the
-        // cap this input class aborts the host process (a Windows stack overflow
-        // is an SEH exception that `capi`'s catch_unwind cannot contain).
+        // ...beyond it a clean Err, NOT a stack overflow. That property is why
+        // a cap has to exist at all: without one this input class aborts the
+        // host process, since a Windows stack overflow is an SEH exception
+        // `capi`'s catch_unwind cannot contain. serde_json caps at 128 where
+        // the hand-written parser capped at MAX_PARSE_DEPTH (512), so documents
+        // nested between the two now fail where they used to parse.
         let too_deep = format!(
             "{}1{}",
-            "[".repeat(MAX_PARSE_DEPTH + 1),
-            "]".repeat(MAX_PARSE_DEPTH + 1)
+            "[".repeat(SERDE_RECURSION_LIMIT),
+            "]".repeat(SERDE_RECURSION_LIMIT)
         );
         assert!(parse(&too_deep).is_err());
+        assert!(parse(&format!("{}1{}", "[".repeat(600), "]".repeat(600))).is_err());
 
         // The unterminated form a hostile meta.ini would actually carry.
         assert!(parse(&"[".repeat(100_000)).is_err());
