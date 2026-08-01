@@ -11,7 +11,8 @@ Two modes:
     full/<fixture_file>.json carries `archive_path` and `output_json` (the C++
     DLL's committed output). The installed mod dir is `<mods_path>/<mod_name>`.
 
-  --curated      - iterate tests/golden/cases/*/case.json (small vetted set).
+  --curated      - REMOVED. The committed case corpus was built from real
+                   mods and no longer ships; see _iter_curated_cases.
     Each case.json carries `source_archive_path` and `mod_name`; the committed
     C++ output is the sibling expected.json (empty for expected_status=="empty").
     The installed mod dir is `<mods_path>/<mod_name>` (mods_path from the
@@ -184,7 +185,21 @@ def _iter_full_cases(mods_path):
 
 
 def _iter_curated_cases(mods_path):
-    """Yield (name, archive_path, mod_dir, cpp_output) for each curated case."""
+    """Yield (name, archive_path, mod_dir, cpp_output) for each curated case.
+
+    The curated cases were committed C++ oracle output built from real mods.
+    They were removed from the repo because the case names, FOMOD documents and
+    local archive paths together described the mod setup. Only the gitignored
+    full corpus under tests/golden/full/ remains, and only on the machine that
+    generated it.
+    """
+    if not os.path.isdir(CASES_DIR):
+        sys.exit(
+            "--curated is unavailable: the committed case corpus was removed.\n"
+            "It was built from real mods and is not in the repo any more.\n"
+            "Use the full corpus instead (drop --curated), which reads the\n"
+            "gitignored tests/golden/full/ that gen_golden.py produces locally."
+        )
     for name in sorted(os.listdir(CASES_DIR)):
         case_json = os.path.join(CASES_DIR, name, "case.json")
         if not os.path.isfile(case_json):

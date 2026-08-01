@@ -1476,7 +1476,7 @@ mod tests {
         // Two equal-weight plugins: SE_AE selected (non-forced -> evidence 0.5),
         // VR deselected (evidence 0.7); exact match so repro is 1.0. The group's
         // evidence averages to 0.6 and its composite to 0.54 (band "medium"),
-        // matching `zip_exactlyone_mu_joint_fix/expected.json`.
+        // matching `a SelectExactlyOne ZIP fixture/expected.json`.
         let installer = one_group_installer(vec![
             plugin_with_files("SE_AE", 1),
             plugin_with_files("VR", 1),

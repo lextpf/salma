@@ -35,7 +35,7 @@ For a fast Rust iteration loop:
 
 ```powershell
 cargo build --release   # the DLL: target\release\mo2_salma_rs.dll
-cargo test  --release   # 594 tests
+cargo test  --release   # 533 tests
 cargo clippy --all-targets --release -- -D warnings
 ```
 
@@ -56,22 +56,22 @@ Build outputs land in `build/bin/Release/`: `mo2-server.exe`, `salma_tests.exe`,
 
 ### Tests
 
-Rust tests are the primary suite (594 at last count). Unit tests live inline in `src/*.rs` under `#[cfg(test)]`; integration tests are `tests/*.rs`, with the committed golden-case corpus in `tests/golden/cases/` and the shared fixture harness in `tests/common/mod.rs`.
+Rust tests are the primary suite (533 at last count) and are all self-contained: unit tests inline in `src/*.rs` under `#[cfg(test)]`, plus `tests/inference_diagnostics_test.rs`.
 
 ```powershell
 cargo test --release                       # everything
 cargo test --release -- utils::            # a module's unit tests
-cargo test --release --test fomod_ir_fixtures   # one integration target
 ```
 
-Adding a Rust test: an inline `#[cfg(test)] mod tests` needs nothing declared, and a new `tests/<name>.rs` is picked up automatically. Cargo only treats `.rs` files DIRECTLY under `tests/` as targets, which is why `tests/golden/` (data) and `tests/common/` (shared module) are not compiled as test binaries.
+**Do not commit fixtures derived from real mods.** The repo used to carry a golden corpus built from a real mod list, which described the setup through case names, third-party FOMOD documents and local archive paths. It was removed, along with the fixture-driven tests that consumed it: those tests existed to prove byte parity against the C++ engine, and that engine no longer exists to compare against. Keep new tests self-contained.
 
-Parity checks against the C++ oracle need the corpus and the `SALMA_*` env vars, so they are separate from `test.bat` and from CI:
+Real-install validation happens against a live MO2 instance and never touches the repo. It needs the `SALMA_*` env vars (`scripts\setup-env.bat`), and a locally generated corpus that `.gitignore` keeps out of the repo:
 
 ```powershell
-python tools\compare_infer.py target\release\mo2_salma_rs.dll --curated  # 16 vetted cases
-python tools\compare_infer.py target\release\mo2_salma_rs.dll            # full 197-fixture corpus
-python tools\run_harness.py                                                   # test_all.py round-trip, both engines
+python tools\gen_golden.py                                    # build the LOCAL corpus under tests/golden/full/
+python tools\compare_infer.py target\release\mo2_salma_rs.dll # infer over that local corpus
+python tools\run_harness.py                                   # test_all.py round-trip against your MO2
+python test_one.py <archive> <installed-mod-folder> --full    # one mod, byte-for-byte
 ```
 
 C++ unit tests are GoogleTest (linked via `GTest::gtest_main`), discovered with `gtest_discover_tests`.
@@ -153,8 +153,7 @@ The module names still mirror the C++ translation units they were ported from, s
 Cargo.toml          root, one package, no workspace
 build.rs            Win32 link flags for the vendored unrar sources
 src/*.rs            beside the C++ it mirrors (FomodIRParser.cpp -> fomod_ir_parser.rs)
-tests/*.rs          integration tests, beside the C++ tests/*.cpp
-tests/golden/       committed fixture corpus;  tests/common/  shared harness
+tests/*.rs          self-contained integration tests, beside the C++ tests/*.cpp
 tools/*.py          packaging, smoke tests, and the C++-vs-Rust parity harnesses
 ```
 
