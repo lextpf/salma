@@ -106,14 +106,13 @@ Start `mo2-server.exe` on :5000 before `npm run dev`, or every `/api/*` call the
 
 ## CI gates (must pass before merge)
 
-- `rust.yml` is the Rust pipeline and the primary gate: `cargo fmt --check`, `cargo clippy --all-targets --release -- -D warnings`, release build, `cargo test --release`, then the corpus-free Python checks (`package.py`, `smoke_ctypes.py`, `smoke_plugin.py`) and an artifact upload of the deployable `mo2-salma.dll`. Triggered by changes under `rust/`, to `build.bat`/`test.bat`, or to `scripts/mo2-salma.py`.
-- `build.yml` runs `clang-format -i` over `src` + `tests` and fails if `git diff` is non-empty. Formatting is a hard gate: run the formatter, never hand-adjust layout. It also builds the web frontend (`npm ci; npm run build`) and the C++ Release targets.
-- `test.yml` runs `ctest --preset ci`.
+- `build.yml` is the primary gate and builds the RUST engine (the C++ is no longer built in CI): `cargo fmt --check`, `cargo clippy --all-targets --release -- -D warnings`, release build, `cargo test --release`, then the corpus-free Python checks (`package.py`, `smoke_ctypes.py`, `smoke_plugin.py`) and an artifact upload of the deployable `mo2-salma.dll`. Its second job builds the web dashboard (`npm run build` = tsc type-check then vite). Triggered by changes under `rust/` or `web/`, to `build.bat`/`test.bat`, or to `scripts/mo2-salma.py`.
+- `test.yml` runs `ctest --preset ci` and is now the ONLY workflow that builds the C++. It configures and builds independently, so it still works with the C++ out of `build.yml`. It is what keeps the parity oracle compiling.
 - `eslint.yaml` runs `npm run lint` over `web/`, and only fires on `web/**` changes.
 - `sonar.yml` runs a SonarCloud scan over BOTH engines (`sonar.sources=src,rust/src`). The Rust analyzer shells out to cargo + clippy itself, so the workflow installs the toolchain; and because it looks for `Cargo.toml` in the project root by default, `sonar.rust.cargo.manifestPaths=rust/Cargo.toml` points it at ours. `rust/tests/golden/**` is excluded as test data.
-- clang-tidy no longer runs anywhere automatically: it was a `build.bat` step, and that script now drives the Rust build. Run it by hand against `build-cdb` if you touch C++.
+- clang-tidy and clang-format no longer run anywhere automatically. clang-tidy was a `build.bat` step and clang-format was a `build.yml` step; both scripts now drive Rust. Run them by hand if you touch C++.
 
-`build.yml`, `test.yml`, `eslint.yaml` and `sonar.yml` only trigger on `main`, so they do not run on `rust-core` pushes; they gate the merge. `rust.yml` is path-triggered and runs on any branch.
+`build.yml` is path-triggered and runs on any branch. `test.yml`, `eslint.yaml` and `sonar.yml` trigger on `main` only, so they gate the merge rather than each push.
 
 ## Conventions and gotchas
 
