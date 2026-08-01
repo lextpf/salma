@@ -3,13 +3,13 @@ REM ============================================================================
 REM build.bat - Complete build pipeline for salma (Rust engine)
 REM ===========================================================================================
 REM This script:
-REM   1. cargo fmt    - in-place formatting of rust/src and rust/tests
+REM   1. cargo fmt    - in-place formatting of src and tests
 REM   2. cargo clippy - static analysis over all targets; any warning fails the build
-REM   3. cargo build  - release build of the cdylib -> rust\target\release\mo2_salma_rs.dll
+REM   3. cargo build  - release build of the cdylib -> target\release\mo2_salma_rs.dll
 REM   4. package.py   - stage the deployable artifact as mo2-salma.dll with its SHA-256
 REM
 REM The C++ engine is no longer built here. It still lives in src/ as the parity
-REM oracle for rust\tools\gen_golden.py and run_harness.py; build it directly with
+REM oracle for tools\gen_golden.py and run_harness.py; build it directly with
 REM   cmake --preset default
 REM   cmake --build build --config Release
 REM
@@ -28,7 +28,7 @@ echo.
 
 set "REPO_ROOT=%~dp0"
 if "%REPO_ROOT:~-1%"=="\" set "REPO_ROOT=%REPO_ROOT:~0,-1%"
-set "RUST_DIR=%REPO_ROOT%\rust"
+REM Cargo and CMake share the repo root; cargo runs from here directly.
 
 if not defined CARGO_BUILD_JOBS set "CARGO_BUILD_JOBS=4"
 echo Using CARGO_BUILD_JOBS=%CARGO_BUILD_JOBS%
@@ -45,7 +45,7 @@ REM STEP 1: Format
 REM ============================================================================
 echo [1/4] Running cargo fmt...
 echo ----------------------------------------------------------------------------
-cargo fmt --manifest-path "%RUST_DIR%\Cargo.toml"
+cargo fmt
 if errorlevel 1 (
     echo ERROR: cargo fmt failed
     exit /b 1
@@ -58,7 +58,7 @@ REM STEP 2: Clippy
 REM ============================================================================
 echo [2/4] Running cargo clippy...
 echo ----------------------------------------------------------------------------
-cargo clippy --manifest-path "%RUST_DIR%\Cargo.toml" --all-targets --release -- -D warnings
+cargo clippy --all-targets --release -- -D warnings
 if errorlevel 1 (
     echo ERROR: clippy reported issues
     exit /b 1
@@ -71,7 +71,7 @@ REM STEP 3: Build Release
 REM ============================================================================
 echo [3/4] Building Release...
 echo ----------------------------------------------------------------------------
-cargo build --manifest-path "%RUST_DIR%\Cargo.toml" --release
+cargo build --release
 if errorlevel 1 (
     echo ERROR: Build failed
     exit /b 1
@@ -87,7 +87,7 @@ where python >nul 2>&1
 if errorlevel 1 (
     echo SKIP: python not found in PATH, artifact not staged
 ) else (
-    python "%RUST_DIR%\tools\package.py" --no-build
+    python "%REPO_ROOT%\tools\package.py" --no-build
     if errorlevel 1 (
         echo ERROR: package.py failed
         exit /b 1
@@ -103,8 +103,8 @@ echo                           BUILD PIPELINE COMPLETE
 echo ============================================================================
 echo.
 echo Build Output:
-echo   Built:      rust\target\release\mo2_salma_rs.dll
-echo   Deployable: rust\target\package\mo2-salma.dll
+echo   Built:      target\release\mo2_salma_rs.dll
+echo   Deployable: target\package\mo2-salma.dll
 echo.
 echo  *** Run test.bat to verify, deploy.bat to install into MO2 ***
 echo.

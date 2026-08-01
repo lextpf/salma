@@ -29,7 +29,7 @@
 //!
 //! Behavioral parity notes (validated by the unit tests below and the fixture
 //! suite in `tests/fomod_ir_fixtures.rs`) are recorded in
-//! `rust/PARITY-NOTES.md` under "Task 4".
+//! `PARITY-NOTES.md` under "Task 4".
 
 use std::borrow::Cow;
 use std::fmt;

@@ -23,7 +23,7 @@
 //! size-descending with a min-member-ascending tiebreak (a TOTAL order): the
 //! C++ uses an UNSTABLE `std::sort` by size only, so exact bit-parity with a
 //! specific C++ run is not guaranteed on equal-size ties - only run-to-run
-//! determinism. See `rust/PARITY-NOTES.md` "Task 8".
+//! determinism. See `PARITY-NOTES.md` "Task 8".
 
 use std::collections::{HashMap, HashSet, VecDeque};
 

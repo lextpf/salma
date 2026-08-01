@@ -2,7 +2,7 @@
 """Produce a deployable artifact directory for the Rust salma DLL.
 
 Builds `mo2_salma_rs.dll` in release, then stages it into
-`rust/target/package/` under the name the MO2 plugin expects.
+`target/package/` under the name the MO2 plugin expects.
 
 The rename is the whole point of this script. `scripts/mo2-salma.py::find_dll`
 looks for `mo2-salma.dll`; the cargo artifact is `mo2_salma_rs.dll`. During the
@@ -11,14 +11,14 @@ never be mistaken for the C++ build. Staging under the deploy name is therefore
 an explicit, auditable step rather than something the build does silently.
 
 Usage:
-  python rust/tools/package.py                  # build + stage
-  python rust/tools/package.py --no-build       # stage an existing build
-  python rust/tools/package.py --out DIR        # stage somewhere else
-  python rust/tools/package.py --keep-rust-name # stage as mo2_salma_rs.dll
+  python tools/package.py                  # build + stage
+  python tools/package.py --no-build       # stage an existing build
+  python tools/package.py --out DIR        # stage somewhere else
+  python tools/package.py --keep-rust-name # stage as mo2_salma_rs.dll
 
 The artifact directory holds the DLL and nothing else: the engine has no
 runtime data files, and `logs/` is created next to the DLL on first use.
-See rust/CUTOVER.md for how to deploy it and how to roll back.
+See CUTOVER.md for how to deploy it and how to roll back.
 """
 
 import argparse
@@ -28,10 +28,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent.parent
-CARGO_TOML = REPO / "rust" / "Cargo.toml"
-BUILT_DLL = REPO / "rust" / "target" / "release" / "mo2_salma_rs.dll"
-DEFAULT_OUT = REPO / "rust" / "target" / "package"
+REPO = Path(__file__).resolve().parent.parent
+CARGO_TOML = REPO / "Cargo.toml"
+BUILT_DLL = REPO / "target" / "release" / "mo2_salma_rs.dll"
+DEFAULT_OUT = REPO / "target" / "package"
 DEPLOY_NAME = "mo2-salma.dll"
 
 
@@ -69,7 +69,7 @@ def main() -> int:
     if not BUILT_DLL.is_file():
         raise SystemExit(
             f"[package] {BUILT_DLL} not found. Run without --no-build, or "
-            f"`cargo build --release` in rust/ first."
+            f"`cargo build --release` first."
         )
 
     name = BUILT_DLL.name if args.keep_rust_name else DEPLOY_NAME
@@ -90,7 +90,7 @@ def main() -> int:
     if not args.keep_rust_name:
         print(f"[package] NOTE   : renamed {BUILT_DLL.name} -> {name} for deployment.")
     print()
-    print("[package] Next: see rust/CUTOVER.md. Deploying is a deliberate step -")
+    print("[package] Next: see CUTOVER.md. Deploying is a deliberate step -")
     print("[package] copy this file over %SALMA_DEPLOY_PATH%\\salma\\mo2-salma.dll")
     print("[package] only after backing the C++ DLL up, and verify with")
     print("[package] getApiVersion plus a fresh logs/salma.log line.")

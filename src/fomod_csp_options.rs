@@ -21,7 +21,7 @@
 //!   this port adds a raw-option-index-ascending final tiebreak.
 //!
 //! Exact bit-parity with a specific C++ build is not guaranteed on those ties
-//! (only run-to-run determinism); see `rust/PARITY-NOTES.md` "Task 8". The
+//! (only run-to-run determinism); see `PARITY-NOTES.md` "Task 8". The
 //! [`option_signature`] byte-fold IS byte-exact (reuses `fnv1a_hash` +
 //! `hash_combine` over sorted produced-atoms and flags).
 

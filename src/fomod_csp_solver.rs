@@ -26,7 +26,7 @@
 //! / sort order is therefore observable in the final grid whenever ties exist.
 //! Where the C++ is itself nondeterministic (unstable `std::sort`, unordered-map
 //! iteration) this port adds a documented TOTAL-order tiebreak; see
-//! `rust/PARITY-NOTES.md` "Task 9". Consequences: run-to-run determinism is
+//! `PARITY-NOTES.md` "Task 9". Consequences: run-to-run determinism is
 //! guaranteed, but exact bit-parity with a specific MSVC build is only
 //! guaranteed for solves with no accepted-path metric ties.
 //!
@@ -91,7 +91,7 @@ const MAX_BACKTRACK_DEPTH: usize = 500;
 /// in DOCUMENT order (the incremental [`advance_flags_past_group`] path advances
 /// groups in the priority-sorted plan order instead - the two orders differ
 /// intra-step, so the C++ uses whichever matches each call site; see
-/// `rust/PARITY-NOTES.md` "Task 9").
+/// `PARITY-NOTES.md` "Task 9").
 fn rebuild_flags(
     installer: &FomodInstaller,
     selections: &[Vec<Vec<bool>>],
@@ -426,7 +426,7 @@ fn selected_count(option: &[bool]) -> i32 {
 /// (plus those currently selected in best), keeps only SelectAny/SelectAtLeastOne
 /// groups with >1 plugins, sorts candidate locals by evidence ASC (the C++
 /// `std::sort` is unstable; this port adds a local-index ASC tiebreak - see
-/// `rust/PARITY-NOTES.md` "Task 9"), caps at 11 bits, and keeps groups with >= 2
+/// `PARITY-NOTES.md` "Task 9"), caps at 11 bits, and keeps groups with >= 2
 /// bits.
 fn build_repair_plugin_map(
     state: &SolverState,
@@ -2321,7 +2321,7 @@ fn group_priority(t: FomodGroupType) -> i32 {
 /// of the C++ `solve_fomod_csp`.
 ///
 /// Builds the flat group list (document order, then per-step priority sort with
-/// a document-order total tiebreak - see `rust/PARITY-NOTES.md` "Task 9"),
+/// a document-order total tiebreak - see `PARITY-NOTES.md` "Task 9"),
 /// precomputes the read-only solver data, seeds an all-deselected state, then
 /// drives the five phases short-circuiting on an exact match. Returns the best
 /// [`SolverResult`] found (never `""`/failure here; that is the Task 12 caller's
@@ -3017,7 +3017,7 @@ mod tests {
         // Two branches of group 0 (both set F=v, neither is a target producer)
         // converge on an identical (flag, contested) state at the branching group
         // at order position 4, so the second visit re-hits the memo with a
-        // not-better lower bound and is pruned. See rust/PARITY-NOTES.md "Task 9".
+        // not-better lower bound and is pruned. See PARITY-NOTES.md "Task 9".
         let g0 = grp(
             FomodGroupType::SelectExactlyOne,
             vec![plugin_flag("p0", "F", "v"), plugin_flag("p1", "F", "v")],

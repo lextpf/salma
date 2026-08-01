@@ -7,11 +7,11 @@ comparing each result to the committed C++ output for that mod.
 
 Two modes:
 
-  full (default) - iterate rust/tests/golden/full/manifest.json's fixtures. Each
+  full (default) - iterate tests/golden/full/manifest.json's fixtures. Each
     full/<fixture_file>.json carries `archive_path` and `output_json` (the C++
     DLL's committed output). The installed mod dir is `<mods_path>/<mod_name>`.
 
-  --curated      - iterate rust/tests/golden/cases/*/case.json (small vetted set).
+  --curated      - iterate tests/golden/cases/*/case.json (small vetted set).
     Each case.json carries `source_archive_path` and `mod_name`; the committed
     C++ output is the sibling expected.json (empty for expected_status=="empty").
     The installed mod dir is `<mods_path>/<mod_name>` (mods_path from the
@@ -29,7 +29,7 @@ Comparison per case (both sides parsed as JSON unless both are empty):
 
 Exit code is nonzero if any case DIVERGEs (or on a usage/load error). Timings and
 the UNIQUE_FILE_EVIDENCE files set are the ONLY sanctioned divergences; see
-rust/PARITY-NOTES.md "Task 12".
+PARITY-NOTES.md "Task 12".
 
 Usage:
     python compare_infer.py <path-to-mo2_salma_rs.dll> [--curated]

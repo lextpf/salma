@@ -29,7 +29,7 @@
 //! case-insensitively sorted, so bit7z (and 7z.exe, which generated the golden)
 //! echo that order, while `sevenz_rust2`/`unrar` return raw header order; the
 //! sort reconciles them. An archive authored with an unsorted directory would
-//! diverge. See `rust/PARITY-NOTES.md` ("Task 11").
+//! diverge. See `PARITY-NOTES.md` ("Task 11").
 //!
 //! ## Normalization profiles (from the C++ hpp table)
 //!

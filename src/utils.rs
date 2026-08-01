@@ -1,7 +1,7 @@
 //! Shared utility functions - Rust port of `src/Utils.hpp` / `src/Utils.cpp`.
 //!
 //! Every function here mirrors the C++ implementation byte-for-byte in its
-//! observable behavior; see `rust/PARITY-NOTES.md` ("Task 3 - Utils port")
+//! observable behavior; see `PARITY-NOTES.md` ("Task 3 - Utils port")
 //! for the mapping decisions, notably:
 //!
 //! - The C++ compile-time dispatch helpers (`EnumStringMap`, `HashDispatch`,

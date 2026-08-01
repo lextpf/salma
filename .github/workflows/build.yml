@@ -5,7 +5,12 @@ name: build
 on:
   push:
     paths:
-      - "rust/**"
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - "tools/**"
       - "web/**"
       - "scripts/mo2-salma.py"
       - "build.bat"
@@ -13,7 +18,12 @@ on:
       - ".github/workflows/build.yml"
   pull_request:
     paths:
-      - "rust/**"
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - "tools/**"
       - "web/**"
       - "scripts/mo2-salma.py"
       - "build.bat"
@@ -24,9 +34,6 @@ jobs:
   engine:
     name: engine (rust)
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: rust
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,7 +46,7 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: .
 
       - name: Format check
         run: cargo fmt --check
@@ -69,7 +76,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mo2-salma-dll
-          path: rust/target/package/mo2-salma.dll
+          path: target/package/mo2-salma.dll
           if-no-files-found: error
 
   web:

@@ -12,7 +12,7 @@
 //! `setLogCallback`, and every C++ engine call site is reproduced. The handful
 //! that have no Rust counterpart - sites whose trigger is a C++ exception, a
 //! `bad_alloc`, or a library this port does not link - are marked in place and
-//! catalogued in `rust/PARITY-NOTES.md` under "Task 17".
+//! catalogued in `PARITY-NOTES.md` under "Task 17".
 //!
 //! Ported so far:
 //! - [`utils`] - shared helpers, mirror of `src/Utils.hpp`/`src/Utils.cpp`

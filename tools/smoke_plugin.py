@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Load the Rust DLL through the MO2 plugin's OWN loader, unmodified.
 
-`rust/tools/smoke_ctypes.py` checks the raw ABI surface. This checks the layer
+`tools/smoke_ctypes.py` checks the raw ABI surface. This checks the layer
 above it: that `scripts/mo2-salma.py`'s real `find_dll` / `load_dll` /
 `_configure_dll` / `_check_api_version` accept the Rust DLL, which is what
 actually decides whether MO2 can load it.
@@ -12,10 +12,10 @@ packaged DLL is placed where the plugin's own search order will find it
 imported with `mobase` and `PyQt6` stubbed, since those exist only inside MO2.
 
 Nothing touches the live MO2 installation. Deploying for real is a separate,
-deliberate step documented in rust/CUTOVER.md.
+deliberate step documented in CUTOVER.md.
 
 Usage:
-  python rust/tools/smoke_plugin.py [--dll PATH]
+  python tools/smoke_plugin.py [--dll PATH]
 """
 
 import argparse
@@ -26,10 +26,10 @@ import sys
 import types
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent.parent
+REPO = Path(__file__).resolve().parent.parent
 PLUGIN_SRC = REPO / "scripts" / "mo2-salma.py"
-PACKAGED = REPO / "rust" / "target" / "package" / "mo2-salma.dll"
-STAGING = REPO / "rust" / "target" / "plugin-smoke"
+PACKAGED = REPO / "target" / "package" / "mo2-salma.dll"
+STAGING = REPO / "target" / "plugin-smoke"
 
 _checks = []
 
@@ -65,7 +65,7 @@ def main() -> int:
 
     if not args.dll.is_file():
         raise SystemExit(
-            f"[smoke] {args.dll} not found. Run `python rust/tools/package.py` first."
+            f"[smoke] {args.dll} not found. Run `python tools/package.py` first."
         )
 
     # Stage: the plugin verbatim, and the DLL where its find_dll looks first.
