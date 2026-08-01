@@ -33,6 +33,8 @@ use std::os::raw::c_char;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::logger::Logger;
+
 /// Stable ABI version string, mirror of the C++ `MO2_SALMA_API_VERSION`.
 ///
 /// Format is `MAJOR.MINOR.PATCH`; a different MAJOR is an incompatible ABI.
@@ -127,6 +129,9 @@ fn set_last_install_success(value: bool) {
 /// (`CApi.cpp:51-53`, `:87-89`), not the looser one `CApi.hpp:252-256`
 /// describes; see PARITY-NOTES "Task 15".
 ///
+/// `tag` is the subsystem tag the two exports log under (`install` /
+/// `installWithConfig`); it is the only other difference between them.
+///
 /// # Safety
 ///
 /// `archive_path` and `mod_path` must each be null or a valid nul-terminated
@@ -135,6 +140,7 @@ unsafe fn install_impl(
     archive_path: *const c_char,
     mod_path: *const c_char,
     json_path: &str,
+    tag: &str,
 ) -> *const c_char {
     match (unsafe { borrow_arg(archive_path) }, unsafe {
         borrow_arg(mod_path)
@@ -158,8 +164,9 @@ unsafe fn install_impl(
                     owned_cstring(&result)
                 }
                 Err(err) => {
-                    // dropped log site: log_error("[install] Fatal error: {}") /
-                    // ("[installWithConfig] Fatal error: {}")
+                    // Mirror of the C++ `catch (const std::exception& e)`: the
+                    // error this port raises stands in for the thrown exception.
+                    Logger::instance().log_error(&format!("[{tag}] Fatal error: {err}"));
                     set_last_install_success(false);
                     // The C++ returns `e.what()`; InstallError::Display carries
                     // exactly that text for every salma-authored message.
@@ -209,8 +216,10 @@ pub unsafe extern "C" fn install(
         // sibling `<archive stem>.json` and uses it when present, so an archive
         // with a sidecar is installed WITH those selections. `CApi.hpp:177-182`
         // states otherwise; the code wins (see PARITY-NOTES "Task 15").
-        || unsafe { install_impl(archive_path, mod_path, "") },
+        || unsafe { install_impl(archive_path, mod_path, "", "install") },
         || {
+            // Mirror of the C++ `catch (...)`.
+            Logger::instance().log_error("[install] Fatal error: unknown exception");
             set_last_install_success(false);
             owned_cstring("Unknown fatal error during installation")
         },
@@ -243,9 +252,11 @@ pub unsafe extern "C" fn installWithConfig(
                     return owned_cstring("Unknown fatal error during installation");
                 }
             };
-            unsafe { install_impl(archive_path, mod_path, json) }
+            unsafe { install_impl(archive_path, mod_path, json, "installWithConfig") }
         },
         || {
+            // Mirror of the C++ `catch (...)`.
+            Logger::instance().log_error("[installWithConfig] Fatal error: unknown exception");
             set_last_install_success(false);
             owned_cstring("Unknown fatal error during installation")
         },
@@ -282,7 +293,14 @@ pub unsafe extern "C" fn inferFomodSelections(
             // treats a bad path as a throw caught by the outer handler).
             _ => owned_cstring(""),
         },
-        || owned_cstring(""),
+        || {
+            // Mirror of the C++ `catch (...)`. The sibling C++ handler,
+            // `catch (const std::exception&)`, logs "[infer] Fatal error: {}"
+            // but is unreachable in BOTH languages: `infer_selections` swallows
+            // every internal failure and returns "" rather than propagating.
+            Logger::instance().log_error("[infer] Fatal error: unknown exception");
+            owned_cstring("")
+        },
     )
 }
 
@@ -358,7 +376,14 @@ pub unsafe extern "C" fn resolveModArchive(
             // no-op ternary: an empty path already stringifies to "".
             owned_cstring(&resolved.to_string_lossy())
         },
-        || owned_cstring(""),
+        || {
+            // Mirror of the C++ `catch (...)`. Its sibling
+            // `catch (const std::exception&)` logs "[resolveModArchive] Fatal
+            // error: {}" and is unreachable here: `resolve_mod_archive` returns
+            // an empty path instead of raising.
+            Logger::instance().log_error("[resolveModArchive] Fatal error: unknown exception");
+            owned_cstring("")
+        },
     )
 }
 
