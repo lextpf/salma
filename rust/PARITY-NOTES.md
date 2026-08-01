@@ -3389,3 +3389,263 @@ harness result, stated rather than papered over.
 - `test_one.py --full`: 3 of 3 PASS.
 - No repo script was modified; `git diff main -- src tests CMakeLists.txt
   scripts test_all.py test_one.py` stays empty.
+
+## Task 17 - Logger parity, packaging, CUTOVER.md
+
+Milestone 8. `src/Logger.hpp`/`.cpp` (593 LOC) -> `src/logger.rs`, plus
+`rust/tools/package.py`, `rust/tools/smoke_plugin.py`, and `rust/CUTOVER.md`.
+
+### Logger mechanism (at parity)
+
+| C++ | Rust |
+| --- | --- |
+| Meyer singleton `Logger::instance()` | `OnceLock` behind `Logger::instance()` |
+| `std::atomic<LogCallback> callback_` | `AtomicUsize` holding the fn-pointer address |
+| `std::mutex mutex_` + `ofstream` + `bytes_written_` | `Mutex<FileState>` grouping all three |
+| `thread_local g_in_callback` | `thread_local IN_CALLBACK: Cell<bool>` |
+| `write_log_unlocked` | `FileState::write_line` |
+| `rotate_if_needed` | `FileState::rotate_if_needed` |
+
+Behaviors reproduced exactly:
+
+- **Anchoring.** `logs/` resolves next to the MODULE that owns the code, via
+  `GetModuleHandleExW(FROM_ADDRESS)` on an address inside the DLL, not the host
+  executable. MO2 runs as ModOrganizer.exe with the DLL under its plugins tree,
+  so anchoring on the exe would put the log in the wrong place. Verified: a
+  ctypes-driven install from a Python process wrote
+  `rust/target/release/logs/salma.log`, beside the DLL.
+- **Line format** `YYYY-MM-DD HH:MM:SS.mmm LEVEL message`, LOCAL time, zero
+  padded in every field including 3-digit milliseconds. Diffed against real C++
+  `build/bin/Release/logs/salma.log` lines; identical.
+- **Local time** comes from `GetLocalTime`, the same OS source `localtime_s`
+  uses, so timezone and DST rules match. `std` has no local-time conversion, so
+  there is no portable alternative; the non-Windows fallback is UTC and exists
+  only so the crate still builds off-Windows.
+- **Routing.** Under the lock, snapshot the callback and write the file line
+  ONLY when no callback is registered. Outside the lock, echo the RAW message
+  (no timestamp, no level) to stdout for info/warning and stderr for error,
+  whether or not a callback exists. Then invoke the callback. A registered
+  callback therefore REPLACES file logging rather than duplicating it, and
+  `setLogCallback(null)` restores it.
+- **Re-entrancy.** A callback that logs is dropped with
+  `[Logger] Re-entrant callback dropped: ...` instead of recursing.
+  `catch_unwind` around the call mirrors the C++ `catch (...)`.
+- **Rotation** at 10 MiB keeping `salma.log.1`-`.3`: `.3` deleted, `.2`->`.3`,
+  `.1`->`.2`, current->`.1`. Including the subtle part: when the final rename
+  FAILS (an antivirus or log viewer pinning the file), the counter is
+  deliberately NOT reset, so the file reopens in append mode and grows past the
+  cap rather than losing entries.
+- **Append-mode seeding**: the rotation counter starts from the existing file
+  size, so a restarted process does not think the log is empty.
+
+### Log message coverage (complete, with a catalogued exception list)
+
+Both the MECHANISM and the message COVERAGE are at parity. Every C++ engine log
+call site is reproduced except the ones listed under "Sites with no Rust
+counterpart" below, each of which is unreachable here or describes a library
+this port does not link.
+
+An earlier revision of this section claimed the gap was "~95 call sites in three
+files". That count was wrong in both directions and is corrected here: it omitted
+`ArchiveService` (30 sites, and the module had neither logging nor deferral
+markers, so nothing flagged it), `CApi` (8), `FomodDependencyEvaluator` (3) and
+`InferenceDiagnostics` (1), and it counted `FomodCSPSolver` as 17 rather than the
+35 it and `FomodCSPSolverPhases` carry together. The real starting gap was ~155
+sites across seven files.
+
+Call-site counts. A Rust count can differ from the C++ in EITHER direction: a
+multi-line C++ `std::format` can map to more than one Rust branch, and a shared
+Rust helper can cover several identical C++ sites.
+
+| Module | C++ | Rust | State |
+| --- | --- | --- | --- |
+| `FileOperations` | 17 | 21 | complete |
+| `ModStructureDetector` | 2 | 3 | complete |
+| `InstallationService` | 43 | 41 | complete |
+| `FomodCSPOptions` | 3 | 3 | complete |
+| `FomodPropagator` | 1 | 1 | complete |
+| `FomodIRParser` | 3 | 3 | complete |
+| `FomodInferenceAtoms` | 3 | 4 | complete |
+| `FomodDependencyEvaluator` | 3 | 3 | complete |
+| `InferenceDiagnostics` | 1 | 1 | complete |
+| `FomodService` | 43 | 42 | complete |
+| `FomodCSPSolver` + `Phases` | 35 | 30 | complete |
+| `FomodInferenceService` | 53 | 49 | complete |
+| `CApi` | 8 | 5 | complete |
+| `ArchiveService` | 30 | 11 | see below |
+
+Where a Rust count is lower, a shared helper covers several C++ sites:
+`log_phase_metrics` serves the five `[solver] After <phase>:` lines,
+`save_checkpoint` serves both C++ checkpoint-limit sites (one of which,
+`SelectionCheckpoint::save`, is dead code with no callers in either language),
+`install_impl`'s tagged error branch serves both `install` and
+`installWithConfig`, and `safe_output_path` / `note_extracted` serve the
+traversal-skip and per-100-progress lines for all three archive backends.
+
+Verification method: for each module, extract every `"[tag] ..."` literal from
+both sides, collapse `{...}` placeholders, sort and diff. The only residual
+differences are C++ string literals split across source lines (same emitted
+text) and the exceptions below.
+
+### The CSP progress bar
+
+`FomodCSPSolver`'s narrative includes a tqdm-style progress bar. `SolverProgress`
+was already ported in full (Task 9) but nothing wrote to `estimated_total` /
+`pass_start_*` / `last_progress_*`, and the four formatters were absent. All four
+(`format_count`, `format_duration`, `format_option_cap`, `build_tqdm_bar`) are
+now ported and the fields are maintained.
+
+The per-node progress check in `evaluate_candidate` sits behind the same
+`estimated_total > 1` guard the C++ uses, so a pass that never sets an estimate
+does not read the clock; where the estimate IS set, this port now does exactly
+the work the C++ already did. It is therefore not expected to widen the ~1.57x
+gap recorded in "Task 16", though that has not been re-measured.
+
+Two bar behaviors were reproduced from the C++ index arithmetic rather than
+re-derived: the `>` head OVERWRITES the cell after the filled run (so 0% renders
+`>...................`, and a full bar has no head), and the closing per-pass bar
+uses the nodes ACTUALLY explored as its denominator rather than the estimate, so
+every pass ends at exactly 100%.
+
+### `[archive]` lines: backend names substituted
+
+`ArchiveService` is the one module where a faithful transcription would be
+false. The C++ names its libraries in the log text ("via bit7z", "falling back
+to libarchive", "Using libarchive for extraction"); this port links neither,
+using `zip` / `sevenz_rust2` / `unrar`. Emitting the C++ strings verbatim would
+make a deployed DLL report libraries it does not contain, which actively misleads
+anyone debugging from a log.
+
+The resolution, chosen deliberately: keep the C++ line shape, tag and position,
+and name the crate that actually ran. `[archive] list_entries: 42 entries, 42
+sizes via sevenz_rust2 (13ms)`. The backend-agnostic lines (`Extracting archive`,
+`Skipping path-traversal entry`, `Extracted N files...`, `extract_filtered:
+extracted N entries`, and the two `create_zip` warnings) are verbatim.
+
+This forced one small structural change: the C++ `extract` and `extract_filtered`
+are separate entry points with separate narratives, but this port implements the
+former via the latter. A shared silent `extract_counted` now carries the routing
+and returns the entry count, and each public entry point owns its own lines, so
+`extract` does not emit `extract_filtered`'s closing line.
+
+### Sites with no Rust counterpart
+
+Each is unreachable in this port or describes machinery it does not have.
+
+| C++ site | Why absent |
+| --- | --- |
+| `[archive] 7z library: {} ({})`, `[archive] 7z.dll not found in SEVENZIP_PATH...` | `7z.dll` discovery does not exist; the backends are statically linked crates |
+| `[archive] Write header warning`, `Copy data warning`, `copy_data failed for entry: code {}` | libarchive write-disk handle warnings; no counterpart (this port has no handle that can warn without failing) |
+| the four `... falling back to libarchive` lines | there is no bit7z-vs-libarchive fallback to report |
+| `[infer] Error after {}ms: {}` | the C++ outer `catch`; there are no exceptions here, and every failure path already logs its own cause before returning `""` |
+| `[infer] Failed to allocate {} bytes for hashing: {}` | Rust aborts on allocation failure rather than unwinding, so the `bad_alloc` handler has no equivalent |
+| `[solver] Checkpoint limit reached` (the `SelectionCheckpoint::save` copy) | dead code in the C++ - the struct has no callers; the live lambda site IS ported |
+| `[infer] Fatal error: {}` / `[resolveModArchive] Fatal error: {}` (the `catch (const std::exception&)` arms) | unreachable in BOTH languages: `infer_selections` and `resolve_mod_archive` swallow internally and never propagate. The sibling `catch (...)` arms ARE ported, onto the panic guards |
+
+### Sites whose text differs
+
+Every one is a place where the C++ interpolates a caught exception's `what()`,
+which has no counterpart. The trigger and the recovery match; the trailing reason
+does not.
+
+| Site | C++ interpolates | This port interpolates |
+| --- | --- | --- |
+| `[fomod] Exception during optional file processing...` | `nlohmann` `type_error::what()` | `SelectionsError`'s `Display` |
+| `[fomod] Failed to execute file operation: {} -> {}: {}` | `ex.what()` | nothing - the trailing `: reason` is dropped (the back end reports failure as a `bool`). Unreachable in both languages |
+| `[fomod] Malformed version component "{}": {}` | MSVC `stoi` (`"invalid stoi argument"`) | `ParseIntError` (`"cannot parse integer from empty string"`) |
+| `[infer] XML parse failed: {}` | pugixml `xml_parse_result::description()` | roxmltree's error `Display` |
+| `[infer] Failed to parse fomod-plus JSON: {}` | `nlohmann::parse_error::what()` | this port's JSON parser error; ill-formed UTF-8 (nlohmann error 316) reads `invalid UTF-8 in value` |
+| `[install]` / `[installWithConfig] Fatal error: {}` | `ex.what()` | `InstallError`'s `Display` (same text for every salma-authored message) |
+| `[infer] Error iterating {}: {}` | the root mod path (one recursive iterator spans the tree) | the directory that actually failed (the walk is per-directory) |
+
+Two engine messages carry tags that do not match the rest of the subsystem, and
+are kept exactly as the C++ has them: the condition-depth warning in
+`FomodDependencyEvaluator` is tagged `[fomod-ir]`, not `[fomod]`, and its
+unknown-file-dependency-state warning has NO tag at all (the C++ builds that one
+by string concatenation rather than `std::format`).
+
+### A behavioral divergence surfaced while restoring these sites
+
+`ArchiveService::create_zip`: where the C++ cannot read a file's size it warns,
+SKIPS that entry and continues; this port propagates the error and abandons the
+whole archive. Same for a write error mid-entry. The warnings are now emitted at
+both points, but the control flow was NOT changed, because altering it is outside
+a logging task. Low impact: `create_zip` has no callers anywhere in the C++
+engine and only a Rust unit test exercises it here.
+
+### `installSucceeded` semantics
+
+Unchanged from Task 15, restated here because the plan lists it under this task:
+the flag is true if and only if `install_mod` RETURNED, without inspecting the
+returned string. That is the C++ CODE's predicate (`CApi.cpp:51-53`, `:87-89`),
+not the looser one `CApi.hpp:252-256` describes. Task 17 did not alter it.
+
+Also resolved here: the `black_box` in `capi::setLogCallback` is gone. It
+existed only because nothing read the stored callback, letting the release
+optimizer delete the store and ICF-fold the emptied function. There is a real
+reader now, so the hack is unnecessary.
+
+### Packaging
+
+`rust/tools/package.py` builds release and stages the DLL to
+`rust/target/package/mo2-salma.dll`, printing size and SHA-256. The rename from
+`mo2_salma_rs.dll` happens ONLY here: during the parity phase the two names stay
+distinct so a stray copy can never be mistaken for the C++ build.
+`--keep-rust-name` skips the rename, `--no-build` stages an existing build.
+
+The artifact directory holds the DLL and nothing else. The engine has no runtime
+data files and `logs/` is created next to the DLL on first use.
+
+### Plugin-loader smoke test
+
+`rust/tools/smoke_plugin.py` copies `scripts/mo2-salma.py` VERBATIM into a
+staging tree (asserting a byte-identical copy), places the packaged DLL at the
+plugin's own first search candidate (`<plugin dir>/salma/mo2-salma.dll`), stubs
+`mobase` and `PyQt6` (MO2-only imports, stubbed at module scope so every line of
+salma's own code still runs), then drives the plugin's real `find_dll`,
+`load_dll`, `_configure_dll`, `_check_api_version` and `_call_owned_string`.
+
+12 checks, all passing: the plugin finds the staged DLL, configures and
+version-checks it, round-trips an owned string through its own free helper,
+sees `resolveModArchive` via `hasattr`, reads `installSucceeded` as false, and
+`logs/salma.log` appears beside the DLL with a correctly-shaped first line.
+
+The log assertion had to be rewritten once the inference sites landed. It
+originally required the FIRST line to contain `" INFO [install] "`, which held
+only while an inference run emitted nothing: the script exercises
+`inferFomodSelections` BEFORE `install`, so the first line is now the `[infer]`
+banner. It now matches the line SHAPE
+(`^date time.mmm (INFO|WARNING|ERROR) [tag] `) and separately asserts that an
+`[install]` line appears somewhere in the file - 12 checks instead of 11. The
+DLL behavior was correct throughout; the assertion had encoded the gap it was
+written against.
+
+**The live MO2 installation was NOT touched.** The plan permits deploying into
+`SALMA_DEPLOY_PATH` when it exists, and it does exist here
+(`D:\Nolvus\Instance\MO2\plugins`), holding the user's working C++ DLL.
+Overwriting a live modding setup's engine is an outward-facing change that the
+parity phase does not require, so the documented headless alternative was used
+instead. CUTOVER.md carries the manual steps for when that decision is made
+deliberately.
+
+### `deploy.bat` needs no changes
+
+`deploy.bat:34-35` already prefers a `mo2-salma.dll` at the repo root over
+`build\bin\Release\`, so the Rust DLL can be deployed through the unmodified
+script by staging it there. Two hazards, both documented in CUTOVER.md: the
+override is sticky (every later `deploy.bat` keeps shipping the Rust build), and
+the repo root was NOT git-ignored for that name, so a 2.5 MB binary could have
+been committed by accident. An ANCHORED `/mo2-salma.dll` rule was added to
+`.gitignore` to close the second one; anchored specifically so it cannot hide a
+DLL elsewhere in the tree, which is the trap recorded for the old unanchored
+`logs/` pattern.
+
+### Tests
+
++7 unit tests in `logger.rs` covering the line format (including zero padding
+and an empty message), the level strings, the rotation constants, the local-time
+stamp, and the log-directory anchoring. The `capi` callback test now asserts the
+export reaches the logger. Callback registration is asserted in exactly ONE test
+across the binary, because the callback is process-global and cargo runs tests
+in parallel. Suite: 587 -> 594, 0 failures; `cargo fmt --check` and
+`cargo clippy --all-targets -- -D warnings` clean.
