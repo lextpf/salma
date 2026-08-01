@@ -27,10 +27,11 @@ Evidence, all reproducible from this repo:
 - `cargo test --release` - 594 tests, 0 failures.
 - `python tools/compare_infer.py target/release/mo2_salma_rs.dll --curated`
   - 1 EXACT / 15 METRICS_EQUAL / 0 DIVERGE. Full corpus: 197 fixtures, 0 DIVERGE.
-- `python tools/run_harness.py` - the repo's own `test_all.py` over corpus
-  mods 1-300: 52 passed, 0 failed, and **zero per-mod disagreements** against
-  the C++ baseline. `--one` runs `test_one.py --full` (byte-for-byte) and passes
-  on one mod per archive format.
+- `python tools/run_harness.py` - the repo's own `test_all.py` over the corpus:
+  56 tested, 56 passed, 0 failed, and **zero per-mod disagreements** against the
+  C++ baseline. The byte-for-byte content compare is ON by default (`--no-full`
+  turns it off), so all 56 are byte-exact, not just metric-equal. The harness
+  SHA-256-verifies which DLL actually loaded.
 - `python tools/smoke_ctypes.py target/release/mo2_salma_rs.dll` - raw
   ABI surface.
 - `python tools/smoke_plugin.py` - the MO2 plugin's OWN `find_dll` /
