@@ -25,9 +25,10 @@ use mo2_salma_rs::fomod_ir::FomodInstaller;
 use mo2_salma_rs::fomod_ir_parser::parse_module_config;
 use mo2_salma_rs::utils::normalize_path;
 
-/// Absolute path to the committed golden-case corpus.
+/// Absolute path to the committed golden-case corpus. `CARGO_MANIFEST_DIR` is
+/// `rust/`, so the corpus sits beside this harness under `tests/`.
 pub fn golden_cases_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/golden/cases")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/cases")
 }
 
 /// Whether this host is expected to hold the full corpus of source archives.

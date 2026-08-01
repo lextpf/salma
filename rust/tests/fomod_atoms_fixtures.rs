@@ -27,7 +27,7 @@ use mo2_salma_rs::fomod_ir_parser::parse_module_config;
 use mo2_salma_rs::utils::normalize_path;
 
 fn golden_cases_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/golden/cases")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/cases")
 }
 
 /// Just-enough JSON reader for the machine-generated fixture files

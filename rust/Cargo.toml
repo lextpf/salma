@@ -1,15 +1,47 @@
-# Cargo workspace for the salma mo2-core Rust port.
+# The salma mo2-core Rust port.
 #
-# All Rust code lives under rust/ and builds to cargo's rust/target/, never the
-# C++ build/bin/ tree. The single member crate produces mo2_salma_rs.dll, a
-# drop-in replacement for the C++ mo2-salma.dll.
-[workspace]
-resolver = "2"
-members = ["mo2-salma-rs"]
-
-[workspace.package]
+# Layout mirrors the C++ side of the repo: sources in src/, tests in tests/,
+# with the golden-case corpus under tests/golden/. Builds to cargo's
+# rust/target/, never the C++ build/bin/ tree. Produces mo2_salma_rs.dll, a
+# drop-in replacement for the C++ mo2-salma.dll; rust/tools/package.py does the
+# rename at cutover (see rust/CUTOVER.md).
+#
+# One package, no workspace: there is only ever one crate here, and the extra
+# nesting a workspace required put src/ two levels below rust/.
+[package]
+name = "mo2_salma_rs"
+version = "0.1.0"
 edition = "2024"
 # Floor is the first stable toolchain that supports edition 2024.
 rust-version = "1.85"
+description = "Rust port of the salma mo2-core FOMOD engine, exposing the flat C ABI as mo2_salma_rs.dll."
+publish = false
 
-# [profile.release] intentionally left at cargo defaults for Milestone 1.
+[lib]
+name = "mo2_salma_rs"
+# cdylib -> the mo2_salma_rs.dll the MO2 plugin loads via ctypes.
+# rlib   -> lets `cargo test` link the boundary helpers as a normal library.
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(windows)'.dependencies]
+# Minimal Win32 surface for utils::module_directory / executable_directory
+# (GetModuleHandleExW + GetModuleFileNameW), mirroring src/Utils.cpp, plus
+# GetLocalTime for logger timestamps: the C++ formats with localtime_s, and
+# std has no local-time conversion, so the same OS call keeps the log lines
+# byte-identical including the DST/timezone rules.
+windows-sys = { version = "0.60", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+] }
+
+[dependencies]
+roxmltree = "0.21"
+# Archive backends (Task 11). Pure-Rust zip + 7z; unrar links the proprietary
+# unRAR C sources (read-only decompress; see PARITY-NOTES "Task 11" for the
+# license note and the build.rs Win32 link requirement).
+zip = "8.6.0"
+sevenz-rust2 = "0.21.3"
+unrar = "0.5.8"
+
+# [profile.release] intentionally left at cargo defaults.

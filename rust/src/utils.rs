@@ -1047,7 +1047,7 @@ mod tests {
             ("zip_exactlyone_mu_joint_fix", 0x91d7af004eea83d1, 2876),
             ("sevenz_3step_tk_dodge", 0x777a83236a2c8541, 5910),
         ];
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/golden/cases");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/cases");
         for (case, expected_hash, expected_len) in cases {
             let path = root.join(case).join("ModuleConfig.xml");
             let bytes = std::fs::read(&path)
