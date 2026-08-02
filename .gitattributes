@@ -90,15 +90,6 @@ external/**             linguist-vendored=true
 cmake/**                linguist-vendored=true
 
 # ---------------------------------------------------------------------------
-# Golden vectors: raw engine output and archive-extracted files must round-trip
-# byte-for-byte (sha256-pinned expected.json; ModuleConfig.xml keeps its
-# original encoding and line endings, often UTF-16 LE or CRLF). Never let eol
-# normalization touch them. Generator-written JSON stays default (eol=lf).
-# ---------------------------------------------------------------------------
-rust/tests/golden/cases/**/expected.json     -text
-rust/tests/golden/cases/**/ModuleConfig.xml  -text
-
-# ---------------------------------------------------------------------------
 # Archives
 # ---------------------------------------------------------------------------
 *.zip                   binary
