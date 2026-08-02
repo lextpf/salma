@@ -7,6 +7,10 @@
 # generators emit compile_commands.json. So if you configured with the
 # default `cmake -B build`, build/ has no compile DB, clangd has no per-file
 # flags, and most #includes look unresolved even though the project builds.
+#
+# `cmake --preset compile-db` is the Ninja sidecar that emits a real
+# compile_commands.json; once it is configured, that file supersedes the flags
+# below.
 
 CompileFlags:
   Add:
@@ -17,11 +21,5 @@ CompileFlags:
     - -DWIN32
     - -D_WINDOWS
     - -D_WIN32_WINNT=0x0A00
-    - -DMO2_CORE_EXPORTS
-    - -DLIBARCHIVE_STATIC
     - -DASIO_NO_DEPRECATED
     - -DASIO_STANDALONE
-    - -DBIT7Z_AUTO_FORMAT
-    - -DBIT7Z_DETECT_FROM_EXTENSION
-    - -DBIT7Z_AUTO_PREFIX_LONG_PATHS
-    - -DBIT7Z_PATH_SANITIZATION
