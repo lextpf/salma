@@ -1,21 +1,21 @@
 #!/usr/bin/env python
-"""Load the Rust DLL through the MO2 plugin's OWN loader, unmodified.
+"""Load the packaged DLL through the MO2 plugin's own loader, unmodified.
 
-`tools/smoke_ctypes.py` checks the raw ABI surface. This checks the layer
+`scripts/smoke_ctypes.py` checks the raw ABI surface. This checks the layer
 above it: that `scripts/mo2-salma.py`'s real `find_dll` / `load_dll` /
-`_configure_dll` / `_check_api_version` accept the Rust DLL, which is what
-actually decides whether MO2 can load it.
+`_configure_dll` / `_check_api_version` accept the DLL, which is what decides
+whether MO2 can load it.
 
-The plugin is used VERBATIM: it is copied (not edited) into a staging tree, the
-packaged DLL is placed where the plugin's own search order will find it
-(`<plugin dir>/salma/mo2-salma.dll`, its first candidate), and the module is
-imported with `mobase` and `PyQt6` stubbed, since those exist only inside MO2.
+The plugin runs verbatim. It is copied, never edited, into a staging tree; the
+packaged DLL is placed where the plugin's own search order finds it first
+(`<plugin dir>/salma/mo2-salma.dll`); and the module is imported with `mobase`
+and `PyQt6` stubbed, because those exist only inside MO2.
 
-Nothing touches the live MO2 installation. Deploying for real is a separate,
-deliberate step documented in CUTOVER.md.
+Nothing here touches the live MO2 installation. Deploying for real is a separate
+step, documented in CUTOVER.md.
 
 Usage:
-  python tools/smoke_plugin.py [--dll PATH]
+  python scripts/smoke_plugin.py [--dll PATH]
 """
 
 import argparse
@@ -43,8 +43,8 @@ def install_stubs():
     """Provide the MO2-only imports the plugin performs at module scope.
 
     `__getattr__` hands back a fresh empty class for any name, so the plugin's
-    `class X(mobase.IPluginTool)` definitions evaluate. This stubs the HOST, not
-    the plugin: every line of salma's own code still runs as written.
+    `class X(mobase.IPluginTool)` definitions evaluate. Only the host is stubbed:
+    every line of salma's own code still runs as written.
     """
 
     class _Stub(types.ModuleType):
@@ -65,7 +65,7 @@ def main() -> int:
 
     if not args.dll.is_file():
         raise SystemExit(
-            f"[smoke] {args.dll} not found. Run `python tools/package.py` first."
+            f"[smoke] {args.dll} not found. Run `python scripts/package.py` first."
         )
 
     # Stage: the plugin verbatim, and the DLL where its find_dll looks first.
@@ -98,8 +98,8 @@ def main() -> int:
     check("plugin find_dll() locates the staged DLL",
           found.resolve() == staged_dll.resolve(), str(found))
 
-    # load_dll runs _configure_dll AND _check_api_version, so a missing export
-    # or an ABI-major mismatch fails right here.
+    # load_dll runs both _configure_dll and _check_api_version, so a missing
+    # export or an ABI-major mismatch fails right here.
     lib = plugin.load_dll()
     check("plugin load_dll() configured and version-checked the DLL", lib is not None)
 
@@ -133,9 +133,9 @@ def main() -> int:
     if log.is_file():
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
         first = lines[0] if lines else ""
-        # Assert the SHAPE of the first line rather than a specific subsystem
+        # Assert the shape of the first line rather than a specific subsystem
         # tag. The inferFomodSelections round trip above runs before the install
-        # and now narrates, so the first line belongs to [infer], not [install].
+        # and narrates, so the first line belongs to [infer], not [install].
         shape = re.match(
             r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} (INFO|WARNING|ERROR) \[\w[\w-]*\] ",
             first)
