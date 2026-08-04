@@ -1,23 +1,44 @@
 #!/usr/bin/env python
-"""Drive the repo's round-trip harness against the Rust DLL, unmodified.
+"""Drive the repo's round-trip harness against a chosen DLL, unmodified.
 
-`test_all.py` / `test_one.py` locate the engine through
-`scripts/common.py::find_dll`, whose FIRST candidate is
+`test_all.py` and `test_one.py` locate the engine through
+`scripts/common.py::find_dll`, whose first candidate is
 `$SALMA_DEPLOY_PATH/salma/mo2-salma.dll`. On a developer box that path holds the
-DEPLOYED C++ DLL, so a naive run silently validates the wrong binary - the
-stale-DLL trap.
+build deployed last, not the one just compiled, so a run started by hand can
+silently validate the wrong binary. That is the stale-DLL trap.
 
-This script stages the DLL under test into its own directory as
-`mo2-salma.dll`, points `SALMA_DEPLOY_PATH` at that staging root for the child
-process only, and then PROVES which binary the harness actually loaded by
-re-hashing the file at the path `test_all.py` reports. No repo script is
-modified and no environment change escapes the subprocess.
+This script stages the DLL under test into its own directory as `mo2-salma.dll`,
+points `SALMA_DEPLOY_PATH` at that staging root for the child process only, and
+then proves which binary the harness loaded by re-hashing the file at the path
+`test_all.py` reports. No repo script is modified and no environment change
+escapes the subprocess.
+
+Requires SALMA_MODS_PATH: the child harness imports `scripts/common.py`, which
+exits 2 without it, and the default tmp base is derived from it. SALMA_DEPLOY_PATH
+is supplied here for the child, so an inherited value is ignored. Without
+SALMA_DOWNLOADS_PATH every mod whose `installationFile` is relative skips as
+"archive not found".
 
 Usage:
-  python tools/run_harness.py                      # Rust DLL, full corpus
-  python tools/run_harness.py --dll <path>          # an explicit DLL (see --baseline)
-  python tools/run_harness.py --limit 25           # first 25 testable mods
-  python tools/run_harness.py --one <archive> <mod>   # test_one.py --full
+  python scripts/run_harness.py                        # release build, every testable mod
+  python scripts/run_harness.py --dll <path>           # stage an explicit DLL instead
+  python scripts/run_harness.py --limit 25             # first 25 mods that reach inference
+  python scripts/run_harness.py --separator NAME       # only mods under that MO2 separator
+  python scripts/run_harness.py --no-full              # skip the byte-for-byte compare
+  python scripts/run_harness.py --one <archive> <mod>  # test_one.py --full
+  python scripts/run_harness.py --tmp-base <dir>       # scratch base for TEMP/TMP
+
+`--tmp-base` (and the default it replaces) is deleted before the run and again
+after it. Never point it at a directory holding anything you want to keep.
+
+`--baseline` stages nothing. On its own it explains why there is no second
+engine to compare against and exits; with `--dll` it is ignored and the explicit
+DLL is staged. See the refusal message in `main`.
+
+Exit code: the child harness's own status when verification passes (1 if any mod
+failed). Also 1 for a missing source DLL, for `--baseline` without `--dll`, and
+for any verification failure, which runs after the harness finishes and so can
+turn a passing run into exit 1.
 """
 
 import argparse
@@ -33,19 +54,20 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 RUST_DLL = REPO / "target" / "release" / "mo2_salma_rs.dll"
+# The name misleads: this path holds the copy of the packaged engine DLL that
+# CMake places beside mo2-server.exe. Nothing reads the constant, and there is
+# no second engine for it to point at, so do not wire it up as one.
 CPP_DLL = REPO / "build" / "bin" / "Release" / "mo2-salma.dll"
 STAGING = REPO / "target" / "harness"
 DLL_NAME = "mo2-salma.dll"
 
-# test_all.py prefixes every line with a timestamp ("16:40:28  DLL: ..."), so
-# this deliberately does NOT anchor at the start of the line.
-# The DLL's bit7z path extracts into %TEMP%\salma-bit7z-batch-* and can balloon
-# to tens of GB for large texture archives; test_all.py additionally stages every
-# reinstall under %TEMP%. Over a 300-mod corpus that fills the system drive, and
-# a run aborted mid-extraction leaks the scratch (a 22 GB orphan was observed).
-# TEMP/TMP are therefore pinned to a base on the mods drive, which has room, and
-# the base is wiped before each run. Same rule as gen_golden.py's --tmp-base:
-# never point this under a read-only corpus root.
+# The DLL extracts each archive into %TEMP%\fomod-<8 hex chars> (see
+# src/installation_service.rs), which reaches tens of GB for large texture
+# archives, and test_all.py stages every reinstall under %TEMP% as well. Over a
+# 300-mod corpus that fills the system drive, and a run aborted mid-extraction
+# leaks the scratch (a 22 GB orphan was observed). TEMP and TMP are therefore
+# pinned to a base on the mods drive, which has room. That base is wiped before
+# each run, so never point it at a directory holding anything you want to keep.
 def _default_tmp_base() -> Path:
     mods = os.environ.get("SALMA_MODS_PATH", "")
     if mods:
@@ -56,6 +78,8 @@ def _default_tmp_base() -> Path:
     return Path(tempfile.gettempdir()) / "salma_harness_tmp"
 
 
+# test_all.py prefixes every line with a timestamp ("16:40:28  DLL: ..."), so
+# this deliberately does not anchor at the start of the line.
 DLL_LINE = re.compile(r"\bDLL:\s*(\S.*?)\s*$", re.MULTILINE)
 RESULT_LINE = re.compile(
     r"Tested:\s*(\d+)\s+Passed:\s*(\d+)\s+Failed:\s*(\d+)\s+Skipped:\s*(\d+)"
@@ -86,14 +110,27 @@ def stage_dll(src: Path) -> Path:
 
 
 def fingerprint(dll_path: Path) -> dict:
-    """Load the staged DLL directly and record a behavioral fingerprint.
+    """Load the staged DLL directly and record what a cheap ABI probe can see.
 
-    `getApiVersion` cannot tell the two implementations apart (both report
-    1.2.0), so the discriminator is the LOG CALLBACK: the C++ `Logger` invokes a
-    registered callback on essentially every install/infer step, while the Rust
-    port has no logger yet (Task 17) and never calls it. A callback count of 0
-    is therefore a positive signature of the Rust DLL, and any non-zero count is
-    a positive signature of the C++ DLL.
+    Reports three facts about the exact file staged: the `getApiVersion` string,
+    the number of log-callback lines one failing `inferFomodSelections` call
+    produced, and a plain-language summary of that count.
+
+    Despite the name this does not identify which build is loaded. Every build
+    reports `getApiVersion` 1.2.0 and every build narrates the infer path, so
+    neither field separates one from another. The discriminator that does work
+    is the archive backend named on the `[archive]` log lines (see CUTOVER.md),
+    and this probe cannot reach it: the deliberately bogus argument pair fails
+    before any archive is opened.
+
+    What the probe does prove: the staged file loads, the four exports it
+    touches resolve, callback registration and clearing do not crash, and one
+    owned-string return survives the round trip through `freeResult`.
+
+    Side effects: a callback is registered for the duration of the call and
+    replaced with a null callback before returning. While a callback is
+    registered the engine's logger routes to it instead of to the log file, so
+    the probe writes nothing to disk.
     """
     lib = ctypes.CDLL(str(dll_path))
     lib.getApiVersion.argtypes = []
@@ -113,8 +150,9 @@ def fingerprint(dll_path: Path) -> dict:
 
     cb = cb_type(on_log)
     lib.setLogCallback(cb)
-    # A deliberately bogus pair: both engines take their failure path, which the
-    # C++ still logs. Nothing is written to disk either way.
+    # A deliberately bogus pair: the engine takes its "archive not found" exit
+    # and returns an empty string. Its log lines go to the callback registered
+    # above, so the probe writes nothing to disk.
     addr = lib.inferFomodSelections(b"harness-probe-absent.7z", b"harness-probe-absent")
     if addr:
         lib.freeResult(addr)
@@ -123,7 +161,10 @@ def fingerprint(dll_path: Path) -> dict:
     return {
         "version": (lib.getApiVersion() or b"").decode("utf-8", "replace"),
         "callback_lines": len(seen),
-        "looks_like": "rust (no logger)" if not seen else "c++ (logger active)",
+        # Text only. It describes the count above and identifies no build:
+        # every build logs on this path, so a claim here would be false.
+        "looks_like": ("silent on the infer path" if not seen
+                       else "logs on the infer path"),
     }
 
 
@@ -136,8 +177,9 @@ def run_harness(cmd: list[str], env: dict, label: str) -> tuple[int, str]:
     )
     elapsed = time.perf_counter() - t0
     out = (proc.stdout or "") + (proc.stderr or "")
-    # Persist the harness's own log next to the staging dir, per run, so a
-    # baseline run does not clobber the Rust run's test.log.
+    # Copy the harness's test.log next to the staging dir before the next run
+    # truncates it. The name carries the run label, so a rust run and an
+    # explicit run coexist; two runs of the same kind do not.
     src_log = REPO / "test.log"
     if src_log.is_file():
         shutil.copy2(src_log, STAGING / f"test-{label}.log")
@@ -147,13 +189,13 @@ def run_harness(cmd: list[str], env: dict, label: str) -> tuple[int, str]:
 
 def verify_loaded(out: str, expected_dll: Path, expected_hash: str,
                   *, expect_dll_line: bool) -> None:
-    """Assert the harness loaded the DLL we staged, by path AND by content.
+    """Assert the harness loaded the DLL we staged, by path and by content.
 
     `test_all.py` logs a `DLL: <path>` line, which pins the exact file the
-    harness opened. `test_one.py` logs nothing, so for that mode the proof is
-    the staging precedence (our path is find_dll's first candidate and it
-    exists) plus the content hash. `expect_dll_line` distinguishes the two so a
-    MISSING line is a hard failure where one was due, rather than a silent skip.
+    harness opened. `test_one.py` logs nothing, so there the proof is staging
+    precedence (our path is find_dll's first candidate and it exists) plus the
+    content hash. `expect_dll_line` separates the two cases, so an absent line
+    fails hard where one was due instead of being skipped silently.
     """
     # The staged bytes must still be the ones we put there, in both modes.
     actual = sha256(expected_dll)
@@ -186,25 +228,29 @@ def verify_loaded(out: str, expected_dll: Path, expected_hash: str,
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run the repo harness against a staged DLL")
     ap.add_argument("--baseline", action="store_true",  # retained so it errors, not silently self-compares
-                    help="Stage the C++ DLL instead of the Rust one")
+                    help="Removed. Without --dll it explains why the C++ "
+                         "oracle comparison is gone and exits")
     ap.add_argument("--dll", type=Path, default=None,
                     help="Explicit DLL to stage (overrides --baseline)")
-    ap.add_argument("--limit", type=int, default=0, help="Max mods to test")
+    ap.add_argument("--limit", type=int, default=0,
+                    help="Max mods to carry to the inference stage; forwarded "
+                         "to test_all.py --limit")
     ap.add_argument("--separator", default=None, help="Only mods under this separator")
     ap.add_argument("--no-full", action="store_true",
                     help="Skip the byte-for-byte content compare")
     ap.add_argument("--one", nargs=2, metavar=("ARCHIVE", "MOD"), default=None,
                     help="Run test_one.py --full on one archive/mod pair")
     ap.add_argument("--tmp-base", default="",
-                    help="Scratch base for the DLL's TEMP/TMP "
+                    help="Scratch base for the DLL's TEMP/TMP. WIPED before "
+                         "and after the run "
                          "(default: <mods drive>\\salma_harness_tmp)")
     args = ap.parse_args()
 
     if args.baseline and not args.dll:
-        # The C++ engine was deleted once the Rust port was signed off, and
-        # build/bin/Release/mo2-salma.dll is now where CMake copies the RUST
-        # DLL for mo2-server. Honouring --baseline would stage the Rust build,
-        # label it "baseline", and report a flawless self-comparison.
+        # There is no second engine to compare against:
+        # build/bin/Release/mo2-salma.dll is where CMake copies this same engine
+        # DLL for mo2-server. Honouring --baseline would stage that copy, label
+        # it "baseline", and report a flawless self-comparison.
         sys.exit(
             "--baseline is no longer available: the C++ oracle engine was removed.\n"
             "build/bin/Release/mo2-salma.dll is the RUST engine now (copied there\n"
@@ -226,8 +272,8 @@ def main() -> int:
           f"log-callback-lines={fp['callback_lines']} -> {fp['looks_like']}")
 
     env = dict(os.environ)
-    # find_dll's FIRST candidate is $SALMA_DEPLOY_PATH/salma/mo2-salma.dll, so
-    # pointing it here makes the staged copy win over the deployed C++ DLL.
+    # find_dll's first candidate is $SALMA_DEPLOY_PATH/salma/mo2-salma.dll, so
+    # pointing it here makes the staged copy win over the deployed DLL.
     # Scoped to the subprocess; the caller's environment is untouched.
     env["SALMA_DEPLOY_PATH"] = str(STAGING)
 
@@ -252,8 +298,9 @@ def main() -> int:
     try:
         rc, out = run_harness(cmd, env, label)
     finally:
-        # Always reclaim the scratch, including on Ctrl-C: an aborted run
-        # otherwise leaks the DLL's bit7z batch dir, which reaches tens of GB.
+        # Always reclaim the scratch, Ctrl-C included: an aborted run otherwise
+        # leaks the DLL's %TEMP%\fomod-<hex> extraction dir, which reaches tens
+        # of GB.
         shutil.rmtree(tmp_base, ignore_errors=True)
     print(out)
     verify_loaded(out, staged, staged_hash, expect_dll_line=not args.one)
