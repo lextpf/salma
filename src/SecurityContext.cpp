@@ -20,6 +20,14 @@ std::vector<std::string> default_allowed_origins()
 namespace
 {
 
+/**
+ * @fn std::string trim(std::string_view s)
+ * @brief Trim edge whitespace before splitting the origin policy into entries.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param s Input bytes; whitespace uses the current C locale.
+ * @return A copied substring with interior bytes unchanged.
+ */
 std::string trim(std::string_view s)
 {
     auto is_ws = [](unsigned char c) { return std::isspace(c) != 0; };
