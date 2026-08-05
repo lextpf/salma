@@ -16,8 +16,8 @@ crow::response StaticFileHandler::serve(const std::string& path)
 {
     auto file_path = fs::path(static_dir_) / (path.empty() ? "index.html" : path);
 
-    // compare canonical relative paths because string prefixes accept sibling roots.
-    // weak canonicalization permits a missing path to reach the SPA fallback.
+    // Compare canonical relative paths because string prefixes accept sibling roots.
+    // Weak canonicalization permits a missing path to reach the SPA fallback.
     fs::path canonical_base, canonical_file;
     try
     {
@@ -34,11 +34,11 @@ crow::response StaticFileHandler::serve(const std::string& path)
         return crow::response(403);
     }
 
-    // let the browser router handle missing paths and directories.
+    // Let the browser router handle missing paths and directories.
     if (!fs::exists(file_path) || fs::is_directory(file_path))
     {
         file_path = fs::path(static_dir_) / "index.html";
-        // validate the fallback as an independent path.
+        // Validate the fallback as an independent path.
         try
         {
             auto fallback_canonical = fs::weakly_canonical(file_path);
