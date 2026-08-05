@@ -14,7 +14,7 @@ UploadedFile MultipartHandler::save_uploaded_file(const crow::multipart::message
 {
     UploadedFile result;
 
-    // use the first matching part that also provides a filename.
+    // Use the first matching part that also provides a filename.
     for (const auto& part : msg.parts)
     {
         auto it = part.headers.find("Content-Disposition");
@@ -36,24 +36,24 @@ UploadedFile MultipartHandler::save_uploaded_file(const crow::multipart::message
             continue;
 
         result.original_extension = fs::path(result.filename).extension().string();
-        // allowlist extension characters because the value enters a temporary path.
+        // Allowlist extension characters because the value enters a temporary path.
         std::erase_if(
             result.original_extension,
             [](char c)
             { return !std::isalnum(static_cast<unsigned char>(c)) && c != '.' && c != '-'; });
 
-        // the 12-character suffix reduces collisions between concurrent uploads.
+        // The 12-character suffix reduces collisions between concurrent uploads.
         auto temp_name = "mo2_upload_" + mo2core::random_hex_string(12) + result.original_extension;
         result.temp_path = (fs::temp_directory_path() / temp_name).string();
 
         std::ofstream ofs(result.temp_path, std::ios::binary);
         ofs.write(part.body.data(), static_cast<std::streamsize>(part.body.size()));
 
-        // close can expose a delayed flush failure.
+        // Close can expose a delayed flush failure.
         bool write_ok = ofs.good();
         ofs.close();
 
-        // an empty path is the caller's only failure signal.
+        // An empty path is the caller's only failure signal.
         if (!write_ok || ofs.fail())
         {
             std::error_code ec;
