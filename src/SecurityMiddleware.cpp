@@ -13,12 +13,28 @@ constexpr const char* kAllowedMethods = "GET, POST, PUT, DELETE, OPTIONS";
 constexpr const char* kAllowedHeaders = "Content-Type, X-Salma-Csrf";
 constexpr const char* kPreflightMaxAge = "600";
 
+/**
+ * @fn void apply_cors_headers(crow::response& res, const std::string& origin)
+ * @brief Append the accepted origin and its cache-variation header.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param res Response to update; existing header values remain.
+ * @param origin Nonempty origin already checked against the allowlist.
+ */
 void apply_cors_headers(crow::response& res, const std::string& origin)
 {
     res.add_header("Access-Control-Allow-Origin", origin);
     res.add_header("Vary", "Origin");
 }
 
+/**
+ * @fn void apply_preflight_headers(crow::response& res, const std::string& origin)
+ * @brief Advertise the fixed methods, headers, and 600-second preflight lifetime.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param res Response to update.
+ * @param origin Nonempty origin already checked against the allowlist.
+ */
 void apply_preflight_headers(crow::response& res, const std::string& origin)
 {
     apply_cors_headers(res, origin);
@@ -27,6 +43,14 @@ void apply_preflight_headers(crow::response& res, const std::string& origin)
     res.add_header("Access-Control-Max-Age", kPreflightMaxAge);
 }
 
+/**
+ * @fn void send_403(crow::response& res, const char* error_message)
+ * @brief Complete a rejected request with a JSON error body.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param res Response ended by this call.
+ * @param error_message Non-null error text; CSRF clients match its exact value.
+ */
 void send_403(crow::response& res, const char* error_message)
 {
     nlohmann::json body = {{"error", error_message}};
@@ -40,8 +64,8 @@ void send_403(crow::response& res, const char* error_message)
 
 void SecurityMiddleware::before_handle(crow::request& req, crow::response& res, context&)
 {
-    // preflight uses Origin only because browsers omit custom headers from the probe.
-    // a missing Origin can be same-origin, so mutations still proceed to the CSRF gate.
+    // Preflight uses Origin only because browsers omit custom headers from the probe.
+    // A missing Origin can be same-origin, so mutations still proceed to the CSRF gate.
     const std::string& origin = req.get_header_value("Origin");
     const auto& sec = mo2core::SecurityContext::instance();
     const bool origin_allowed = !origin.empty() && sec.is_origin_allowed(origin);
@@ -73,7 +97,7 @@ void SecurityMiddleware::before_handle(crow::request& req, crow::response& res, 
         return;
     }
 
-    // avoid leaking the matching token prefix through early-exit timing.
+    // Avoid leaking the matching token prefix through early-exit timing.
     const std::string& token = req.get_header_value("X-Salma-Csrf");
     if (token.empty() || !mo2core::constant_time_equals(token, sec.csrf_token()))
     {
