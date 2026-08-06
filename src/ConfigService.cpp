@@ -14,7 +14,7 @@ namespace mo2server
 
 ConfigService::ConfigService()
 {
-    // anchor configuration to the executable so launch location does not change it.
+    // Anchor configuration to the executable so launch location does not change it.
     config_path_ = mo2core::executable_directory() / "salma.json";
 }
 
@@ -71,7 +71,7 @@ bool ConfigService::save()
     std::lock_guard lock(mutex_);
     auto& logger = mo2core::Logger::instance();
 
-    // replace from a sibling file so readers cannot observe a partial write.
+    // Replace from a sibling file so readers cannot observe a partial write.
     auto tmp_path = config_path_;
     tmp_path += ".tmp";
 
@@ -144,7 +144,7 @@ bool ConfigService::apply_mo2_mods_path(const std::string& path)
     {
         return true;
     }
-    // restore the value that remains on disk after a failed save.
+    // Restore the value that remains on disk after a failed save.
     std::lock_guard lock(mutex_);
     mo2_mods_path_ = previous;
     return false;
