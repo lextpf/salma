@@ -18,6 +18,15 @@ using json = nlohmann::json;
 namespace mo2server
 {
 
+/**
+ * @fn crow::response json_response(int status, const json& body)
+ * @brief Serialize an installation response with its JSON content type.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param status HTTP status code.
+ * @param body Value serialized with strict UTF-8 validation.
+ * @return The response; serialization errors propagate.
+ */
 static crow::response json_response(int status, const json& body)
 {
     crow::response res(status, body.dump());
@@ -25,7 +34,14 @@ static crow::response json_response(int status, const json& body)
     return res;
 }
 
-// remove the final Nexus mod-id, version, and file-id suffix when present.
+/**
+ * @fn std::string strip_nexus_suffix(const std::string& stem)
+ * @brief Remove a matching Nexus archive suffix for selections lookup.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param stem Archive filename without its extension.
+ * @return The name prefix, or the unchanged stem when the pattern does not match.
+ */
 static std::string strip_nexus_suffix(const std::string& stem)
 {
     static const std::regex nexus(R"(^(.*)-\d+-[\d\.\-]+-\d+$)");
@@ -37,9 +53,21 @@ static std::string strip_nexus_suffix(const std::string& stem)
     return stem;
 }
 
-// prefer exact mod, archive, and stripped Nexus names. otherwise use the longest
-// case-insensitive prefix of at least five characters and half the target length.
-// a fuzzy prefix must end at `-`, `_`, space, dot, or the target boundary.
+/**
+ * @fn std::string find_existing_fomod_json(const fs::path&, const std::string&,
+ *     const std::string&)
+ * @brief Find reusable selections by exact name, then a constrained prefix.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Exact mod, archive, and stripped Nexus names take precedence. Fuzzy matching uses the longest
+ * case-insensitive prefix with at least five characters and half the target length. The prefix must
+ * end at a word separator or the target boundary.
+ *
+ * @param fomod_output_dir Directory containing generated selections.
+ * @param mod_name Validated mod name.
+ * @param archive_filename Original archive filename.
+ * @return The first matching path, or empty when none matches.
+ */
 static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
                                             const std::string& mod_name,
                                             const std::string& archive_filename)
@@ -55,7 +83,7 @@ static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
     const std::string archive_stem_lower = mo2core::to_lower(archive_stem);
     const std::string archive_base_lower = mo2core::to_lower(archive_base);
 
-    // recheck every caller-derived join against the output directory.
+    // Recheck every caller-derived join against the output directory.
     const fs::path exact_mod = fomod_output_dir / (mod_name + ".json");
     if (mo2core::is_inside(fomod_output_dir, exact_mod) && fs::exists(exact_mod))
         return exact_mod.string();
@@ -66,7 +94,7 @@ static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
     if (mo2core::is_inside(fomod_output_dir, exact_archive_base) && fs::exists(exact_archive_base))
         return exact_archive_base.string();
 
-    // sort longest first so the most specific fuzzy match wins.
+    // Sort longest first so the most specific fuzzy match wins.
     std::vector<fs::path> candidates;
     for (const auto& entry : fs::directory_iterator(fomod_output_dir))
     {
@@ -96,7 +124,7 @@ static std::string find_existing_fomod_json(const fs::path& fomod_output_dir,
                 return false;
             if (stem_lower.size() == target.size())
                 return true;
-            // reject prefixes that end inside a word.
+            // Reject prefixes that end inside a word.
             char next = target[stem_lower.size()];
             return next == '-' || next == '_' || next == ' ' || next == '.';
         };
@@ -146,7 +174,7 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
     auto mod_path = MultipartHandler::get_part_value(msg, "modPath");
     auto fomod_json = MultipartHandler::get_part_value(msg, "fomodJson");
 
-    // the engine accepts a selections path, so persist an inline value first.
+    // The engine accepts a selections path, so persist an inline value first.
     if (!fomod_json.empty())
     {
         logger.log(std::format("[install] FOMOD JSON provided ({} chars)", fomod_json.size()));
@@ -167,7 +195,7 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
         }
     }
 
-    // remove a leading download-order prefix from the archive stem.
+    // Remove a leading download-order prefix from the archive stem.
     if (mod_name.empty())
     {
         mod_name = fs::path(uploaded.filename).stem().string();
@@ -228,7 +256,7 @@ InstallationController::parse_and_validate_upload(const crow::request& req,
         mod_path = (fs::path(mods_dir) / mod_name).string();
         if (!mo2core::is_inside(fs::path(mods_dir), fs::path(mod_path)))
         {
-            // retain containment as defense in depth after name validation.
+            // Retain containment as defense in depth after name validation.
             error_out = json_response(
                 400, {{"error", "Generated mod path escapes the configured MO2 mods directory"}});
             return std::nullopt;
@@ -256,7 +284,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
             return error_out;
         }
 
-        // retain ownership until the background job starts.
+        // Retain ownership until the background job starts.
         temp_path_cleanup = ctx->temp_path;
         if (ctx->json_is_temp)
         {
@@ -264,7 +292,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
             json_temp_cleanup = true;
         }
 
-        // the job outlives the request context, so capture values only.
+        // The job outlives the request context, so capture values only.
         std::string temp_path = ctx->temp_path;
         std::string mod_path = ctx->mod_path;
         std::string json_path = ctx->json_path;
@@ -297,7 +325,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
                         job_result.error = ex.what();
                     }
 
-                    // the job removes owned temporary files on both outcomes.
+                    // The job removes owned temporary files on both outcomes.
                     try
                     {
                         fs::remove(temp_path);
@@ -315,7 +343,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
                     return job_result;
                 }))
         {
-            // the request retains ownership when the job slot is busy.
+            // The request retains ownership when the job slot is busy.
             try
             {
                 if (!temp_path_cleanup.empty())
@@ -334,7 +362,7 @@ crow::response InstallationController::handle_upload(const crow::request& req)
             return json_response(409, {{"error", "An installation is already running"}});
         }
 
-        // clear request-owned copies after ownership moves to the job.
+        // Clear request-owned copies after ownership moves to the job.
         temp_path_cleanup.clear();
         json_path_cleanup.clear();
         json_temp_cleanup = false;
@@ -386,7 +414,7 @@ crow::response InstallationController::handle_install(const crow::request& req)
             if (downloads_env && *downloads_env)
             {
                 auto dp = fs::path(downloads_env);
-                // reject relative and root-only download paths before containment checks.
+                // Reject relative and root-only download paths before containment checks.
                 if (dp.is_absolute() && dp.has_relative_path())
                 {
                     downloads_path = downloads_env;
@@ -442,7 +470,7 @@ crow::response InstallationController::handle_install(const crow::request& req)
                 400, {{"error", "modPath must be inside the configured MO2 mods directory"}});
         }
 
-        // prevent the engine from parsing an arbitrary readable host file.
+        // Prevent the engine from parsing an arbitrary readable host file.
         if (!json_path.empty())
         {
             if (!fs::exists(json_path))
@@ -472,7 +500,7 @@ crow::response InstallationController::handle_install(const crow::request& req)
                 json_contained = true;
             if (!fomod_output.empty() && mo2core::is_inside(fomod_output, fs::path(json_path)))
                 json_contained = true;
-            // accept an archive sidecar after canonical containment succeeds.
+            // Accept an archive sidecar after canonical containment succeeds.
             if (!archive_path.empty())
             {
                 auto archive_parent = fs::path(archive_path).parent_path();
@@ -539,14 +567,14 @@ crow::response InstallationController::handle_status(const std::string& job_id)
             "[install] handle_status: job_id '{}' ignored, only 'current' is supported", job_id));
     }
 
-    // read running and result under one lock so the UI receives one job state.
+    // Read running and result under one lock so the UI receives one job state.
     json result = job_.read_result(
         [this](bool has_result, const InstallJobResult* r, const std::string& error) -> json
         {
             json j = {{"running", job_.is_running()}};
             if (has_result && r)
             {
-                // surface exceptions captured by BackgroundJob as install failures.
+                // A result carries the engine outcome; job errors require a result here.
                 if (!error.empty())
                 {
                     j["success"] = false;
