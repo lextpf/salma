@@ -19,7 +19,7 @@ namespace mo2server
 namespace
 {
 
-// these signatures must match the exports in capi.rs.
+// These signatures must match the exports in capi.rs.
 using FnInstallWithConfig = const char*(__cdecl*)(const char*, const char*, const char*);
 using FnInferSelections = const char*(__cdecl*)(const char*, const char*);
 using FnResolveModArchive = const char*(__cdecl*)(const char*, const char*, const char*);
@@ -42,11 +42,17 @@ struct Engine
 Engine g_engine;
 std::mutex g_load_mutex;
 
-// serialize each install with its read of the engine's process-global result flag.
+// Serialize each install with its read of the engine's process-global result flag.
 std::mutex g_install_mutex;
 
 #ifdef _WIN32
-// probe the executable directory before the OS search path.
+/**
+ * @fn std::vector<fs::path> candidates()
+ * @brief Build executable-relative DLL candidates in lookup order.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @return The executable directory candidate followed by its salma subdirectory.
+ */
 std::vector<fs::path> candidates()
 {
     std::vector<fs::path> out;
@@ -59,11 +65,21 @@ std::vector<fs::path> candidates()
     return out;
 }
 
-// fail the load if any required export is missing.
+/**
+ * @fn bool bind(HMODULE mod, const char* name, Fn& out)
+ * @brief Resolve one required engine export and log a missing symbol.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @tparam Fn Function pointer type matching the Rust ABI.
+ * @param mod Loaded DLL handle.
+ * @param name Null-terminated export name.
+ * @param out Receives the export pointer, or null when the export is absent.
+ * @return `true` when the export was found.
+ */
 template <typename Fn>
 bool bind(HMODULE mod, const char* name, Fn& out)
 {
-    // convert FARPROC directly to avoid a cast through void*.
+    // Convert FARPROC directly to avoid a cast through void*.
     out = reinterpret_cast<Fn>(GetProcAddress(mod, name));
     if (!out)
     {
@@ -75,7 +91,15 @@ bool bind(HMODULE mod, const char* name, Fn& out)
 }
 #endif
 
-// copy engine-owned text before releasing it through freeResult.
+/**
+ * @fn std::string take(const char* owned)
+ * @brief Copy an owned ABI result and release its engine allocation.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param owned Engine-owned result, or null. Never pass the static version pointer.
+ * @return The copied text, or empty for null.
+ * @pre The engine exports are bound.
+ */
 std::string take(const char* owned)
 {
     std::string out = owned ? owned : "";
@@ -121,7 +145,7 @@ bool SalmaEngine::ensure_loaded()
 
     if (!mod)
     {
-        // fall back to the OS search path.
+        // Fall back to the OS search path.
         mod = LoadLibraryW(L"mo2-salma.dll");
         chosen = mod ? "mo2-salma.dll (default search path)" : "";
     }
@@ -183,11 +207,11 @@ std::string SalmaEngine::install_mod(const std::string& archive_path,
     std::lock_guard<std::mutex> lock(g_install_mutex);
     auto result = take(g_engine.install_with_config(archive_path.c_str(), mod_path.c_str(),
                                                     json_path.c_str()));
-    // read the result while the install lock still identifies this call.
+    // Read the result while the install lock still identifies this call.
     const bool ok = g_engine.install_succeeded();
     if (!ok)
     {
-        // the result slot contains error text when the success flag is false.
+        // The result slot contains error text when the success flag is false.
         throw std::runtime_error(result.empty() ? "installation failed" : result);
     }
     return result;
