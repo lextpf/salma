@@ -18,7 +18,7 @@ Mo2Controller::Mo2Controller() = default;
 
 Mo2Controller::~Mo2Controller()
 {
-    // stop workers before destroying state they could otherwise observe.
+    // Stop workers before destroying state they could otherwise observe.
     scan_job_.shutdown();
     plugin_action_job_.shutdown();
 
@@ -26,7 +26,7 @@ Mo2Controller::~Mo2Controller()
     std::lock_guard<std::mutex> lock(test_mutex_);
     if (test_process_)
     {
-        // terminate the child before closing its last owned handle.
+        // Terminate the child before closing its last owned handle.
         DWORD wait = WaitForSingleObject(test_process_, 0);
         if (wait == WAIT_TIMEOUT)
         {
@@ -71,7 +71,7 @@ crow::response Mo2Controller::get_status()
         }
     }
 
-    // count only MO2's top-level mod directories.
+    // Count only MO2's top-level mod directories.
     if (!mods_path.empty() && fs::is_directory(mods_path))
     {
         for (auto& entry : fs::directory_iterator(mods_path))
