@@ -39,7 +39,7 @@ crow::response Mo2Controller::put_config(const crow::request& req)
             if (mods_path.empty())
                 return json_response(400, {{"error", "mo2ModsPath must not be empty"}});
             {
-                // reject dot-dot components without rejecting names such as My..Mod.
+                // Reject dot-dot components without rejecting names such as My..Mod.
                 auto p = fs::path(mods_path);
                 for (const auto& seg : p)
                 {
@@ -52,7 +52,7 @@ crow::response Mo2Controller::put_config(const crow::request& req)
                 return json_response(
                     400, {{"error", "mo2ModsPath does not exist or is not a directory"}});
 
-            // use the transactional setter so a failed save restores memory.
+            // Use the transactional setter so a failed save restores memory.
             if (!cfg.apply_mo2_mods_path(mods_path))
             {
                 return json_response(500, {{"error", "Failed to persist configuration to disk"}});
@@ -60,7 +60,7 @@ crow::response Mo2Controller::put_config(const crow::request& req)
         }
         else
         {
-            // an absent key requests a save of the current value.
+            // An absent key requests a save of the current value.
             if (!cfg.save())
             {
                 return json_response(500, {{"error", "Failed to persist configuration to disk"}});
