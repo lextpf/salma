@@ -21,7 +21,7 @@ using json = nlohmann::json;
 namespace mo2server
 {
 
-// require alphabetic boundaries, so "PASSWORD" does not count as "PASS".
+// Require alphabetic boundaries, so "PASSWORD" does not count as "PASS".
 static bool contains_keyword(const std::string& line, std::string_view word)
 {
     std::size_t pos = 0;
@@ -37,11 +37,11 @@ static bool contains_keyword(const std::string& line, std::string_view word)
     return false;
 }
 
-// keep one normal 10 MiB log readable while bounding response allocation.
+// Keep one normal 10 MiB log readable while bounding response allocation.
 static constexpr size_t kMaxLogReadChunk = size_t{12} * 1024 * 1024;
 
-// read at most kMaxLogReadChunk bytes and commit only complete lines.
-// consumed bytes exclude the trailing partial line so the next poll retries it.
+// Read at most kMaxLogReadChunk bytes and commit only complete lines.
+// Consumed bytes exclude the trailing partial line so the next poll retries it.
 static std::pair<std::vector<std::string>, int64_t> read_complete_lines(const fs::path& log_path,
                                                                         int64_t start,
                                                                         int64_t file_size)
@@ -62,7 +62,7 @@ static std::pair<std::vector<std::string>, int64_t> read_complete_lines(const fs
     auto got = static_cast<size_t>(ifs.gcount());
     buf.resize(got);
 
-    // retry this offset after the writer completes the line.
+    // Retry this offset after the writer completes the line.
     auto last_nl = buf.rfind('\n');
     if (last_nl == std::string::npos)
         return {std::move(lines), 0};
@@ -87,7 +87,7 @@ static std::pair<std::vector<std::string>, int64_t> read_complete_lines(const fs
 
 static crow::response read_log_file(const fs::path& log_path, const crow::request& req)
 {
-    // zero means all records; the byte limit remains the allocation guard.
+    // Zero means all records; the byte limit remains the allocation guard.
     static constexpr int kMaxLinesLimit = 500000;
     int max_lines = 100;
     auto lines_param = req.url_params.get("lines");
@@ -135,7 +135,7 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
 
     auto file_size = static_cast<int64_t>(fs::file_size(log_path));
 
-    // count each record once, in error, warning, then pass order.
+    // Count each record once, in error, warning, then pass order.
     auto count_and_emit = [](const std::vector<std::string>& lines, int64_t next_offset)
     {
         json lines_arr = json::array();
@@ -159,10 +159,10 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
                               {"nextOffset", next_offset}});
     };
 
-    // incremental mode reads forward from a byte offset.
+    // Incremental mode reads forward from a byte offset.
     if (offset >= 0)
     {
-        // an offset past EOF means the log was cleared or rotated.
+        // An offset past EOF means the log was cleared or rotated.
         if (offset > file_size)
         {
             return json_response(200,
@@ -181,7 +181,7 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
 
         auto [new_lines, consumed] = read_complete_lines(log_path, offset, file_size);
 
-        // retain the newest records; zero means all.
+        // Retain the newest records; zero means all.
         if (max_lines > 0 && static_cast<int>(new_lines.size()) > max_lines)
         {
             new_lines.erase(new_lines.begin(),
@@ -191,7 +191,7 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
         return count_and_emit(new_lines, offset + consumed);
     }
 
-    // full mode reverse-seeks from EOF before reading forward.
+    // Full mode reverse-seeks from EOF before reading forward.
     std::ifstream ifs(log_path, std::ios::binary);
     int64_t read_start = 0;
     if (max_lines > 0 && file_size > 0)
@@ -213,7 +213,7 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
                     newlines_found++;
                     if (newlines_found > max_lines)
                     {
-                        // begin after this newline to return exactly max_lines.
+                        // Begin after this newline to return exactly max_lines.
                         read_start =
                             chunk_start + static_cast<int64_t>(std::distance(it, chunk.rend()));
                         break;
@@ -230,7 +230,7 @@ static crow::response read_log_file(const fs::path& log_path, const crow::reques
 
 crow::response Mo2Controller::get_logs(const crow::request& req)
 {
-    // use the logger's resolved path to match its write target.
+    // Use the logger's resolved path to match its write target.
     return read_log_file(mo2core::Logger::instance().log_path(), req);
 }
 
@@ -242,7 +242,7 @@ crow::response Mo2Controller::get_test_logs(const crow::request& req)
 
 crow::response Mo2Controller::clear_logs()
 {
-    // serialize truncation against the persistent writer.
+    // Serialize truncation against the persistent writer.
     auto& logger = mo2core::Logger::instance();
     if (logger.clear_log())
     {
