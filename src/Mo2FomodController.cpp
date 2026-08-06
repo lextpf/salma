@@ -23,8 +23,8 @@ using json = nlohmann::json;
 namespace mo2server
 {
 
-// read installationFile from the case-insensitive General section.
-// return empty when the file, section, or key is missing.
+// Read installationFile from the case-insensitive General section.
+// Return empty when the file, section, or key is missing.
 static std::string read_installation_file(const fs::path& meta_ini_path)
 {
     std::ifstream ifs(meta_ini_path);
@@ -43,7 +43,7 @@ static std::string read_installation_file(const fs::path& meta_ini_path)
             line.pop_back();
         }
 
-        // strip a UTF-8 BOM from the first line.
+        // Strip a UTF-8 BOM from the first line.
         if (first_line)
         {
             first_line = false;
@@ -101,7 +101,7 @@ static std::string read_installation_file(const fs::path& meta_ini_path)
     return "";
 }
 
-// count top-level steps and collect optional diagnostics without building a DOM.
+// Count top-level steps and collect optional diagnostics without building a DOM.
 struct StepCounter : nlohmann::json_sax<json>
 {
     int depth = 0;
@@ -109,7 +109,7 @@ struct StepCounter : nlohmann::json_sax<json>
     int steps_depth = 0;
     int& count;
 
-    // each optional output has a matching presence flag.
+    // Each optional output has a matching presence flag.
     double& confidence;
     std::string& band;
     bool& exact_match;
@@ -117,10 +117,10 @@ struct StepCounter : nlohmann::json_sax<json>
     bool& has_band;
     bool& has_exact;
 
-    bool arm_diag = false;  // the next object opened is the diagnostics value
+    bool arm_diag = false;  // The next object opened is the diagnostics value
     bool in_diag = false;
     int diag_depth = 0;
-    bool arm_conf = false;  // the next object opened is the confidence value
+    bool arm_conf = false;  // The next object opened is the confidence value
     bool in_conf = false;
     int conf_depth = 0;
 
@@ -193,7 +193,7 @@ struct StepCounter : nlohmann::json_sax<json>
         {
             steps_depth = depth + 1;
         }
-        // do not accept array values for diagnostic object fields.
+        // Do not accept array values for diagnostic object fields.
         arm_diag = false;
         arm_conf = false;
         depth++;
@@ -204,7 +204,7 @@ struct StepCounter : nlohmann::json_sax<json>
         depth--;
         if (steps_depth && depth < steps_depth)
         {
-            // stop after the top-level steps array closes.
+            // Stop after the top-level steps array closes.
             in_steps = false;
             steps_depth = 0;
             return false;
@@ -245,7 +245,7 @@ struct StepCounter : nlohmann::json_sax<json>
         }
         return true;
     }
-    // store the value armed by the preceding key.
+    // Store the value armed by the preceding key.
     bool null() override { return true; }
     bool boolean(bool val) override
     {
@@ -300,7 +300,7 @@ private:
     }
 };
 
-// extract stable mod and file ids from a Nexus-style archive name.
+// Extract stable mod and file ids from a Nexus-style archive name.
 static std::pair<std::string, std::string> parse_nexus_archive_name(const std::string& filename)
 {
     static const std::regex kPattern(R"(^(.+?)-(\d+)-(.*)-(\d+)$)");
@@ -312,7 +312,7 @@ static std::pair<std::string, std::string> parse_nexus_archive_name(const std::s
     return {};
 }
 
-// format a system-clock value as UTC.
+// Format a system-clock value as UTC.
 static std::string format_iso8601_utc(std::chrono::system_clock::time_point tp)
 {
     auto t = std::chrono::system_clock::to_time_t(tp);
@@ -331,8 +331,8 @@ static std::string format_iso8601_utc(std::chrono::system_clock::time_point tp)
                        tm_utc.tm_sec);
 }
 
-// add identifiers and an archive fingerprint before writing the choices file.
-// archive_mtime uses POSIX seconds and archive_size uses bytes. stat failure stores zero.
+// Add identifiers and an archive fingerprint before writing the choices file.
+// The archive_mtime field uses POSIX seconds; archive_size uses bytes. Stat failure stores zero.
 static void inject_choice_metadata(json& parsed,
                                    const fs::path& archive_path,
                                    const std::string& mod_name)
@@ -348,7 +348,7 @@ static void inject_choice_metadata(json& parsed,
     auto file_time = fs::last_write_time(archive_path, ec);
     if (!ec)
     {
-        // convert file_clock to the system-clock epoch used by the Python lookup.
+        // Convert file_clock to the system-clock epoch used by the Python lookup.
         auto sctp = std::chrono::clock_cast<std::chrono::system_clock>(file_time);
         metadata["archive_mtime"] =
             std::chrono::duration_cast<std::chrono::seconds>(sctp.time_since_epoch()).count();
@@ -366,12 +366,12 @@ static void inject_choice_metadata(json& parsed,
     parsed["metadata"] = metadata;
 }
 
-// distinguish a missing archive setting from an archive that no longer exists.
+// Distinguish a missing archive setting from an archive that no longer exists.
 enum class ModResult
 {
     ExistingSkip,
-    ArchiveSkipNoValue,  // meta.ini absent or has no [General] installationFile entry
-    ArchiveSkipMissing,  // meta.ini named an archive but the file was not found
+    ArchiveSkipNoValue,  // The meta.ini file has no [General] installationFile entry or is absent
+    ArchiveSkipMissing,  // The meta.ini archive value did not resolve to an existing file
     Inferred,
     NoFomod,
     Error
@@ -421,7 +421,7 @@ static ModResult process_single_mod(const fs::path& mod_folder,
         double elapsed_s =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - item_start).count();
 
-        // identify a solver that spends more than five minutes on one mod.
+        // Identify a solver that spends more than five minutes on one mod.
         if (elapsed_s > 300.0)
         {
             logger.log_warning(
@@ -453,7 +453,7 @@ static ModResult process_single_mod(const fs::path& mod_folder,
 
         inject_choice_metadata(parsed, archive_path, mod_name);
 
-        // rename a complete temporary file so later scans never accept a partial file.
+        // Rename a complete temporary file so later scans never accept a partial file.
         auto tmp_file = choices_file;
         tmp_file += ".tmp";
         std::ofstream ofs(tmp_file);
@@ -549,7 +549,7 @@ static json run_fomod_scan_job(const fs::path& mods_dir,
     logger.log(std::format("[infer] Output dir: {}", output_dir.string()));
     logger.log(std::format("[infer] Found {} mod folders", total));
 
-    // the dashboard parser requires at least three dots before the status word.
+    // The dashboard parser requires at least three dots before the status word.
     constexpr size_t kInferDotColumn = 64;
     InferStatusFn infer_status = [total](int index,
                                          const std::string& mod_name,
@@ -668,7 +668,7 @@ crow::response Mo2Controller::list_fomods()
         auto epoch =
             std::chrono::duration_cast<std::chrono::milliseconds>(sctp.time_since_epoch()).count();
 
-        // use SAX to keep memory constant; the five-second cache bounds repeat cost.
+        // Use SAX to keep memory constant; the five-second cache bounds repeat cost.
         int step_count = 0;
         double confidence = 0.0;
         std::string band;
@@ -796,7 +796,7 @@ crow::response Mo2Controller::scan_fomods()
 
 crow::response Mo2Controller::get_scan_status()
 {
-    // a poll can briefly pair running=true with a completed summary. the next poll
+    // A poll can briefly pair running=true with a completed summary. The next poll
     // corrects this advisory status.
     json result = {{"running", scan_job_.is_running()}};
 
