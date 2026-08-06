@@ -2,13 +2,25 @@
 Plugin: Install Mods & Scan FOMOD Choices
 Authors: MaskPlague & Griffin
 
-This plugin enables the sequential installation of multiple mod archives
-for a mod organizer using a C++ DLL for installation.
-It sets up logging, registers a C++ log callback, and handles mod installations
-by scanning for the required DLL in common directories.
+Two MO2 tools built on the salma engine DLL (`mo2-salma.dll`):
 
-Additionally provides a "Scan FOMOD Choices" tool that infers FOMOD installation
-selections for all installed mods by comparing files against FOMOD XML structure.
+  - Install FOMODs: installs selected archives one after another, applying the
+    FOMOD choices saved for each mod when there are any, and handing anything
+    else to MO2's own installer.
+  - Scan FOMODs: infers the FOMOD selections of every installed mod by comparing
+    its files against the FOMOD structure in its archive, and saves one JSON per
+    mod.
+
+The module locates and loads the DLL, registers a log callback so engine lines
+reach MO2's log window, and owns the output folder both tools write into.
+
+Host requirements: `mobase` and PyQt6 are imported at module scope, so this
+module only imports inside MO2. `scripts/smoke_plugin.py` stubs both to exercise
+the loader outside MO2.
+
+DLL lifetime: `load_dll` caches the ctypes handle in `_dll_cache` for the life of
+the process, so replacing `mo2-salma.dll` on disk has no effect until MO2
+restarts.
 """
 
 import mobase
@@ -30,7 +42,7 @@ from mobase import GuessedString
 
 
 class InstallError(RuntimeError):
-    """Raised by :meth:`InstallMods.install` when the C++ side reports failure.
+    """Raised by :meth:`InstallMods.install` when the engine DLL reports failure.
 
     Carries the error message returned by the DLL so callers can log or display
     it. Distinguishes a hard install failure (where ``installSucceeded()``
@@ -44,17 +56,17 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 # ------------------------------------------------------------------------------
 # Logger Initialization
 # ------------------------------------------------------------------------------
-# Create a logger for this module and set the logging level to DEBUG.
+# Handlers are cleared first so this module owns exactly one: a handler left
+# over from an earlier import would duplicate every line.
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# Clear any existing logging handlers to ensure a clean configuration.
 if logger.hasHandlers():
     logger.handlers.clear()
 
-# Configure a default file handler.
-# The log file lives next to this plugin file (under <MO2 plugins>/logs/),
-# regardless of the working directory MO2 was launched from.
+# The log file sits next to this plugin file, under <MO2 plugins>/logs/, so its
+# location does not depend on the working directory MO2 was launched from.
+# InstallMods._configure_mod_logger swaps this handler out per mod install.
 default_log_file = Path(__file__).parent / "logs" / "mo_salma.log"
 default_log_file.parent.mkdir(parents=True, exist_ok=True)
 default_handler = logging.FileHandler(str(default_log_file))
@@ -62,18 +74,20 @@ formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 default_handler.setFormatter(formatter)
 logger.addHandler(default_handler)
 
-# Log a test message to confirm that logging is working correctly.
 logger.debug("Logger configured successfully.")
 
 # ------------------------------------------------------------------------------
 # Callback Function Definition
 # ------------------------------------------------------------------------------
-# Define the callback function type that matches the expected C++ signature.
+# The C ABI signature the DLL expects: void(const char*), receiving one
+# already-formatted UTF-8 log line.
 CALLBACK_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p)
 
-# Major version of the DLL ABI this plugin is written against. Bumped only
-# on incompatible C-API changes (added/removed exports, signature changes).
-# A mismatch refuses to use the DLL rather than risk silent ABI drift.
+# Major version of the DLL ABI this plugin is written against. Bumped only on
+# ABI-incompatible changes: a removed export or a changed signature. Adding an
+# export is a minor bump, which is why the newer exports below are gated on
+# hasattr instead. A mismatch refuses to use the DLL rather than risk silent ABI
+# drift.
 EXPECTED_API_MAJOR = "1"
 
 # ------------------------------------------------------------------------------
@@ -88,7 +102,23 @@ def _safe_path_exists(p: str) -> bool:
 
 
 def find_dll(dll_name="mo2-salma.dll"):
-    """Locate the required DLL. Shared by all plugin classes."""
+    """Locate the required DLL. Shared by all plugin classes.
+
+    Search order, first existing file wins:
+      1. `<this file's directory>/salma` - where deploy.bat puts the DLL.
+      2. The current working directory.
+      3. `<cwd>/dlls/salma`.
+      4. `<this file's directory>`.
+      5. Every existing entry of %PATH%, in order.
+
+    Returns a resolved absolute Path. Raises FileNotFoundError when no
+    candidate holds `dll_name`. Directories that cannot be probed (permission
+    errors) are skipped rather than raising.
+
+    This is the order MO2 actually uses, so it is the authority.
+    `scripts/common.py::find_dll` runs a different, shorter order for the test
+    harness, and only candidate 1 has a counterpart there.
+    """
     search_paths = [
         Path(__file__).parent / "salma",
         Path.cwd(),
@@ -112,11 +142,11 @@ _dll_cache = {}
 def _configure_dll(lib):
     """Set ctypes signatures for every DLL export this plugin calls.
 
-    Owned-string returns (install / installWithConfig / inferFomodSelections)
-    are declared as ``c_void_p`` so we get the raw heap pointer back from
-    ctypes and can hand it to freeResult after copying the bytes. Declaring
-    them as ``c_char_p`` (the previous behaviour) lets ctypes auto-decode but
-    silently leaks the underlying ``_strdup`` allocation per call.
+    Owned-string returns (install / installWithConfig / inferFomodSelections /
+    resolveModArchive) are declared as ``c_void_p`` so ctypes hands back the raw
+    heap pointer, which can then go to freeResult once the bytes are copied.
+    Declaring them ``c_char_p`` instead lets ctypes auto-decode and silently
+    leaks the allocation on every call.
     """
     lib.getApiVersion.argtypes = []
     lib.getApiVersion.restype = ctypes.c_char_p  # static const char*, never freed
@@ -151,9 +181,16 @@ def _configure_dll(lib):
 def _check_api_version(lib):
     """Verify the DLL's ABI matches what this plugin was written for.
 
-    Pre-versioning DLLs (before getApiVersion was exported) raise
-    AttributeError on the lookup; treat that as an incompatible deploy
-    rather than continuing into UB.
+    Raises RuntimeError, after logging the same text, when the reported major
+    version differs from EXPECTED_API_MAJOR and when the version string is
+    empty. Only the leading major component is compared.
+
+    The AttributeError branch below cannot be reached through `load_dll`:
+    `_configure_dll` runs first and touches `lib.getApiVersion` while declaring
+    argtypes, so a DLL missing that export raises a bare AttributeError there
+    and the caller never sees this guidance. Treat the branch as defensive.
+    Moving the presence check to the top of `_configure_dll` would make it
+    reachable again.
     """
     try:
         version_bytes = lib.getApiVersion()
@@ -181,6 +218,11 @@ def load_dll(dll_name="mo2-salma.dll"):
 
     First call configures argtypes/restypes for every export and verifies the
     ABI version; subsequent calls hand back the cached handle.
+
+    The cache is keyed by `dll_name` and lives for the whole process, so the
+    DLL is located, loaded and version-checked once per MO2 session. Replacing
+    the file on disk has no effect until MO2 restarts. Windows also keeps the
+    loaded file locked, so a deploy over a running MO2 fails.
     """
     if dll_name not in _dll_cache:
         dll_path = find_dll(dll_name)
@@ -193,11 +235,11 @@ def load_dll(dll_name="mo2-salma.dll"):
 
 
 def _call_owned_string(lib, fn, *args) -> str:
-    """Invoke a DLL function returning an owned C string (`_strdup` result).
+    """Invoke a DLL function returning a C string the DLL allocated.
 
-    Decodes UTF-8 and always calls ``freeResult`` on the underlying pointer
-    -- including if decoding throws -- so the heap allocation is not leaked.
-    Returns "" if the function returned a null pointer.
+    Only ``freeResult`` may release that pointer. Decodes UTF-8 and always calls
+    it, including when decoding throws, so the allocation cannot leak. Returns
+    "" for a null pointer.
     """
     addr = fn(*args)
     if not addr:
@@ -221,11 +263,12 @@ def infer_fomod_selections(archive_path: str, mod_path: str) -> str:
 def resolve_mod_archive(installation_file: str, mod_folder: str, mods_dir: str) -> str:
     """Resolve a mod's archive path using the same fallback chain as the dashboard.
 
-    Delegates to the DLL's ``resolveModArchive`` (added in salma 1.1.0) when
-    available. Older deployed DLLs lack the export, in which case we fall
-    back to a downloads-dir-only Python resolution that matches the prior
-    plugin behaviour - just enough to keep older deploys working until they
-    update.
+    An absolute installationFile that exists is returned before the DLL is
+    loaded at all. Delegates to the DLL's ``resolveModArchive`` (added in salma
+    1.1.0) when the loaded DLL exports it. Without that export the fallback
+    below tries ``$SALMA_DOWNLOADS_PATH/<installationFile>`` only, so it keeps
+    an older deploy working only where that variable is set (setup.bat sets it;
+    MO2 does not). Returns "" when nothing resolves.
     """
     if not installation_file:
         return ""
@@ -243,9 +286,9 @@ def resolve_mod_archive(installation_file: str, mod_folder: str, mods_dir: str) 
             mod_folder.encode("utf-8"),
             mods_dir.encode("utf-8"))
 
-    # Legacy fallback for pre-1.1.0 DLLs: only the downloads directory is
-    # searched. This is intentionally conservative and lossy compared with
-    # the C-API path which also tries mods-dir siblings.
+    # Fallback for DLLs older than 1.1.0: the downloads directory only.
+    # Deliberately narrower than the C-API path, which also tries mods-dir
+    # siblings, so it resolves fewer archives rather than guessing wrong ones.
     downloads_dir = os.environ.get("SALMA_DOWNLOADS_PATH", "")
     if downloads_dir:
         candidate = Path(downloads_dir) / archive
@@ -275,7 +318,11 @@ _FOMOD_OUTPUT_MOD = "Salma FOMODs Output"
 
 
 def _get_fomod_output_dir(organizer) -> Path:
-    """Return (and create) the centralized FOMOD output folder."""
+    """Return the central FOMOD output folder, creating it when absent.
+
+    Also writes a stub meta.ini for the containing mod folder, which is what
+    makes MO2 list "Salma FOMODs Output" as a mod instead of ignoring it.
+    """
     mod_dir = Path(organizer.modsPath()) / _FOMOD_OUTPUT_MOD
     output_dir = mod_dir / "fomods"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -305,11 +352,17 @@ def _read_json_metadata(path: Path) -> dict:
 
 
 def _inject_choice_metadata(parsed: dict, archive_path: str, module_name: str) -> None:
-    """Mirror of Mo2FomodController.cpp's inject_choice_metadata.
+    """Add the `metadata` block to a parsed FOMOD-choices JSON.
 
-    Adds a `metadata` block to the parsed FOMOD-choices JSON so future
-    lookups can match by (modid, fileid) or (size, mtime) instead of fuzzy
-    filename comparison. Schema must stay aligned with the C++ writer.
+    The block lets `_find_fomod_json` match by (modid, fileid) or by
+    (size, mtime) instead of comparing filenames. Its schema must stay aligned
+    with `inject_choice_metadata` in Mo2FomodController.cpp: both writers fill
+    the same output directory, and `_find_fomod_json` reads whatever it finds
+    there.
+
+    Mutates `parsed` in place and returns None. An unreadable archive is not an
+    error: `archive_size` and `archive_mtime` are written as 0, which never
+    matches a live archive.
     """
     archive = Path(archive_path)
     nexus = _parse_nexus_filename(archive.stem)
@@ -338,12 +391,23 @@ def _find_fomod_json(organizer, mod_name: str, archive_path: str = "") -> str:
       1. (modid, fileid) parsed from the archive filename, matched against
          the metadata block in each JSON. Definitive for Nexus archives.
       2. (archive_size, archive_mtime) of the archive on disk, matched
-         against the metadata block. Cheap fingerprint for non-Nexus mods.
+         against the metadata block. Size in bytes, exact; mtime in whole
+         POSIX seconds, matched within one second. Cheap fingerprint for
+         non-Nexus mods.
       3. Exact filename match: `<mod_name>.json`. Backward compatible with
          JSONs scanned before the metadata block existed.
-      4. Deprecated stem-prefix fuzzy match. Logs a warning so users know
-         to re-scan to populate metadata.
+      4. Deprecated stem-prefix fuzzy match, longest stem first. Logs a
+         warning.
     Returns the path as a string, or empty string if nothing matches.
+
+    All four priorities read `<mods>/Salma FOMODs Output/fomods/*.json`.
+    Priorities 1 and 2 need a JSON that carries a `metadata` block, and not
+    every writer produces one. The dashboard's scan endpoint
+    (Mo2FomodController.cpp) and `InstallMods._try_save_fomod_choices` both
+    inject it; `ScanFomodChoices.display()` writes the engine's raw output and
+    does not. Re-running the plugin's own "Scan FOMODs" tool therefore cannot
+    lift a mod off priority 4. Delete the JSON and re-scan from the dashboard to
+    get a metadata block.
     """
     output_dir = _get_fomod_output_dir(organizer)
     candidates = sorted(output_dir.glob("*.json"),
@@ -436,11 +500,11 @@ def _write_mod_meta_ini(mod_dir: Path, archive_path: str, mod_name: str):
 # ------------------------------------------------------------------------------
 class InstallMods(mobase.IPluginTool):
     """
-    Plugin tool for installing mod archives.
+    Plugin tool for installing mod archives, one after another.
 
-    This class implements the IPluginTool interface required by the mod organizer.
-    It integrates with a C++ DLL to perform installations and manages the
-    installation queue along with logging for each mod installation.
+    Implements MO2's IPluginTool. It drives the salma engine DLL for archives
+    that have saved FOMOD choices, keeps the installation queue, and redirects
+    logging into each mod folder while that mod installs.
     """
 
     def __init__(self):
@@ -450,10 +514,11 @@ class InstallMods(mobase.IPluginTool):
 
     def init(self, organiser=mobase.IOrganizer, manager=mobase.IInstallationManager):
         """
-        Initialize the plugin with references to the mod organizer and installation manager.
+        Take the organizer and installation-manager handles MO2 supplies.
 
-        Configures internal variables and registers the logging callback with the DLL.
-        Logs system information for debugging purposes.
+        Sets up the instance state, logs the Python environment for debugging,
+        and registers the log callback with the DLL. Returns True; MO2 treats a
+        False return as a failed plugin.
         """
         self.debug = True
         self.num = 0
@@ -473,17 +538,23 @@ class InstallMods(mobase.IPluginTool):
         logger.info(os.getcwd())
         logger.info(platform.architecture())
 
-        # Register the Python log callback with the C++ DLL.
+        # Register the Python log callback with the engine DLL.
         self.setLog()
         return True
 
     @staticmethod
     def log_callback(message: bytes):
         """
-        Callback function to log messages from the C++ DLL.
+        Receive one already-formatted log line from the engine DLL.
 
-        Converts the received C-style string (bytes) into a Python string and logs it.
-        Also forwards to MO2's application log window via qDebug.
+        Decodes the C string, writes it to this module's logger, and forwards it
+        to MO2's application log window through qDebug.
+
+        The engine calls this synchronously, on whichever thread made the DLL
+        call, including the worker thread ScanFomodChoices.display() uses. While
+        a callback is registered the engine sends its lines here instead of
+        writing logs/salma.log; registering a null callback restores file
+        logging.
         """
         text = message.decode("utf-8")
         logger.info(text)
@@ -491,11 +562,13 @@ class InstallMods(mobase.IPluginTool):
 
     def setLog(self):
         """
-        Register the Python log callback with the C++ DLL.
+        Register the Python log callback with the engine DLL.
 
-        This method loads the DLL (which configures argtypes/restypes once on
-        first load) and registers the callback function. The callback instance
-        is retained on ``self`` to keep ctypes from garbage-collecting it.
+        Loads the DLL, which configures argtypes and restypes on first load,
+        then registers the callback. The callback object is kept on ``self``:
+        if it is garbage-collected the engine calls a dangling pointer.
+        Failures are logged, not raised, so a missing DLL does not break the
+        tool menu.
         """
         try:
             c_callback = CALLBACK_TYPE(InstallMods.log_callback)
@@ -508,24 +581,29 @@ class InstallMods(mobase.IPluginTool):
 
     def install(self, archive_path: str, install_path: str, json_path: str = "", dll_name="mo2-salma.dll") -> str:
         """
-        Call the DLL's 'installWithConfig' function to perform a mod installation.
+        Install one archive through the DLL's ``installWithConfig``.
 
-        If json_path points to an existing FOMOD choices file, the DLL will apply
-        those selections via ModuleConfig.xml. Otherwise it falls back to default behaviour.
+        With a json_path the engine applies those selections against
+        ModuleConfig.xml. With an empty json_path it derives
+        ``<archive stem>.json`` next to the archive and uses that when the file
+        exists, and only otherwise installs with the FOMOD's own defaults. A
+        non-empty json_path is used verbatim, with no sidecar fallback; if it
+        does not exist the install proceeds with the FOMOD's defaults instead of
+        failing.
 
         Args:
-            archive_path (str): The path to the mod archive.
-            install_path (str): The target installation directory.
-            json_path (str): Optional path to a FOMOD choices JSON file.
-            dll_name (str): Name of the DLL file to use.
+            archive_path (str): The mod archive.
+            install_path (str): Target directory. Must already exist.
+            json_path (str): Optional FOMOD choices JSON.
+            dll_name (str): DLL to load, keyed into the module-level cache.
 
         Returns:
-            str: The install path returned by the C++ side on success.
+            str: The install path the engine reports on success.
 
         Raises:
-            FileNotFoundError: If either the archive or installation path does not exist.
-            InstallError: If ``installSucceeded()`` returns False. The exception
-                message carries the error string returned by the DLL.
+            FileNotFoundError: If the archive or the install path is absent.
+            InstallError: If ``installSucceeded()`` returns False. The message
+                carries the error string the DLL returned.
         """
         lib = load_dll(dll_name)
 
@@ -548,11 +626,10 @@ class InstallMods(mobase.IPluginTool):
             ctypes.c_char_p(install_encoded),
             ctypes.c_char_p(json_encoded))
 
-        # The C-API uses the same const char* channel for both success
-        # (returns the install path) and failure (returns an error message);
-        # installSucceeded() is the authoritative side channel. Raise on
-        # failure so the caller can roll back instead of writing meta.ini
-        # and refreshing as if everything was fine.
+        # The C API returns the same const char* for success (the install path)
+        # and failure (an error message), so installSucceeded() is the only
+        # authority. Raise on failure, or the caller writes meta.ini and
+        # refreshes MO2 as though a broken install had worked.
         if not lib.installSucceeded():
             logger.error(f"[install] installWithConfig reported failure: {text}")
             qDebug(f"[install] installWithConfig reported failure: {text}")
@@ -649,10 +726,16 @@ class InstallMods(mobase.IPluginTool):
 
     def _configure_mod_logger(self, mod_dir: Path):
         """
-        Reconfigure the logger to write into a mod-specific log file.
+        Point the module logger at a log file inside the mod being installed.
 
-        This method creates (or reuses) a 'salma-install.log' file in the mod directory,
-        and sets up a new file handler so that subsequent logs are directed there.
+        Opens (or appends to) `mo_salma.log` in `mod_dir` and makes it the only
+        handler: every existing handler is removed first, so the default
+        `<plugin dir>/logs/mo_salma.log` receives nothing until a handler is
+        added again. `_close_logger` ends that state.
+
+        The file lands inside the installed mod, so `mo_salma.log` has to stay
+        in IGNORED_FILES in scripts/common.py. Without it every round-trip diff
+        reports this log as an extra file in every mod.
 
         Args:
             mod_dir (Path): The directory of the mod being installed.
@@ -670,10 +753,10 @@ class InstallMods(mobase.IPluginTool):
 
     def _close_logger(self):
         """
-        Close and flush all logger handlers.
+        Flush, close and detach every logger handler.
 
-        This method is used to ensure that all log files are properly written and closed
-        after a mod installation is complete.
+        Run this after each install so the mod-local log file is written out and
+        released before the next mod reconfigures the logger.
         """
         for handler in logger.handlers[:]:
             handler.flush()
@@ -683,11 +766,13 @@ class InstallMods(mobase.IPluginTool):
 
     def _try_save_fomod_choices(self, archive_path: str, mod_dir: str):
         """
-        After a successful installation, try to infer and save FOMOD choices.
+        After a successful install, infer the mod's FOMOD choices and save them.
 
-        Only runs if the archive had a FOMOD and no choices file exists yet.
-        Embeds an identifying metadata block so future ``_find_fomod_json``
-        lookups can match by stable identifier instead of filename heuristics.
+        Does nothing when a choices file for this mod name already exists, and
+        writes nothing when the archive holds no FOMOD. The saved JSON carries a
+        metadata block, so later ``_find_fomod_json`` lookups match on a stable
+        identifier rather than on the filename. Inference failures are logged as
+        warnings: the install has already succeeded and must not be undone.
         """
         mod_name = Path(mod_dir).name
         output_dir = _get_fomod_output_dir(self._organizer)
@@ -710,15 +795,23 @@ class InstallMods(mobase.IPluginTool):
 
     def _installQueue(self):
         """
-        Process the installation queue.
+        Process the installation queue, one archive at a time.
 
-        Pops archives one at a time. For FOMOD archives with pre-scanned choices
-        the salma DLL drives installation; on failure the partial mod folder is
-        rolled back via ``shutil.rmtree`` so MO2 does not show a corrupt entry.
-        Archives without choices fall through to MO2's built-in installer.
-        ``_close_logger()`` always runs in a ``finally`` block so file handlers
-        do not leak across iterations. Emits a ``Queue done: N ok, M failed``
-        summary when the queue drains.
+        An archive with pre-scanned FOMOD choices is installed through the salma
+        DLL; a failure deletes the partial mod folder with ``shutil.rmtree`` so
+        MO2 never lists a half-installed mod. An archive without choices goes to
+        MO2's built-in installer instead. ``_close_logger()`` runs in a
+        ``finally`` block, so mod-local file handlers cannot leak into the next
+        iteration. Logs a ``Queue done: N ok, M failed`` summary once the queue
+        drains, unless every archive went to MO2's own installer and both counts
+        are zero.
+
+        The mod name is the archive basename truncated at its first dot (the
+        splitext loop strips every suffix, not only the archive one) with a
+        leading ``<digits>-`` or ``<digits>_`` download prefix removed. It
+        becomes the MO2 folder name, the ``_find_fomod_json`` lookup key and the
+        input to the Nexus id parse, so a version number in the filename
+        shortens all three.
         """
         if not self.finished or not self._queue:
             return
@@ -796,11 +889,11 @@ class InstallMods(mobase.IPluginTool):
 # ------------------------------------------------------------------------------
 class ScanFomodChoices(mobase.IPluginTool):
     """
-    Scans all installed mods and infers FOMOD selections, saving them as JSON files.
+    Scan every installed mod and save the FOMOD selections inferred for it.
 
-    For each mod that has a source archive containing a FOMOD, this plugin calls the
-    C++ inference engine to compare installed files against the FOMOD XML structure
-    and determine which options were selected during installation.
+    For each mod whose source archive holds a FOMOD, this tool calls the engine
+    DLL's inferFomodSelections export, which compares the installed files
+    against the FOMOD structure and recovers the options chosen at install time.
     """
 
     def __init__(self):
@@ -846,11 +939,29 @@ class ScanFomodChoices(mobase.IPluginTool):
         """
         Scan all installed mods and infer FOMOD selections.
 
-        For each mod:
-        1. Read meta.ini to find the source archive (installationFile)
-        2. Check if the archive exists and skip if fomod_choices.json already exists
-        3. Call inferFomodSelections() via the DLL
-        4. Save valid results to <mod_folder>/fomod_choices.json
+        Results go to one central output mod, never into the mod folders:
+        `<mods>/Salma FOMODs Output/fomods/<mod_name>.json`, created by
+        `_get_fomod_output_dir` together with a stub meta.ini so MO2 lists it.
+
+        For each mod folder under `organizer.modsPath()`, in this order:
+        1. Skip if `<output>/<mod_name>.json` already exists. Nothing is
+           overwritten, so re-running only fills gaps; delete a file to redo it.
+        2. Read meta.ini for the source archive (installationFile) and resolve
+           it with `resolve_mod_archive`, which uses the DLL's resolveModArchive
+           export where it exists. Skip the mod if either step returns empty.
+        3. Call inferFomodSelections() through the DLL on a worker thread, so
+           the progress dialog keeps repainting.
+        4. Write the result verbatim to `<output>/<mod_name>.json`, but only if
+           it parses as JSON and holds at least one entry in "steps".
+
+        Step 4 writes the engine's raw output, which carries no `metadata` block
+        (the dashboard scan endpoint adds one). `_find_fomod_json` cannot match
+        those files by identifier and falls back to its filename rules; see its
+        docstring.
+
+        Cancelling from the progress dialog stops after the mod in flight, and
+        work already written stays. Returns None, reports the totals in a
+        message box, and refreshes MO2 so the output mod appears in the list.
         """
         mods_dir = self._organizer.modsPath()
         downloads_dir = self._organizer.downloadsPath()
@@ -954,7 +1065,11 @@ class ScanFomodChoices(mobase.IPluginTool):
                 while thread.is_alive():
                     QCoreApplication.processEvents()
                     if progress.wasCanceled():
-                        thread.join()  # let current mod finish, then break outer loop
+                        # cancel requested: wait out this mod, leave the wait
+                        # loop, and let the next iteration's wasCanceled check
+                        # end the scan. this mod's result is still parsed and
+                        # written below.
+                        thread.join()
                         break
                     thread.join(timeout=0.016)
                 if _infer_error[0]:
