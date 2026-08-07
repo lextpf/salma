@@ -1,27 +1,27 @@
-"""Promote nested subgroup docs to top-level directories.
+"""Orphaned tool: promotes nested subgroup docs to top-level directories.
 
-Doxide generates top-level directories for C++ namespaces but not for
-classes.  When a project uses classes instead of namespaces, subgroup
-pages only exist nested under their parent group (e.g.,
-Core/ArchiveService/).  clean_docs.py rewrites subgroup links with ../
-to point to top-level directories.  This script bridges the gap by
-copying nested subgroup directories to the top level so the links
-resolve correctly.
+Keep it out of the doc build. No pipeline invokes it: between `doxide build` and
+`mkdocs build`, build.bat calls `scripts/_clean_docs.py` and nothing else.
 
-When a subgroup directory contains a class page matching the subgroup
-name (e.g., ArchiveService/ArchiveService.md), the class content
-replaces the stub index.md so users land directly on the full
-documentation instead of an intermediate page.
+Why it is dead. doxide emits subgroup content nested under its parent group and
+writes correct links to it, so there is nothing left for this script to make
+reachable. Running it copies pages to a second location that nothing links to,
+and because docs/ is never cleaned automatically those copies survive and
+satisfy nav entries a fresh clone cannot. That is the failure mode to avoid.
 
-Reads doxide.yml to discover the group hierarchy, then for each
-subgroup copies ParentGroup/SubGroup/ -> SubGroup/ if the top-level
-directory does not already exist.
+What it does, if you run it anyway. It reads doxide.yml for the group hierarchy,
+then copies `ParentGroup/SubGroup/` to `SubGroup/` for every pair, skipping any
+pair whose top-level directory already exists. When the copied directory holds a
+class page named after the subgroup (`Logger/Logger.md`), the class content
+overwrites the stub index.md so a reader lands on the full page rather than an
+intermediate one. It writes inside the docs directory and deletes the copied
+class page; it never touches the source tree.
 
-No external dependencies -- uses only the Python standard library.
+Standard library only, no external dependencies.
 
 Usage:
-    python scripts/promote_subgroups.py          # defaults to docs/
-    python scripts/promote_subgroups.py path/    # custom docs directory
+    python scripts/_promote_subgroups.py          # defaults to docs/
+    python scripts/_promote_subgroups.py path/    # custom docs directory
 """
 
 import re
@@ -33,8 +33,8 @@ from pathlib import Path
 def parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]:
     """Parse doxide.yml and return (parent, child) name pairs.
 
-    Uses a simple indent-aware line parser instead of PyYAML so the
-    script has zero external dependencies.
+    An indent-aware line parser rather than PyYAML, which keeps the script free
+    of external dependencies.
     """
     text = config_path.read_text(encoding="utf-8")
     pairs = []
@@ -72,11 +72,12 @@ def parse_group_hierarchy(config_path: Path) -> list[tuple[str, str]]:
 
 
 def promote_class_to_index(top_level: Path, child_name: str) -> None:
-    """Replace stub index.md with the class page content if it exists.
+    """Replace the stub index.md with the class page content, when one exists.
 
-    Doxide generates a stub index.md (just title + Types table) and a
-    separate ClassName.md with the full documentation.  This merges
-    the class content into index.md and removes the redundant file.
+    Doxide writes a stub index.md (a title and a Types table) plus a separate
+    ClassName.md carrying the full documentation. This moves the class content
+    into index.md and deletes the now duplicate file. Does nothing when there is
+    no class page.
     """
     class_page = top_level / f"{child_name}.md"
     index_page = top_level / "index.md"
