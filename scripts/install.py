@@ -5,6 +5,15 @@ Library function:
 
 CLI:
     python scripts/install.py <archive> <output_dir> <json_path> [--dll PATH]
+
+Replays a FOMOD install into `output_dir` using the selections in `json_path`,
+and prints whatever the DLL returns. The exit code is always 0, a failed install
+included: failure travels in the returned text and in the separate
+installSucceeded() flag, and this script inspects neither.
+
+Precondition: SALMA_MODS_PATH and SALMA_DEPLOY_PATH must be set even when
+--dll is given. Importing scripts.common reads them and exits 2 if either is
+missing, before argparse runs.
 """
 
 from pathlib import Path
@@ -17,11 +26,15 @@ from scripts.common import call_owned_string, find_dll, load_dll
 
 def install_mod(archive: Path, output_dir: Path, json_path: Path,
                 dll=None) -> str:
-    """Call installWithConfig. Returns DLL result string.
+    """Call installWithConfig. Returns the DLL's result string.
+
+    That string is the install path on success and an error message on failure;
+    only ``installSucceeded()`` tells the two apart, and this function does not
+    check it.
 
     Goes through ``call_owned_string`` so the C-side ``_strdup`` buffer is
-    freed; the previous direct call with ``restype = c_char_p`` leaked
-    every result pointer.
+    freed. Calling the export directly with ``restype = c_char_p`` leaks the
+    result pointer on every call.
     """
     if dll is None:
         dll = load_dll(find_dll())
