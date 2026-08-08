@@ -1,49 +1,174 @@
-//! FOMOD forward simulator + reproduction metrics.
+//! Forward simulation of a FOMOD install, and the metrics that score it.
 //!
-//! Rust port of `src/FomodForwardSimulator.hpp`/`.cpp` (the [`SimulatedTree`],
-//! [`simulate`], [`simulate_into`] surface) PLUS the tree-comparison helpers
-//! whose C++ home is `src/FomodCSPSolver.cpp`:
-//! [`compare_trees_impl`]/[`compare_trees`]/[`collect_mismatched_dests`]. Those
-//! three are placed here (not with the solver) because they read a
-//! [`SimulatedTree`] and are the simulator's natural scoring companions; Task 9
-//! (CSP solver phases) may re-home them, and its `lower_bound` pruning MUST
-//! reuse the generic [`compare_trees_impl`] predicate variant rather than
-//! duplicate the else-chain.
+//! [`simulate`] replays a candidate `[step][group][plugin]` selection grid into
+//! an in-memory [`SimulatedTree`] instead of writing files, and
+//! [`compare_trees`] diffs that tree against the tree the mod actually has on
+//! disk. Together they are the scoring oracle every CSP solver phase depends on:
+//! the solver proposes a selection, this module says how closely it reproduces
+//! the installed mod.
 //!
-//! The simulator replicates the priority and document-order conflict
-//! resolution of `FomodService::execute_file_operations`, but produces an
-//! in-memory file tree instead of writing to disk. It is the scoring oracle
-//! every later CSP solver stage depends on: a candidate `[step][group][plugin]`
-//! selection grid is replayed through the four phases below, then the resulting
-//! tree is diffed against the real target tree via [`compare_trees`].
+//! The score is meaningful because the simulator resolves a destination conflict
+//! the way [`crate::fomod_service::execute_file_operations`] does: the
+//! highest-priority atom wins, and on equal priority the one applied last wins.
+//! The two do not feed that tiebreak from the same sequence, so equal-priority
+//! conflicts are where they can part over a shared destination. Gates one side
+//! applies and the other does not part them over whether a file is installed at
+//! all. The next section has both.
 //!
-//! ## Phases (mirror of the four blocks in `simulate_into`)
+//! [`compare_trees_impl`], [`compare_trees`] and [`collect_mismatched_dests`]
+//! live here rather than with the solver because they read a [`SimulatedTree`];
+//! [`crate::fomod_csp_solver`] imports them. The solver's `lower_bound` reuses
+//! [`compare_trees_impl`] with its own three predicates. Never copy the
+//! size/hash/reproduced else-chain into the solver: two copies of it would drift
+//! apart without any test noticing.
 //!
-//! 1. **Required** - every `atoms.required` atom applied unconditionally, in
+//! ## Where the simulator and the installer diverge
+//!
+//! This section is the authoritative account of the difference.
+//! [`crate::fomod_service::execute_file_operations`] points here rather than
+//! restating it, so correct it here and leave that side a pointer.
+//!
+//! Both sides are last-writer-wins on a tie, but they compare different keys.
+//! The installer stamps each `FileOperation` with a `document_order` counter as
+//! it enqueues the operation, then stable-sorts by `(priority, document_order)`
+//! and copies in that order, so "last" there means "enqueued last". The
+//! simulator carries no such stamp: [`should_overwrite`] compares `priority`
+//! alone, so "last" here means "applied last" under its own phase order plus
+//! step, group and plugin walk order. It never reads
+//! `FomodAtom::document_order`, and that field is not the installer's counter
+//! either: `fomod_service::enqueue_entry` numbers operations as the install
+//! passes queue them, while
+//! [`crate::fomod_inference_atoms::expand_all_atoms`] numbers entries in its own
+//! four loops.
+//!
+//! Two kinds of divergence follow. The first is which atom wins a destination
+//! both sides produce. Any conflict a priority difference settles comes out the
+//! same on both sides. An equal-priority conflict comes out the same only where
+//! enqueue order and application order agree. These cases are known to break
+//! that:
+//!
+//! - A Required-typed plugin promoted by
+//!   `fomod_service::process_optional_files` in its per-step auto-install loop.
+//!   That loop runs only after every selected plugin of the step is enqueued, so
+//!   the promoted plugin is enqueued last and wins. The simulator promotes it
+//!   inline at its position in the phase-2 walk, so a selected plugin later in
+//!   the same step is applied later and wins instead.
+//! - The same promotion for a step the selections JSON does not name. That pass
+//!   runs after every JSON-named step, so the promoted plugin outranks a
+//!   selected plugin of any step, not only its own, while the simulator still
+//!   promotes it inline at its IR position.
+//! - Two entries of one selected plugin on one destination, where the XML lists
+//!   an alwaysInstall / installIfUsable entry before a normal one. The installer
+//!   enqueues a plugin's entries in XML order, so the normal entry is enqueued
+//!   later and wins. `expand_all_atoms` fills that plugin's bucket with its
+//!   normal atoms first and its auto atoms after, and phase 2 applies the whole
+//!   bucket in that order, so the auto atom is applied later and wins.
+//! - Selections JSON that lists steps or groups in an order the IR does not use.
+//!   The installer enqueues in JSON order; the simulator always walks IR order.
+//!
+//! The second kind is a gate one side applies and the other does not. That
+//! changes which files are installed at all, whatever the priorities:
+//!
+//! - A plugin whose type turns `Required` only after a later plugin of the same
+//!   step sets a flag. `fomod_service::process_optional_files` evaluates the
+//!   type in its per-step auto-install loop, after every selected plugin of the
+//!   step has run, so it promotes the plugin, applies its `condition_flags` and
+//!   enqueues all of its files. The simulator evaluates the type inline in phase
+//!   2, before that flag exists, so it does not promote; phase 3 then applies
+//!   only the plugin's `always_install` and `install_if_usable` atoms and sets
+//!   none of its flags. The predicted tree is missing that plugin's normal
+//!   files, and a conditional pattern gated on one of its flags fires only on
+//!   the install side.
+//! - A `Required` plugin in a step the selections JSON names that is hidden
+//!   while its own step is processed and visible by the end.
+//!   `fomod_service::process_optional_files` skips that step on visibility in
+//!   pass 1, its per-step auto-install loop with it; skips it again in pass 2,
+//!   because the covered-step set holds step names; then reaches it visible in
+//!   pass 3 and drops the plugin on `eff_type == PluginType::Required`, so the
+//!   install writes none of its files. Phase 3 has no counterpart to that skip:
+//!   it finds the step visible and applies the plugin's `always_install` and
+//!   `install_if_usable` atoms. Here the predicted tree carries files the
+//!   install does not, the reverse of the case above.
+//! - A selected plugin whose `<dependencies>` do not hold.
+//!   `fomod_service::process_optional_files` skips it before
+//!   `apply_condition_flags`, so the install gets none of its files and none of
+//!   its flags. The simulator does not read `plugin.dependencies` at all and
+//!   applies both. Nothing upstream stops the solver proposing such a
+//!   selection: `fomod_csp_precompute` reads the field only to collect flag
+//!   names.
+//!
+//! Treat both lists as the known set, not a proof of completeness. The general
+//! statement is the one to reason from: equal priority is where the two can
+//! differ over a shared destination, and any further gap between enqueue order
+//! and application order adds a case; a gate present on one side only is where
+//! they differ over whether a file is installed at all.
+//!
+//! Do not reorder the phases to close the gap. The application-order tiebreak is
+//! deliberate, and changing it changes the predicted winner of every
+//! equal-priority collision the solver scores against. See `PARITY-NOTES.md`.
+//!
+//! ## Phases
+//!
+//! [`simulate_into`] runs four passes, in this order.
+//!
+//! 1. **Required.** Every `atoms.required` atom, applied unconditionally in
 //!    vector order.
-//! 2. **Selected / Required-typed plugins** (chronological pass) - per step in
-//!    order, in a VISIBLE step, per group, per plugin: `selected` comes from
-//!    the bounds-checked grid; an unselected plugin whose `evaluate_plugin_type`
-//!    against the flag state SO FAR is `Required` is promoted. A selected
-//!    plugin first accumulates its `condition_flags` (last-write-wins per
-//!    name), then applies ALL of its atoms unconditionally (no
-//!    always_install/install_if_usable filter). `flat_idx` advances per plugin
-//!    ALWAYS. An invisible step advances `flat_idx` past every group's plugins
-//!    but applies nothing and sets no flags.
-//! 3. **Auto atoms of unselected plugins** (final-flag-state pass) - `flat_idx`
-//!    recomputed from 0; step visibility RE-EVALUATED against the now-final
-//!    flags (so a step invisible in phase 2 can become visible here and vice
-//!    versa). For each plugin not processed in phase 2, `eff_type` is evaluated
-//!    against the FINAL flags: `always_install` atoms apply unconditionally;
-//!    `install_if_usable` atoms apply only when `eff_type != NotUsable`.
-//! 4. **Conditional installs** - per conditional pattern, active via
-//!    `evaluate_condition_inferred` (when an override entry exists) or
-//!    `evaluate_condition` (normal), applied in order when active.
+//! 2. **Selected and Required-typed plugins**, walked per step, then group, then
+//!    plugin. `selected` comes from the bounds-checked grid; an unselected
+//!    plugin whose `evaluate_plugin_type` against the flag state so far is
+//!    `Required` is promoted. The grid and that promotion are the only
+//!    plugin-level gates: `plugin.dependencies` is never evaluated here. A
+//!    selected plugin first accumulates its `condition_flags` (last write wins
+//!    per name), then applies every one of its atoms unconditionally, with no
+//!    always_install / install_if_usable filter. `flat_idx` advances once per
+//!    plugin whatever happens: an invisible step advances it past every group's
+//!    plugins but applies nothing and sets no flags.
+//! 3. **Auto atoms of the plugins phase 2 did not handle**, scored against the
+//!    final flag state. `flat_idx` restarts at 0 and step visibility is
+//!    re-evaluated, so a step invisible in phase 2 can become visible here and
+//!    the reverse. `eff_type` is evaluated against the final flags:
+//!    `always_install` atoms apply unconditionally, `install_if_usable` atoms
+//!    apply only when `eff_type != NotUsable`.
+//! 4. **Conditional installs.** Each conditional pattern, active via
+//!    `evaluate_condition_inferred` when an override entry exists and
+//!    `evaluate_condition` otherwise, applied in order when active.
 //!
-//! Visibility is re-evaluated in phase 3 rather than cached from phase 2
-//! because the flag map grows as phase 2 runs; the C++ comments on the phase-2
-//! and phase-3 blocks make this explicit ("eff_type ... against the flag state
-//! at this plugin's position" vs "against the FINAL flag state").
+//! Phase 3 re-evaluates visibility rather than caching phase 2's answer because
+//! the flag map grows as phase 2 runs. Phase 2 asks whether a step is visible at
+//! that plugin's position; phase 3 asks whether it is visible at the end.
+//!
+//! ## Application order is not `document_order`
+//!
+//! ```text
+//!   apply order                    atom source                          doc_order range
+//!   -----------------------------------------------------------------------------------
+//!   phase 1                        atoms.required                       [0 .. R)
+//!
+//!   phase 2  flat_idx 0,1,2,...    per_plugin[i], for a selected or
+//!                                  Required-promoted plugin i
+//!              normal atoms        of plugin i                          [R .. R+N)
+//!              auto atoms          of plugin i                          [R+N .. R+N+A)
+//!              then plugin i+1, whose normal atoms are in               [R .. R+N)
+//!
+//!   phase 3  flat_idx back to 0    per_plugin[i], for a plugin phase 2
+//!                                  did not handle; auto atoms only      [R+N .. R+N+A)
+//!
+//!   phase 4                        per_conditional[ci]                  [R+N+A .. end)
+//! ```
+//!
+//! [`crate::fomod_inference_atoms::expand_all_atoms`] numbers every normal
+//! plugin entry below every always-install / installIfUsable entry, in a
+//! separate global pass. Plugin 0's auto atom therefore carries a higher
+//! `document_order` than plugin 1's normal atom, yet phase 2 applies plugin 0's
+//! auto atom first. Phase 3 then restarts `flat_idx` at 0, so it can apply an
+//! atom whose `document_order` is lower than one phase 2 already applied. The
+//! applied sequence is therefore not monotonic in `document_order`, neither
+//! within phase 2 nor across the phase-2 to phase-3 boundary.
+//!
+//! [`should_overwrite`] compares `priority` alone, and neither it nor
+//! [`apply_atom`] reads `document_order`. Never sort the atoms by
+//! `document_order` before applying them: that changes the winner of every
+//! equal-priority collision.
 
 use std::collections::{HashMap, HashSet};
 
@@ -55,32 +180,62 @@ use crate::fomod_dependency_evaluator::{
 use crate::fomod_ir::{FomodInstaller, FomodStep};
 use crate::types::{FomodDependencyContext, PluginType};
 
-/// The file tree produced by a simulated FOMOD installation. Mirror of
-/// `mo2core::SimulatedTree`.
+/// The file tree produced by a simulated FOMOD installation.
 ///
-/// Maps each lowercased destination path to the single winning [`FomodAtom`]
-/// after priority and document-order conflict resolution. Used by the CSP
-/// solver to compare a candidate selection against the real target tree
-/// without performing any actual extraction.
+/// Maps a destination path to the single winning [`FomodAtom`] after priority
+/// and application-order conflict resolution, so the solver can score a
+/// candidate selection without extracting anything.
+///
+/// The key is `FomodAtom::dest_path` stored verbatim; the simulator normalizes
+/// nothing itself. In the normal pipeline the key already arrives in
+/// `crate::utils::normalize_path` form (lowercase, forward slashes, no leading
+/// or trailing `/`), because `crate::fomod_ir_parser::parse_module_config`
+/// normalizes every parsed destination and
+/// [`crate::fomod_inference_atoms::expand_entry`]'s folder branch normalizes the
+/// concatenated one; the single-file branch passes the parser's value straight
+/// through.
+///
+/// A caller that builds [`ExpandedAtoms`] by hand must pre-normalize every
+/// `dest_path`. Unnormalized keys never match a [`TargetTree`], whose keys come
+/// from the normalized installed-file scan, and [`compare_trees`] then reports
+/// each destination as both missing and extra.
 #[derive(Debug, Clone, Default)]
 pub struct SimulatedTree {
     /// dest -> winning atom.
     pub files: HashMap<String, FomodAtom>,
 }
 
-/// An atom overwrites the existing entry if it has `>=` priority. Mirror of the
-/// C++ file-scoped `should_overwrite`.
+/// An atom overwrites the incumbent at its destination when its priority is
+/// `>=` the incumbent's.
 ///
-/// Because atoms are applied in increasing document order (required, then
-/// plugins, then conditionals - see the module doc), equal priority means the
-/// new atom came later in the XML and should win: last-writer-wins.
+/// `>=` rather than `>` means the last atom applied wins a tie, the same shape
+/// as the real installer's stable sort, where the later-enqueued operation wins.
+/// What counts as "last" is [`simulate_into`]'s fixed application order, which is
+/// neither the XML order, nor `FomodAtom::document_order` (never read here), nor
+/// the installer's enqueue order:
+///
+/// 1. `atoms.required`, in vector order.
+/// 2. Per step, group and plugin in IR order, every atom of each selected or
+///    Required-promoted plugin, in vector order.
+/// 3. A second walk from `flat_idx = 0` over the plugins phase 2 did not handle,
+///    applying their `always_install` atoms, and their `install_if_usable` atoms
+///    when the effective type is not `NotUsable`.
+/// 4. Conditional patterns, in order.
+///
+/// `FomodAtom::document_order` is a different sequence.
+/// [`crate::fomod_inference_atoms::expand_all_atoms`] numbers every normal
+/// plugin entry below every always-install / installIfUsable entry, in a
+/// separate global pass, so plugin 0's auto atom outranks plugin 1's normal atom
+/// yet is applied first. Re-sorting the phases by `document_order` would change
+/// the winner of every equal-priority collision. The module doc has the ranges
+/// it carries, and the known cases where this tiebreak and the installer's
+/// disagree.
 fn should_overwrite(existing: &FomodAtom, new_atom: &FomodAtom) -> bool {
     new_atom.priority >= existing.priority
 }
 
-/// Insert `atom` at its destination when the slot is empty OR the incumbent
-/// loses to it under [`should_overwrite`]. Mirror of the C++ `apply_atom`
-/// (`insert_or_assign` on absent-or-overwrite).
+/// Insert `atom` at its destination when the slot is empty, or when the
+/// incumbent loses to it under [`should_overwrite`].
 fn apply_atom(tree: &mut SimulatedTree, atom: &FomodAtom) {
     let overwrite = match tree.files.get(&atom.dest_path) {
         Some(existing) => should_overwrite(existing, atom),
@@ -91,13 +246,13 @@ fn apply_atom(tree: &mut SimulatedTree, atom: &FomodAtom) {
     }
 }
 
-/// Step-visibility decision shared by phases 2 and 3, evaluated against the
-/// CURRENT flag map. Mirror of the C++ `compute_step_visibility` closure:
+/// Step-visibility decision shared by phases 2 and 3, evaluated against the flag
+/// map as it stands at the call:
 ///
 /// - no visibility condition -> `true`;
-/// - overrides present AND `si` in range -> `evaluate_condition_inferred` with
+/// - overrides present and `si` in range -> `evaluate_condition_inferred` with
 ///   `overrides.step_visible[si]`;
-/// - otherwise (including overrides present but the vector too short) ->
+/// - otherwise, including overrides present but the vector too short ->
 ///   `evaluate_condition` in normal mode.
 fn compute_step_visibility(
     si: usize,
@@ -117,14 +272,12 @@ fn compute_step_visibility(
     }
 }
 
-/// Run a forward simulation for a given selection, producing a fresh tree.
-/// Mirror of `mo2core::simulate`.
+/// Run a forward simulation for one selection, producing a fresh tree.
 ///
-/// `selections` is a 3-D boolean grid indexed `selections[step][group][plugin]`.
-/// Dimensions need not match the installer's counts; missing or short axes are
-/// treated as `false` (deselected). An empty outer slice is valid and means no
-/// plugins are explicitly selected (Required promotion and auto atoms still
-/// run).
+/// `selections` is a boolean grid indexed `selections[step][group][plugin]`. Its
+/// dimensions need not match the installer's counts: a missing or short axis
+/// reads as `false` (deselected). An empty outer slice is valid and means no
+/// plugin is explicitly selected; Required promotion and auto atoms still run.
 pub fn simulate(
     installer: &FomodInstaller,
     atoms: &ExpandedAtoms,
@@ -137,11 +290,10 @@ pub fn simulate(
     tree
 }
 
-/// In-place version of [`simulate`] that reuses an existing tree's allocation.
-/// Mirror of `mo2core::simulate_into`.
+/// In-place [`simulate`] that reuses an existing tree's allocation.
 ///
-/// `tree.files` is cleared before simulation begins (capacity is preserved, as
-/// in the C++ `unordered_map::clear`), then repopulated with the result.
+/// `tree.files` is cleared before the simulation begins, keeping its capacity,
+/// then repopulated with the result.
 pub fn simulate_into(
     tree: &mut SimulatedTree,
     installer: &FomodInstaller,
@@ -217,10 +369,10 @@ pub fn simulate_into(
                 }
                 let eff_type = evaluate_plugin_type(plugin, &flags, context);
                 for atom in &atoms.per_plugin[flat_idx] {
-                    // Mirror of the C++ else-if: always_install applies
-                    // unconditionally; install_if_usable applies only when the
-                    // effective type is not NotUsable. Both branches call
-                    // apply_atom, so they collapse to a single OR condition.
+                    // always_install applies unconditionally; install_if_usable
+                    // applies only when the effective type is not NotUsable.
+                    // Both outcomes are the same apply_atom call, so the two
+                    // branches collapse into one condition.
                     if atom.always_install
                         || (atom.install_if_usable && eff_type != PluginType::NotUsable)
                     {
@@ -251,19 +403,36 @@ pub fn simulate_into(
     }
 }
 
-/// Generic tree comparison: walk `sim` vs `target`, calling the three
-/// predicates to decide whether each divergence is counted. Mirror of the C++
-/// `compare_trees_impl` template.
+/// Generic tree comparison: walk `sim` against `target` and call the three
+/// predicates to decide whether each divergence is counted.
 ///
-/// The predicates let callers gate mismatch counting: [`compare_trees`] passes
-/// always-true, while Task 9's `lower_bound` will pass "is there a group still
-/// able to fix this dest" checks. Each predicate receives the destination path.
+/// Each predicate receives the destination path and returns true to count that
+/// divergence. [`compare_trees`] passes always-true predicates.
+/// `fomod_csp_solver::lower_bound` passes `can_fix_missing` / `can_fix_size` /
+/// `can_fix_hash`, each true only when no still-unassigned group and no
+/// remaining conditional pattern can produce or repair that destination, which
+/// is what keeps its bound admissible. Only `missing`, `size_mismatch` and
+/// `hash_mismatch` are gated; `reproduced` and `extra` take no predicate and are
+/// always counted.
 ///
-/// The size/hash/reproduced else-chain is load-bearing and mirrors the C++
-/// exactly: a size mismatch (both sizes nonzero and differing) is counted and
-/// SUPPRESSES the hash check; otherwise a hash mismatch (both hashes nonzero
-/// and differing) is counted; otherwise the file is reproduced. A zero size or
-/// zero hash on either side falls through toward reproduced.
+/// **Decision table.** A zero on either side of a comparison skips that branch
+/// and falls through toward reproduced:
+///
+/// ```text
+///   in target?  in sim?  sizes differ?  hashes differ?   result
+///   ------------------------------------------------------------------
+///   yes         no       -              -                missing
+///   yes         yes      yes            not consulted    size_mismatch
+///   yes         yes      no             yes              hash_mismatch
+///   yes         yes      no             no               reproduced
+///   no          yes      -              -                extra
+/// ```
+///
+/// A size mismatch suppresses the hash check, so one destination is counted at
+/// most once. [`collect_mismatched_dests`] and [`classify_dests`] repeat this
+/// else-chain and must stay identical to it.
+///
+/// Destinations in `excluded` are skipped in both walks and counted nowhere.
 pub fn compare_trees_impl(
     sim: &SimulatedTree,
     target: &TargetTree,
@@ -311,9 +480,8 @@ pub fn compare_trees_impl(
     m
 }
 
-/// Compare a simulated tree against the target, counting every divergence.
-/// Mirror of the C++ `compare_trees` (the always-true-predicate wrapper over
-/// [`compare_trees_impl`]).
+/// Compare a simulated tree against the target, counting every divergence: the
+/// always-true-predicate wrapper over [`compare_trees_impl`].
 pub fn compare_trees(
     sim: &SimulatedTree,
     target: &TargetTree,
@@ -322,20 +490,22 @@ pub fn compare_trees(
     compare_trees_impl(sim, target, excluded, |_| true, |_| true, |_| true)
 }
 
-/// Collect every destination where the simulation diverges from the target.
-/// Mirror of the C++ `collect_mismatched_dests`.
+/// Every destination where the simulation diverges from the target, as a flat
+/// union with the category discarded. Use [`classify_dests`] when the category
+/// is needed.
 ///
-/// Categories (same else-chain as [`compare_trees_impl`]): a dest in target but
-/// not in sim is `missing`; a dest in both with differing nonzero sizes is a
-/// size mismatch; else with differing nonzero hashes a hash mismatch; a dest in
-/// sim but not in target is `extra`. Reproduced dests are not collected.
+/// Categories follow the same else-chain and the same decision table as
+/// [`compare_trees_impl`]: a dest in target but not in sim is missing; a dest in
+/// both with differing nonzero sizes is a size mismatch; else with differing
+/// nonzero hashes a hash mismatch; a dest in sim but not in target is extra.
+/// Reproduced dests are not collected.
 ///
-/// Ordering: the C++ collects into an `unordered_set` (unspecified order) then
-/// `std::sort`s the result vector before returning. This port collects into a
-/// [`HashSet`] then sorts into a `Vec<String>`, yielding the same deterministic
-/// byte-wise ascending order. Task 9's consumers
-/// (`groups_for_mismatches`) only iterate the result and look up
-/// `dest_to_groups`, so they depend on determinism, not on a particular order.
+/// The result is sorted byte-wise ascending, which is the only ordering
+/// guarantee a caller may rely on. The sole consumer,
+/// `fomod_csp_solver::groups_for_mismatches`, seeds from each dest's direct
+/// producer groups, adds every needed-flag setter group for a dest in
+/// `conditional_dests`, BFS-expands through the flag dependency chain and sorts
+/// its own output, so it needs determinism rather than a particular order.
 pub fn collect_mismatched_dests(
     sim: &SimulatedTree,
     target: &TargetTree,
@@ -373,6 +543,94 @@ pub fn collect_mismatched_dests(
     let mut mismatched: Vec<String> = out.into_iter().collect();
     mismatched.sort();
     mismatched
+}
+
+/// How one destination diverged from the target tree.
+///
+/// Each variant names the `diagnostics.repro` counter of the same name in
+/// [`ReproMetrics`], so the per-file marks and the tally use one vocabulary.
+///
+/// Reproduced dests have no variant: they are the overwhelming majority, and
+/// every consumer reads "this file is fine" from absence rather than paying for
+/// a row per good file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DestStatus {
+    /// In the target tree but not produced by the simulation.
+    Missing,
+    /// Produced and in the target, but the two nonzero sizes differ. This check
+    /// suppresses the hash check.
+    SizeMismatch,
+    /// Produced and in the target with compatible sizes, but the two nonzero
+    /// content hashes differ.
+    HashMismatch,
+    /// Produced by the simulation but absent from the target tree.
+    Extra,
+}
+
+impl DestStatus {
+    /// The wire name, matching the `diagnostics.repro` counter it belongs to so
+    /// the payload uses one vocabulary for the tally and the paths.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DestStatus::Missing => "missing",
+            DestStatus::SizeMismatch => "size_mismatch",
+            DestStatus::HashMismatch => "hash_mismatch",
+            DestStatus::Extra => "extra",
+        }
+    }
+}
+
+/// Every diverging destination tagged with how it diverged, sorted by path.
+///
+/// This sits beside [`collect_mismatched_dests`] rather than replacing it
+/// because the two answer different questions. The solver asks which dests are
+/// wrong so it knows which groups to retarget, and its four call sites depend on
+/// the flat-union semantics. This function answers what is wrong with one named
+/// file, which is what a reader of the output tree needs, so it keeps the
+/// category.
+///
+/// The else-chain below must stay identical to [`compare_trees_impl`]'s and to
+/// [`collect_mismatched_dests`]': a size mismatch suppresses the hash check, and
+/// a zero size or zero hash on either side falls through to reproduced. If the
+/// copies drift, the per-file marks contradict the `repro` counts shipped in the
+/// same payload. `classify_dests_agrees_with_compare_trees` pins that invariant.
+pub fn classify_dests(
+    sim: &SimulatedTree,
+    target: &TargetTree,
+    excluded: &HashSet<String>,
+) -> Vec<(String, DestStatus)> {
+    let mut out: Vec<(String, DestStatus)> = Vec::new();
+
+    for (dest, tf) in target {
+        if excluded.contains(dest) {
+            continue;
+        }
+        match sim.files.get(dest) {
+            None => out.push((dest.clone(), DestStatus::Missing)),
+            Some(atom) => {
+                if tf.size != 0 && atom.file_size != 0 && tf.size != atom.file_size {
+                    out.push((dest.clone(), DestStatus::SizeMismatch));
+                } else if tf.hash != 0 && atom.content_hash != 0 && tf.hash != atom.content_hash {
+                    out.push((dest.clone(), DestStatus::HashMismatch));
+                }
+            }
+        }
+    }
+
+    for dest in sim.files.keys() {
+        if excluded.contains(dest) {
+            continue;
+        }
+        if !target.contains_key(dest) {
+            out.push((dest.clone(), DestStatus::Extra));
+        }
+    }
+
+    // Both maps are hashed, so the walk order is arbitrary; sort for a stable
+    // payload. A dest reaches this vector at most once - the second loop only
+    // sees dests absent from the target - so path order is a total order.
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
 }
 
 #[cfg(test)]
@@ -472,10 +730,6 @@ mod tests {
         &tree.files.get(dest).expect("dest present").source_path
     }
 
-    // ------------------------------------------------------------------
-    // Overwrite matrix (proves the `>=` rule and application-order dependence).
-    // ------------------------------------------------------------------
-
     #[test]
     fn higher_priority_wins_regardless_of_application_order() {
         // Two required atoms on the same dest, different priorities. Phase 1
@@ -522,10 +776,6 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // Required-vs-plugin conflict across phases.
-    // ------------------------------------------------------------------
-
     #[test]
     fn selected_plugin_overwrites_equal_priority_required_because_phase2_is_later() {
         // Phase 1 applies the required atom; phase 2 applies the selected
@@ -569,10 +819,6 @@ mod tests {
             "req"
         );
     }
-
-    // ------------------------------------------------------------------
-    // Flag accumulation order + last-write-wins per name.
-    // ------------------------------------------------------------------
 
     #[test]
     fn condition_flags_last_write_wins_within_a_plugin() {
@@ -635,15 +881,11 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // Required-type promotion via evaluate_plugin_type mid-walk.
-    // ------------------------------------------------------------------
-
     #[test]
     fn type_pattern_promotes_a_later_plugin_to_required_from_earlier_flag() {
         // plugin0 selected, sets want=yes. plugin1 (later, same step) is
         // Optional but a type_pattern flips it to Required when want==yes. It is
-        // NOT selected in the grid, yet its atom must install via promotion.
+        // not selected in the grid, yet its atom must install via promotion.
         let mut p0 = plugin("P0", PluginType::Optional);
         p0.condition_flags = vec![("want".into(), "yes".into())];
         let mut p1 = plugin("P1", PluginType::Optional);
@@ -664,7 +906,7 @@ mod tests {
             vec!["promoted".to_string()]
         );
 
-        // p0 NOT selected -> want unset -> p1 stays Optional -> nothing installs
+        // p0 not selected -> want unset -> p1 stays Optional -> nothing installs
         // (its lone atom is a normal, non-auto atom that never applies unselected).
         let sel_none = vec![vec![vec![false, false]]];
         assert!(
@@ -673,10 +915,6 @@ mod tests {
                 .is_empty()
         );
     }
-
-    // ------------------------------------------------------------------
-    // Invisible step: advances flat_idx, leaks neither flags nor atoms.
-    // ------------------------------------------------------------------
 
     #[test]
     fn invisible_step_advances_flat_idx_and_leaks_nothing() {
@@ -714,10 +952,6 @@ mod tests {
         assert_eq!(dests(&t), vec!["kept".to_string()]);
     }
 
-    // ------------------------------------------------------------------
-    // Phase-3 visibility flip, both directions.
-    // ------------------------------------------------------------------
-
     #[test]
     fn phase3_step_becomes_visible_with_final_flags_and_auto_atoms_apply() {
         // step0 gated on f=1 (unset during phase 2 -> invisible there). step1's
@@ -751,7 +985,7 @@ mod tests {
     fn phase3_step_becomes_invisible_with_final_flags_and_auto_atoms_do_not_apply() {
         // step0 gated on hide being empty/absent (true during phase 2 ->
         // visible). step1's selected plugin sets hide=1. In phase 3 step0 turns
-        // invisible, so its unselected plugin's always_install atom must NOT
+        // invisible, so its unselected plugin's always_install atom must not
         // apply.
         let step0 = FomodStep {
             visible: Some(flag_leaf("hide", "")),
@@ -773,14 +1007,10 @@ mod tests {
         assert!(simulate(&inst, &atoms, &sel, None, None).files.is_empty());
     }
 
-    // ------------------------------------------------------------------
-    // Selected plugin applies auto atoms unconditionally in phase 2.
-    // ------------------------------------------------------------------
-
     #[test]
     fn selected_plugin_applies_install_if_usable_even_when_effective_type_is_not_usable() {
         // A selected plugin whose eff_type would be NotUsable still installs its
-        // install_if_usable AND always_install atoms in phase 2 (no filter for
+        // install_if_usable and always_install atoms in phase 2 (no filter for
         // selected plugins).
         let mut p = plugin("P", PluginType::Optional);
         p.type_patterns = vec![FomodTypePattern {
@@ -803,10 +1033,6 @@ mod tests {
             vec!["always_out".to_string(), "iiu_out".to_string()]
         );
     }
-
-    // ------------------------------------------------------------------
-    // Unselected plugin auto-atom gating in phase 3.
-    // ------------------------------------------------------------------
 
     #[test]
     fn unselected_not_usable_plugin_installs_always_but_not_install_if_usable() {
@@ -858,10 +1084,6 @@ mod tests {
             vec!["always_out".to_string(), "iiu_out".to_string()]
         );
     }
-
-    // ------------------------------------------------------------------
-    // Conditional patterns: flags + override matrix + short-vector fallback.
-    // ------------------------------------------------------------------
 
     #[test]
     fn conditional_pattern_flag_driven_activation() {
@@ -998,10 +1220,6 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // Short / empty selection grids treated as false everywhere.
-    // ------------------------------------------------------------------
-
     #[test]
     fn empty_and_short_selection_grids_deselect_everything() {
         let inst = installer(
@@ -1031,10 +1249,6 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // simulate_into clears prior contents.
-    // ------------------------------------------------------------------
-
     #[test]
     fn simulate_into_clears_prior_contents_on_reuse() {
         let inst = installer(
@@ -1056,10 +1270,6 @@ mod tests {
         simulate_into(&mut tree, &inst, &atoms, &[], None, None);
         assert!(tree.files.is_empty());
     }
-
-    // ------------------------------------------------------------------
-    // compare_trees else-chain + excluded skipping.
-    // ------------------------------------------------------------------
 
     fn sim_with(entries: &[(&str, u64, u64)]) -> SimulatedTree {
         // (dest, file_size, content_hash)
@@ -1210,14 +1420,10 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // collect_mismatched_dests parity with compare_trees.
-    // ------------------------------------------------------------------
-
     #[test]
     fn collect_mismatched_dests_categories_match_compare_trees() {
         // One of each: missing, size mismatch, hash mismatch, extra, plus a
-        // reproduced and an excluded dest that must NOT appear.
+        // reproduced and an excluded dest that must not appear.
         let sim = sim_with(&[
             ("size_bad", 10, 0),  // vs target 20 -> size mismatch
             ("hash_bad", 10, 99), // vs target hash 88 -> hash mismatch
@@ -1252,6 +1458,73 @@ mod tests {
         let error_sum = (m.missing + m.extra + m.size_mismatch + m.hash_mismatch) as usize;
         assert_eq!(got.len(), error_sum);
         assert_eq!(m.reproduced, 1);
+    }
+
+    /// The invariant that keeps the per-file marks honest: every bucket of
+    /// `classify_dests` must be exactly as large as the `compare_trees` counter
+    /// of the same name. If the two else-chains ever drift, the output tree
+    /// would contradict the `repro` tally shipped in the same JSON.
+    #[test]
+    fn classify_dests_agrees_with_compare_trees() {
+        // Same fixture as the collect_mismatched_dests parity test: one of
+        // each category, plus a reproduced dest and two excluded ones.
+        let sim = sim_with(&[
+            ("size_bad", 10, 0),
+            ("hash_bad", 10, 99),
+            ("repro_ok", 10, 0),
+            ("extra_one", 7, 0),
+            ("skip_extra", 7, 0),
+        ]);
+        let target = target_with(&[
+            ("size_bad", 20, 0),
+            ("hash_bad", 10, 88),
+            ("repro_ok", 10, 0),
+            ("missing_one", 3, 0),
+            ("skip_missing", 3, 0),
+        ]);
+        let excl = excluded(&["skip_extra", "skip_missing"]);
+
+        let got = classify_dests(&sim, &target, &excl);
+
+        // Sorted by path, category preserved, reproduced and excluded absent.
+        assert_eq!(
+            got,
+            vec![
+                ("extra_one".to_string(), DestStatus::Extra),
+                ("hash_bad".to_string(), DestStatus::HashMismatch),
+                ("missing_one".to_string(), DestStatus::Missing),
+                ("size_bad".to_string(), DestStatus::SizeMismatch),
+            ]
+        );
+
+        let m = compare_trees(&sim, &target, &excl);
+        let count = |s: DestStatus| got.iter().filter(|(_, st)| *st == s).count() as i32;
+        assert_eq!(count(DestStatus::Missing), m.missing);
+        assert_eq!(count(DestStatus::Extra), m.extra);
+        assert_eq!(count(DestStatus::SizeMismatch), m.size_mismatch);
+        assert_eq!(count(DestStatus::HashMismatch), m.hash_mismatch);
+    }
+
+    /// A size mismatch suppresses the hash check in `compare_trees_impl`, so it
+    /// must suppress it here too - otherwise one file would be marked twice.
+    #[test]
+    fn classify_dests_size_mismatch_suppresses_hash_check() {
+        let sim = sim_with(&[("both_wrong", 10, 99)]);
+        let target = target_with(&[("both_wrong", 20, 88)]);
+        let got = classify_dests(&sim, &target, &excluded(&[]));
+        assert_eq!(
+            got,
+            vec![("both_wrong".to_string(), DestStatus::SizeMismatch)]
+        );
+    }
+
+    /// A zero size or zero hash on either side falls through to reproduced, so
+    /// such a file must not be marked at all.
+    #[test]
+    fn classify_dests_zero_size_or_hash_falls_through_to_reproduced() {
+        let sim = sim_with(&[("zero_size", 0, 5), ("zero_hash", 10, 0)]);
+        let target = target_with(&[("zero_size", 40, 5), ("zero_hash", 10, 7)]);
+        assert!(classify_dests(&sim, &target, &excluded(&[])).is_empty());
     }
 
     #[test]
