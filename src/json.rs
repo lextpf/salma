@@ -1,77 +1,105 @@
-//! Byte-faithful JSON value model + serializer - hand-written replacement for
-//! `nlohmann::json` on the inference output path.
+//! JSON value model for the inference output path, and the byte-level rules
+//! its output has to satisfy.
 //!
-//! Task 10's acceptance bar is BYTE-IDENTICAL output to the C++ DLL's
-//! `nlohmann::json::dump(2)` (every golden `expected.json` IS that dump). This
-//! module reproduces the exact bytes nlohmann emits, so there is no
-//! `serde_json` dependency (and none is allowed).
+//! The acceptance bar is output byte-identical to `nlohmann::json::dump(2)`.
+//! This module owns the [`Value`] model that meets that bar. It does not own
+//! the serializer or the parser: [`Value::dump`] and [`parse`] convert at the
+//! boundary and delegate to `serde_json`.
 //!
-//! ## What "nlohmann `dump(2)`" means, byte for byte
+//! ```text
+//!   this module                     boundary          serde_json 1.0
+//!   -----------------------------   --------------    -----------------------
+//!   Value::Null Bool Int UInt       to_serde()  --->  Value::Number(i64|u64|f64)
+//!         Double Str Array Object                     to_string_pretty -> bytes
+//!   builders, accessors, dump()
+//!                                   from_serde() <--  from_str  <- bytes
 //!
-//! - **Sorted object keys.** `nlohmann::json` is `std::map`-backed (NOT
-//!   `ordered_json`), so members serialize in `std::string operator<` order ==
-//!   unsigned-byte lexicographic order == Rust `str` `Ord`. [`Value::Object`]
-//!   stores a [`BTreeMap`], which iterates in exactly that order (all keys are
-//!   ASCII). The C++ builder's INSERT order is irrelevant to the output.
+//!   owned here : the Int / UInt / Double split, key order, the builders
+//!   delegated  : dump() and parse()
+//!   tests only : format_double(), which no production path calls
+//! ```
+//!
+//! The [`Value::Int`] / [`Value::UInt`] / [`Value::Double`] split is why the
+//! model is worth keeping on top of `serde_json::Value`. The same numeric zero
+//! must print `0` when it is a count and `0.0` when it is a confidence
+//! component, so integers and doubles have to stay distinct variants at
+//! construction time. `serde_json::Number` keeps `i64`, `u64` and `f64`
+//! distinct in the same way, so the split survives the hop across the boundary.
+//! Collapsing [`Value`] into `serde_json::Value` would rewrite every call site
+//! that picks a variant, which is the exact code this module protects.
+//!
+//! ## What `dump(2)` has to produce, byte for byte
+//!
+//! The layout, escaping and number tests in this file pin all five properties:
+//!
+//! - **Sorted object keys.** Members serialize in unsigned-byte lexicographic
+//!   order, which for the ASCII keys used here is Rust `str` `Ord`.
+//!   [`Value::Object`] stores a [`BTreeMap`], which iterates in exactly that
+//!   order, so the order a builder inserts in never reaches the output.
 //! - **Pretty layout (indent 2).** Two spaces per nesting level; `'\n'`
-//!   newlines; an object member line is `<indent>"key": value` (colon then one
-//!   space); an array element line is `<indent>value`; members/elements are
-//!   joined with `,\n`; `{`/`[` are immediately followed by `\n`; the closing
-//!   `}`/`]` sits on its own line at the PARENT indent. There is NO trailing
-//!   newline at the end of the document.
+//!   newlines; an object member line is `<indent>"key": value`, colon then one
+//!   space; an array element line is `<indent>value`; members and elements are
+//!   joined with `,\n`; `{` and `[` are followed immediately by `\n`; the
+//!   closing `}` or `]` sits on its own line at the parent indent. The document
+//!   does not end with a newline.
 //! - **Empty containers inline.** An empty array renders `[]` and an empty
-//!   object `{}` on a single line with no interior whitespace, even in pretty
-//!   mode.
-//! - **Integers vs doubles are distinct types.** A [`Value::Int`] prints as a
+//!   object `{}` on one line with no interior whitespace, even in pretty mode.
+//! - **Integers and doubles are distinct types.** A [`Value::Int`] prints as a
 //!   plain decimal (`0`, `2`, `802816`); a [`Value::Double`] always carries a
-//!   decimal point (`0.0`, `1.0`, `0.54`). Constructing the right variant per
-//!   field is load-bearing: the same numeric zero is `"0"` (a count/size) or
-//!   `"0.0"` (a confidence component) depending on the C++ static type.
+//!   decimal point (`0.0`, `1.0`, `0.54`). Picking the right variant per field
+//!   is load-bearing: the same numeric zero is `"0"` as a count or size and
+//!   `"0.0"` as a confidence component.
 //! - **String escaping** matches nlohmann's default (`ensure_ascii=false`):
-//!   `"` -> `\"`, `\` -> `\\`, the C0 shortcuts `\b \f \n \r \t`, any other
-//!   control byte `< 0x20` as `\u00XX` with LOWERCASE hex, and `/` is NOT
-//!   escaped. Non-ASCII UTF-8 passes through as raw bytes.
+//!   `"` becomes `\"`, `\` becomes `\\`, the C0 shortcuts are `\b \f \n \r \t`,
+//!   any other control byte below `0x20` becomes `\u00XX` with lowercase hex,
+//!   and `/` is not escaped. Non-ASCII UTF-8 passes through as raw bytes.
 //!
-//! ## The float rule
+//! ## How doubles reach the output
 //!
-//! nlohmann's `dtoa` and Rust's `f64` `Display` both emit the shortest decimal
-//! string that round-trips to the same IEEE-754 double, so for identical bits
-//! the digit sequence is identical. The ONE systematic difference is that Rust
-//! prints an integer-valued double as `1`/`0` while nlohmann prints `1.0`/`0.0`.
-//! [`format_double`] appends `.0` exactly when the shortest string contains no
-//! `.`, `e`, or `E` (and the value is finite), reproducing nlohmann.
+//! Doubles in the output document are formatted by `serde_json` (the `zmij`
+//! backend in the pinned 1.0.151), not by Rust's `f64` `Display` and not by
+//! [`format_double`]. `serde_json` and nlohmann's `dtoa` both emit the shortest
+//! decimal string that round-trips to the same IEEE-754 double, and both keep a
+//! decimal point on an integer-valued double, so `1.0` stays `1.0` and `0.0`
+//! stays `0.0` instead of collapsing to `1` and `0`. Bare Rust `Display` does
+//! collapse them, which is what [`format_double`] corrects for its own
+//! test-only callers.
 //!
-//! Latent risk (documented, not exercised): for magnitudes outside roughly
-//! `[1e-5, 1e16]` nlohmann switches to exponent notation with formatting that
-//! this simple rule does not replicate. No confidence value or size in any
-//! fixture falls in that range (all confidence values are in `[0, 1]`).
+//! A non-finite double has no JSON form. nlohmann emits `null` for NaN and for
+//! both infinities, and `to_serde` reproduces that.
+//!
+//! Residual risk, documented but not exercised: `serde_json` and nlohmann each
+//! choose their own magnitude threshold for switching from positional to
+//! exponent notation, and the two are not known to agree. Every double the
+//! engine writes is a confidence value in `[0, 1]`, and every count, size and
+//! timing is a [`Value::Int`], so no written double reaches a magnitude where
+//! the choice matters. A caller that puts an arbitrary `f64` into a
+//! [`Value::Double`] leaves that guarantee behind.
 
 use std::collections::BTreeMap;
 
-/// An owned JSON value. Mirror of the subset of `nlohmann::json` the inference
-/// output path constructs.
+/// An owned JSON value: the subset of JSON the inference output path builds.
 ///
-/// [`Value::Int`] and [`Value::Double`] are deliberately separate variants: the
-/// C++ code builds integer JSON (counts, sizes, `schema_version`, timings) and
-/// double JSON (every confidence field) as distinct static types, and they
-/// serialize differently (`0` vs `0.0`). Objects hold a [`BTreeMap`] so keys
-/// serialize in the sorted order `std::map`-backed `nlohmann::json` uses.
+/// [`Value::Int`] and [`Value::Double`] are separate variants on purpose.
+/// Counts, sizes, `schema_version` and timings are integers; every confidence
+/// field is a double; the two serialize differently (`0` against `0.0`).
+/// Objects hold a [`BTreeMap`], so keys serialize sorted whatever order the
+/// builder inserted them in.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     /// JSON `null`.
     Null,
     /// JSON boolean.
     Bool(bool),
-    /// JSON integer (C++ `int` / `int64_t`); prints without a decimal point.
+    /// JSON integer; prints without a decimal point.
     Int(i64),
-    /// JSON integer above `i64::MAX` (C++ `uint64_t` / nlohmann
-    /// `number_unsigned_t`); prints without a decimal point.
+    /// JSON integer above `i64::MAX`; prints without a decimal point.
     ///
-    /// Only [`parse`] ever produces this variant - the assembly path builds
-    /// [`Value::Int`] for every counter and size, exactly as the C++ does. It
-    /// exists so a cached `meta.ini` blob carrying an integer in
-    /// `(i64::MAX, u64::MAX]` round-trips through the Tier-1 emitter with the
-    /// same digits nlohmann emits, instead of degrading to a float.
+    /// Only [`parse`] produces this variant; the assembly path builds
+    /// [`Value::Int`] for every counter and size. It exists so a cached
+    /// `meta.ini` blob carrying an integer in `(i64::MAX, u64::MAX]`
+    /// round-trips through the Tier-1 emitter with its digits intact instead of
+    /// degrading to a float.
     UInt(u64),
     /// JSON double; always prints with a decimal point for integer values.
     Double(f64),
@@ -120,7 +148,7 @@ impl Value {
         }
     }
 
-    // --- type introspection (mirrors nlohmann `is_*` predicates) -----------
+    // --- type introspection ------------------------------------------------
 
     /// True if this is a [`Value::Str`].
     pub fn is_string(&self) -> bool {
@@ -137,8 +165,8 @@ impl Value {
         matches!(self, Value::Array(_))
     }
 
-    /// True if this is a number ([`Value::Int`], [`Value::UInt`] or
-    /// [`Value::Double`]), matching nlohmann `is_number`.
+    /// True if this is a number: [`Value::Int`], [`Value::UInt`] or
+    /// [`Value::Double`].
     pub fn is_number(&self) -> bool {
         matches!(self, Value::Int(_) | Value::UInt(_) | Value::Double(_))
     }
@@ -153,8 +181,8 @@ impl Value {
         matches!(self, Value::Null)
     }
 
-    /// True if this value is "empty" the way `nlohmann::json::empty()` is: null,
-    /// an empty array, or an empty object. Scalars are never empty.
+    /// True for null, an empty array, or an empty object. A scalar is never
+    /// empty, so `Int(0)` and `Str("")` are both non-empty.
     pub fn is_empty(&self) -> bool {
         match self {
             Value::Null => true,
@@ -174,9 +202,13 @@ impl Value {
         }
     }
 
-    /// The integer payload, or `None` if not an integer. A [`Value::UInt`] above
-    /// `i64::MAX` does not fit and yields `None`, mirroring nlohmann's
-    /// `get<int64_t>` range check.
+    /// The integer payload, or `None` if not an integer.
+    ///
+    /// Stricter than a C-style cast in two ways: a [`Value::UInt`] above
+    /// `i64::MAX` yields `None` rather than wrapping to a negative number, and
+    /// a [`Value::Double`] yields `None` rather than truncating. Neither case
+    /// is reachable today, since nothing outside the tests calls this and only
+    /// [`parse`] ever builds a [`Value::UInt`].
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::Int(n) => Some(*n),
@@ -185,8 +217,8 @@ impl Value {
         }
     }
 
-    /// The numeric payload as `f64` (an [`Value::Int`] / [`Value::UInt`] is
-    /// widened), or `None` if not a number.
+    /// The numeric payload as `f64`, widening a [`Value::Int`] or
+    /// [`Value::UInt`], or `None` if not a number.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Value::Double(d) => Some(*d),
@@ -237,17 +269,24 @@ impl Value {
 
     // --- serialization -----------------------------------------------------
 
-    /// Serialize with `indent` spaces per nesting level, reproducing
-    /// `nlohmann::json::dump(indent)` byte for byte. No trailing newline.
-    /// Serialize to a string. `indent > 0` selects nlohmann's pretty layout
-    /// (two spaces per level); `indent == 0` is the compact form.
+    /// Serialize to a UTF-8 string. Any non-zero `indent` selects the pretty
+    /// layout; `indent == 0` selects the compact layout. Neither form ends with
+    /// a newline.
     ///
-    /// Delegates to `serde_json`, which was verified byte-identical to
-    /// nlohmann's `dump(2)` across the whole committed golden corpus: sorted
-    /// keys, two-space pretty layout, empty containers inline, the integer /
-    /// double split, lowercase `\u00XX` control escapes, unescaped `/`, raw
-    /// non-ASCII passthrough, and no trailing newline all match. See
-    /// PARITY-NOTES.
+    /// `indent` selects a mode, it does not set a width. The pretty writer is
+    /// `serde_json::to_string_pretty`, fixed at two spaces per nesting level,
+    /// so `dump(4)` still emits two-space indentation. Every call site in this
+    /// crate passes 2.
+    ///
+    /// Byte parity is claimed for `dump(2)` only, and the layout, escaping and
+    /// number tests in this file pin it. `dump(0)` is not
+    /// `nlohmann::json::dump(0)`: nlohmann treats any `indent >= 0` as pretty,
+    /// so its `dump(0)` still emits newlines and `": "` separators at zero
+    /// indentation, while this returns the fully compact form that
+    /// `nlohmann::json::dump()` with no argument produces.
+    ///
+    /// Never panics: [`to_serde`] only builds values `serde_json` can
+    /// serialize.
     pub fn dump(&self, indent: usize) -> String {
         let v = to_serde(self);
         if indent == 0 {
@@ -260,15 +299,12 @@ impl Value {
 
 /// Convert to `serde_json::Value` for serialization.
 ///
-/// The integer/double split survives the hop: `serde_json::Number` keeps `i64`,
-/// `u64` and `f64` distinct, so a [`Value::Int`] still prints `0` while a
-/// [`Value::Double`] still prints `0.0`. That distinction is load-bearing - the
-/// same numeric zero is a count or a confidence component depending on the C++
-/// static type.
+/// The integer and double split survives the hop: `serde_json::Number` keeps
+/// `i64`, `u64` and `f64` distinct, so a [`Value::Int`] still prints `0` while
+/// a [`Value::Double`] still prints `0.0`.
 ///
-/// A non-finite double has no JSON representation; nlohmann emits `null` for
-/// NaN and the infinities, and `Number::from_f64` returning `None` reproduces
-/// that exactly.
+/// A non-finite double has no JSON form. `Number::from_f64` returns `None` for
+/// NaN and the infinities, and mapping that to `null` is what nlohmann emits.
 fn to_serde(v: &Value) -> serde_json::Value {
     match v {
         Value::Null => serde_json::Value::Null,
@@ -281,7 +317,7 @@ fn to_serde(v: &Value) -> serde_json::Value {
         Value::Str(s) => serde_json::Value::String(s.clone()),
         Value::Array(items) => serde_json::Value::Array(items.iter().map(to_serde).collect()),
         // serde_json's Map is BTreeMap-backed by default (no `preserve_order`
-        // feature), so keys stay in the sorted order nlohmann's std::map emits.
+        // feature), so keys stay sorted across the hop.
         Value::Object(map) => {
             serde_json::Value::Object(map.iter().map(|(k, v)| (k.clone(), to_serde(v))).collect())
         }
@@ -294,8 +330,8 @@ fn from_serde(v: serde_json::Value) -> Value {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(b),
         serde_json::Value::Number(n) => {
-            // The same split nlohmann makes: an integer token in i64 range is
-            // signed, one above it unsigned, anything else a double.
+            // An integer token in i64 range becomes signed, one above it
+            // unsigned, anything else a double.
             if let Some(i) = n.as_i64() {
                 Value::Int(i)
             } else if let Some(u) = n.as_u64() {
@@ -314,16 +350,21 @@ fn from_serde(v: serde_json::Value) -> Value {
     }
 }
 
-/// Format a double the way nlohmann does.
+/// Format a double the way nlohmann does, starting from Rust's `f64` `Display`.
 ///
 /// Both nlohmann's `dtoa` and Rust's `f64` `Display` emit the shortest decimal
 /// that round-trips to the same IEEE-754 double, so for identical bits the
-/// digits agree. The ONE systematic difference is that Rust prints an
-/// integer-valued double as `1`/`0` where nlohmann prints `1.0`/`0.0`, so a
-/// `.0` is appended when the shortest form carries no `.`, `e` or `E`.
+/// digits agree. The one systematic difference is that Rust prints an
+/// integer-valued double as `1` or `0` where nlohmann prints `1.0` or `0.0`, so
+/// this appends `.0` when the shortest form carries no `.`, `e` or `E`. A
+/// non-finite value comes back as `Display` writes it (`NaN`, `inf`, `-inf`)
+/// with no `.0` appended; that is not valid JSON and does not need to be.
 ///
-/// Retained after the serde_json switch: it is the reference the diagnostics
-/// tests assert confidence rendering against, independently of the JSON layer.
+/// Not the serializer. [`Value::dump`] never calls this, because doubles in the
+/// output document are formatted by `serde_json`. It stays as the independent
+/// reference the diagnostics tests assert confidence rendering against, so a
+/// change in the JSON layer cannot silently move the expected strings. It has
+/// no non-test caller.
 pub fn format_double(v: f64) -> String {
     let s = format!("{v}");
     if v.is_finite() && !s.contains(['.', 'e', 'E']) {
@@ -333,33 +374,39 @@ pub fn format_double(v: f64) -> String {
     }
 }
 
-/// Parse a JSON document. Mirror of the `nlohmann::json::parse(value)` call in
-/// `FomodInferenceService::try_fomod_plus_json`, which is wrapped in a
-/// `try/catch(json::parse_error)` that discards the candidate on any failure.
-/// Errors are reported as `Err(String)` and this NEVER panics on malformed
-/// input; the caller treats `Err` exactly as the C++ treats a caught parse
-/// error.
+/// Parse a JSON document. Returns `Err(String)` on malformed input and never
+/// panics. The one production caller, the Tier-1 `meta.ini` decoder in
+/// `fomod_inference_service`, discards the candidate on `Err`.
 ///
-/// Backed by `serde_json`, which implements the same strict RFC 8259 grammar
-/// nlohmann does rather than a lenient superset: leading zeros (`01`), a
-/// leading `+`, and a bare `.5` / `1.` are all rejected, as are raw control
-/// bytes below `0x20` inside a string. Accepting any of those would flip a
-/// Tier-1 MISS into a Tier-1 HIT and change the whole output document relative
-/// to the C++. Duplicate object keys keep the last occurrence, matching
-/// nlohmann; keys serialize back sorted regardless.
+/// Backed by `serde_json`, which implements the strict RFC 8259 grammar rather
+/// than a lenient superset: leading zeros (`01`), a leading `+`, and a bare
+/// `.5` or `1.` are all rejected, as are raw control bytes below `0x20` inside
+/// a string. Accepting any of those would turn a Tier-1 miss into a Tier-1 hit
+/// and change the whole output document. Duplicate object keys keep the last
+/// occurrence; keys serialize back sorted regardless.
 ///
-/// Two documented divergences from the hand-written parser this replaced,
-/// neither reachable from the inputs the engine actually parses (the
-/// fomod-plus cache blob and the install selections JSON, which carry only
-/// strings, booleans and small integers):
+/// Three inputs behave differently from the reference nlohmann rules the rest
+/// of this module reproduces. None is reachable from what the engine parses:
+/// the fomod-plus cache blob and the install selections JSON carry only
+/// strings, booleans and small integers, and a parsed value never re-enters the
+/// output document.
 ///
-/// - **Float precision.** serde_json's number parser is not always
-///   correctly-rounded: `0.9999999999999999` parses 1 ULP high, to exactly
-///   `1.0`. Serialization is unaffected, so engine-computed doubles still
-///   render byte-identically; only re-reading a float from JSON text differs.
-/// - **Nesting depth.** serde_json's recursion limit is 128, where this
-///   module's own cap was [`MAX_PARSE_DEPTH`]. A document nested deeper than
-///   128 now fails to parse instead of succeeding.
+/// | Input                      | Reference behavior                    | serde_json, in force          |
+/// |----------------------------|---------------------------------------|-------------------------------|
+/// | `-0`                       | `Int(0)`                              | `Double(-0.0)`                |
+/// | nesting depth              | accepted to [`MAX_PARSE_DEPTH`] (512) | accepts 127, errors at 128    |
+/// | `0.9999999999999999`       | exact bits                            | 1 ULP high, parses to `1.0`   |
+///
+/// The nesting limit is a decrementing counter that starts at 128 and errors
+/// when it reaches zero, so 127 nested containers is the deepest document that
+/// parses. `parse_depth_is_capped_instead_of_overflowing_the_stack` in this
+/// file pins both sides of that boundary.
+///
+/// The third row is a `serde_json` limitation: its number parser is not
+/// correctly rounded. It affects reading only. Serialization is exact, so
+/// engine-computed doubles still render byte-identically; only a float read
+/// back out of JSON text can differ. All three rows are recorded in
+/// `PARITY-NOTES.md`.
 pub fn parse(text: &str) -> Result<Value, String> {
     match serde_json::from_str::<serde_json::Value>(text) {
         Ok(v) => Ok(from_serde(v)),
@@ -367,8 +414,11 @@ pub fn parse(text: &str) -> Result<Value, String> {
     }
 }
 
-/// Nesting depth the hand-written parser capped at, kept as documentation of
-/// the previous limit. The effective cap is now serde_json's 128.
+/// Recorded nesting cap, referenced by the divergence table on [`parse`].
+///
+/// This is not the cap in force and nothing in the crate reads it. Parsing goes
+/// through `serde_json`, whose recursion limit of 128 accepts at most 127
+/// nested containers.
 pub const MAX_PARSE_DEPTH: usize = 512;
 
 #[cfg(test)]
@@ -451,7 +501,7 @@ mod tests {
         // Other control char -> lowercase \u00XX.
         assert_eq!(Value::string("a\u{01}b").dump(2), "\"a\\u0001b\"");
         assert_eq!(Value::string("\u{1f}").dump(2), "\"\\u001f\"");
-        // Forward slash is NOT escaped.
+        // Forward slash is not escaped.
         assert_eq!(Value::string("a/b").dump(2), "\"a/b\"");
         // Non-ASCII UTF-8 passes through raw.
         assert_eq!(Value::string("café").dump(2), "\"café\"");
@@ -468,11 +518,16 @@ mod tests {
         assert!(!s.ends_with('\n'));
     }
 
-    // --- FLOAT ORACLE: hard values from the fixture confidence fields ------
+    // --- float oracle for format_double ------------------------------------
     //
-    // Each MUST match nlohmann's shortest-round-trip output. They will iff the
-    // formatter is Rust `Display` + the ".0" rule, because identical f64 bits
-    // give identical shortest digit sequences.
+    // Inline confidence values with awkward binary representations, each
+    // paired with nlohmann's shortest-round-trip rendering. They match only if
+    // the formatter is Rust `Display` plus the ".0" rule, since identical f64
+    // bits give identical shortest digit sequences.
+    //
+    // This exercises format_double, not the JSON output path. The output path
+    // goes through serde_json, and double_integer_values_get_decimal_point
+    // above is the test that pins it.
 
     #[test]
     fn float_oracle_hard_values() {
@@ -499,14 +554,15 @@ mod tests {
 
     #[test]
     fn composite_from_all_ones_is_not_exactly_one() {
-        // The exact IEEE-754 sum the C++ `composite_from` computes for a fully
-        // forced plugin: 0.40 + 0.30 + 0.20 + 0.10 rounds to 0.9999999999999999,
-        // which every golden fixture emits for such plugins.
+        // The exact IEEE-754 sum `inference_diagnostics::composite_from`
+        // computes for a fully forced plugin: 0.40 + 0.30 + 0.20 + 0.10 rounds
+        // to 0.9999999999999999, not to 1.0. Pinned here so the rounding
+        // cannot drift unnoticed.
         let composite = 0.40_f64 * 1.0 + 0.30 * 1.0 + 0.20 * 1.0 + 0.10 * 1.0;
         assert_eq!(format_double(composite), "0.9999999999999999");
     }
 
-    // --- introspection helpers (used by the ported unit tests) ------------
+    // --- introspection helpers ---------------------------------------------
 
     #[test]
     fn introspection_predicates_and_accessors() {
@@ -619,9 +675,9 @@ mod tests {
 
     #[test]
     fn parse_number_grammar_is_strict_like_nlohmann() {
-        // nlohmann rejects each of these with parse_error 101. Accepting them
-        // would turn a Tier-1 MISS into a Tier-1 HIT and emit a different
-        // document, so leniency here is a real parity bug, not a nicety.
+        // Each of these is a parse error under the reference nlohmann rules.
+        // Accepting one would turn a Tier-1 miss into a Tier-1 hit and emit a
+        // different document, so leniency here is a real bug, not a nicety.
         for bad in [
             "01",         // leading zero
             "-01",        // leading zero after the sign
@@ -638,12 +694,11 @@ mod tests {
 
         // ...while the valid forms still parse to the right variant.
         assert_eq!(parse("0").unwrap(), Value::Int(0));
-        // DIVERGENCE from nlohmann, introduced by the serde_json switch: it
-        // reads "-0" as the float -0.0 where nlohmann reads integer 0. Kept as
-        // an assertion rather than a fix because it is unreachable from what
-        // the engine parses (the fomod-plus blob and the install selections
-        // JSON carry names, booleans and small counts), and parsed values are
-        // never re-serialized into the output document. See PARITY-NOTES.
+        // serde_json reads "-0" as the float -0.0 where the nlohmann rules
+        // give integer 0. Asserted rather than corrected: it is unreachable
+        // from what the engine parses (the fomod-plus blob and the install
+        // selections JSON carry names, booleans and small counts), and parsed
+        // values never re-enter the output document. See PARITY-NOTES.md.
         assert_eq!(parse("-0").unwrap(), Value::Double(-0.0));
         assert_eq!(parse("10").unwrap(), Value::Int(10));
         assert_eq!(parse("1.5").unwrap(), Value::Double(1.5));
@@ -653,10 +708,10 @@ mod tests {
 
     #[test]
     fn parse_big_integers_use_uint_and_keep_their_digits() {
-        // nlohmann stores an integer above i64::MAX as number_unsigned_t and
-        // dumps the exact digits; degrading to a double would print a mangled
-        // float. Reachable through the Tier-1 emitter, which echoes a cached
-        // `deselected` entry's raw `name` value into the output.
+        // An integer above i64::MAX keeps its exact digits; degrading to a
+        // double would print a mangled float. Reachable through the Tier-1
+        // emitter, which echoes a cached `deselected` entry's raw `name` value
+        // into the output.
         assert_eq!(parse("9223372036854775807").unwrap(), Value::Int(i64::MAX));
         assert_eq!(
             parse("9223372036854775808").unwrap(),
@@ -670,7 +725,7 @@ mod tests {
             Value::UInt(18_446_744_073_709_551_615).dump(2),
             "18446744073709551615"
         );
-        // Wider than u64 falls back to a double, as nlohmann does.
+        // Wider than u64 falls back to a double.
         assert!(matches!(
             parse("18446744073709551616").unwrap(),
             Value::Double(_)
@@ -679,8 +734,8 @@ mod tests {
 
     #[test]
     fn parse_rejects_raw_control_bytes_and_signed_unicode_escapes() {
-        // A raw control byte inside a string is parse_error 101 in nlohmann; it
-        // has to be escaped.
+        // A raw control byte inside a string is a parse error; it has to be
+        // escaped.
         assert!(parse("\"a\tb\"").is_err());
         assert!(parse("\"a\nb\"").is_err());
         assert!(parse("\"a\u{1}b\"").is_err());
@@ -693,8 +748,7 @@ mod tests {
         assert!(parse(r#""\uzzzz""#).is_err());
     }
 
-    /// serde_json's recursion limit, which replaced this module's own
-    /// MAX_PARSE_DEPTH when parsing moved to serde_json.
+    /// serde_json's recursion limit: the nesting cap `parse` actually enforces.
     const SERDE_RECURSION_LIMIT: usize = 128;
 
     #[test]
@@ -707,12 +761,10 @@ mod tests {
         );
         assert!(parse(&deep_ok).is_ok());
 
-        // ...beyond it a clean Err, NOT a stack overflow. That property is why
-        // a cap has to exist at all: without one this input class aborts the
-        // host process, since a Windows stack overflow is an SEH exception
-        // `capi`'s catch_unwind cannot contain. serde_json caps at 128 where
-        // the hand-written parser capped at MAX_PARSE_DEPTH (512), so documents
-        // nested between the two now fail where they used to parse.
+        // ...beyond it a clean Err, not a stack overflow. That is why a cap
+        // has to exist at all: without one this input class aborts the host
+        // process, since a Windows stack overflow is an SEH exception that
+        // `capi`'s catch_unwind cannot contain.
         let too_deep = format!(
             "{}1{}",
             "[".repeat(SERDE_RECURSION_LIMIT),
