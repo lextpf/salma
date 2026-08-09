@@ -1,29 +1,45 @@
 //! Process-wide logger: `logs/salma.log` next to the DLL, plus a host callback.
 //!
-//! Rust port of `src/Logger.hpp`/`.cpp`. The C++ is a Meyer singleton; this is a
-//! [`OnceLock`]-backed equivalent reached through [`Logger::instance`].
+//! One [`OnceLock`]-backed instance per process, reached through
+//! [`Logger::instance`]. Construction never fails, so no call site has to handle
+//! a missing logger.
 //!
-//! ## Output routing (identical to the C++)
+//! ## Output routing
 //!
-//! For each of the three level methods:
+//! A registered callback replaces file logging; it does not duplicate it.
+//! `setLogCallback(null)` restores file logging. The console echo happens either
+//! way.
 //!
-//! 1. Under the mutex, snapshot the callback. If NO callback is registered,
-//!    write the formatted line to the file.
-//! 2. Outside the mutex, echo the RAW message to the console: stdout for
-//!    info/warning, stderr for error. This happens whether or not a callback is
-//!    registered, and carries no timestamp or level prefix.
-//! 3. If a callback IS registered, forward the raw message to it and write
-//!    NOTHING to the file. A callback that logs re-entrantly is dropped with a
-//!    diagnostic rather than recursing until the stack dies.
+//! ```text
+//!  callback registered? | console                   | logs/salma.log | callback
+//!  ---------------------|---------------------------|----------------|------------
+//!  no                   | stdout (info, warning),   | formatted line | -
+//!                       | stderr (error)            |                |
+//!  yes                  | stdout (info, warning),   | nothing        | raw message
+//!                       | stderr (error)            |                |
+//! ```
 //!
-//! So a registered callback REPLACES file logging; it does not duplicate it.
-//! `setLogCallback(null)` restores file logging.
+//! Two rules the table cannot carry:
+//!
+//! - The console echo and the callback both receive the raw message, with no
+//!   timestamp and no level prefix. Only the file line carries those.
+//! - A callback that logs re-entrantly on the same thread is dropped, with a
+//!   diagnostic on stderr, instead of recursing until the stack dies.
+//!
+//! The file write happens under the state mutex. The console echo and the
+//! callback both run outside it, so two threads can interleave there, and a slow
+//! host callback never blocks another thread's file write.
 //!
 //! ## Line format
 //!
-//! `YYYY-MM-DD HH:MM:SS.mmm LEVEL message`, LOCAL time, levels `INFO`,
-//! `WARNING`, `ERROR`. The file is opened in append mode and rotates at 10 MiB,
-//! keeping `salma.log.1` through `.3`.
+//! `YYYY-MM-DD HH:MM:SS.mmm LEVEL message`, where `LEVEL` is `INFO`, `WARNING`
+//! or `ERROR`. The timestamp is local time on Windows (`GetLocalTime`). On every
+//! other platform it is UTC, because `std` has no local-time conversion; see
+//! `now_local`. salma ships Windows-only, and the non-Windows arm exists only so
+//! the crate still compiles elsewhere.
+//!
+//! The file is opened in append mode and rotates at 10 MiB, keeping
+//! `salma.log.1` through `.3`.
 
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
@@ -35,18 +51,21 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::utils::module_directory;
 
-/// Host log callback, mirror of the C++ `LogCallback` typedef
-/// (`Logger.hpp:24`) and the `Mo2LogCallback` the C ABI accepts.
+/// Host log callback.
+///
+/// The ABI spelling is the parameter type of [`crate::capi::setLogCallback`],
+/// `Option<unsafe extern "C" fn(*const c_char)>`, which the MO2 plugin declares
+/// as `ctypes.CFUNCTYPE(None, ctypes.c_char_p)`. All three must agree.
 pub type LogCallback = unsafe extern "C" fn(*const c_char);
 
-/// Rotate once the current file reaches this size (`Logger.hpp:247`).
+/// Rotate once the current file reaches this size, in bytes (10 MiB).
 const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
 
-/// Keep `salma.log.1` through `salma.log.3` (`Logger.hpp:248`).
+/// Keep `salma.log.1` through `salma.log.3`.
 const MAX_ROTATED_FILES: u32 = 3;
 
-/// Mutex-guarded file state. The C++ guards `log_file_` and `bytes_written_`
-/// with `mutex_`; grouping them in one struct makes that explicit.
+/// The file handle and its byte counter, which only ever move together. Grouping
+/// them in one struct is what makes the state mutex cover both.
 struct FileState {
     /// Absolute path to the `logs` directory.
     directory: PathBuf,
@@ -60,22 +79,21 @@ struct FileState {
 pub struct Logger {
     state: Mutex<FileState>,
     /// Callback function-pointer address, 0 when cleared. Stored lock-free so
-    /// `set_callback` never blocks a logging thread, mirroring the C++
-    /// `std::atomic<LogCallback>`.
+    /// `set_callback` never blocks a logging thread.
     callback: AtomicUsize,
 }
 
-/// Address inside THIS module, used to resolve the DLL that owns this code.
+/// An address inside this module, used to resolve the DLL that owns this code.
 ///
-/// The C++ anchors on `&Logger::instance` so the log directory follows the
-/// mo2-salma DLL rather than the host executable: MO2 loads the DLL from its
-/// plugins tree while the host process is ModOrganizer.exe, and the log must
-/// land next to the DLL either way.
+/// The log directory has to follow mo2-salma.dll, not the host executable: MO2
+/// loads the DLL out of its plugins tree while the process is ModOrganizer.exe,
+/// and the log belongs next to the DLL either way. Anchoring on a function
+/// defined here is what makes that resolution point at the right module.
 fn module_anchor() {}
 
 // Re-entrancy guard for the host callback. A callback that itself logs would
-// otherwise recurse until the stack overflows. Per-thread, because callbacks
-// run on whichever thread logged (`Logger.cpp:18-29`).
+// otherwise recurse until the stack overflows. The flag is per-thread because
+// callbacks run on whichever thread logged.
 thread_local! {
     static IN_CALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -83,7 +101,7 @@ thread_local! {
 static LOGGER: OnceLock<Logger> = OnceLock::new();
 
 /// Severity tag written into the file. The console and callback paths receive
-/// the raw message with no level prefix, exactly as in the C++.
+/// the raw message with no level prefix.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Level {
     Info,
@@ -104,9 +122,17 @@ impl Level {
 impl Logger {
     /// The process-wide logger, constructed on first use.
     ///
-    /// Mirror of the Meyer singleton at `Logger.cpp:33-37`. Construction
-    /// resolves `<module dir>/logs`, creates it, and opens `salma.log` in
-    /// append mode, seeding the rotation counter from the existing size.
+    /// Construction resolves `<module dir>/logs`, creates it, and opens
+    /// `salma.log` in append mode, seeding the rotation counter from the
+    /// existing file size so a restart does not restart the rotation cycle.
+    ///
+    /// Construction always succeeds; there is no failing path and no `Result`.
+    /// If the `logs` directory cannot be created, or `salma.log` cannot be
+    /// opened, a `[Logger] ...` diagnostic goes to stderr and the logger is
+    /// still returned, holding no file handle. In that degraded state every file
+    /// write is discarded silently, while the console echo and the host callback
+    /// keep working normally. No public accessor reports the state. A later
+    /// successful [`Logger::clear_log`] re-opens the handle and ends it.
     pub fn instance() -> &'static Logger {
         LOGGER.get_or_init(Logger::new)
     }
@@ -135,9 +161,20 @@ impl Logger {
 
     /// Register (or with `None`, clear) the host callback.
     ///
-    /// Mirror of `Logger::set_callback` (`Logger.cpp:85-88`): a lock-free
-    /// atomic store, so it never contends with an in-flight log call. Clearing
-    /// re-enables file logging.
+    /// A single lock-free atomic store, so it never contends with an in-flight
+    /// log call and never blocks. Clearing re-enables file logging.
+    ///
+    /// The callback is process-global, not per-thread. Two caller obligations:
+    ///
+    /// - The callback must be thread-safe. It runs outside this logger's state
+    ///   mutex, on whichever thread logged, so two threads can be inside it at
+    ///   the same time.
+    /// - The function pointer is stored as a raw address and must stay valid
+    ///   until it is replaced or cleared with `None`. Leaving a dangling pointer
+    ///   registered is undefined behavior.
+    ///
+    /// A callback that logs re-entrantly on the same thread is dropped, not
+    /// invoked; see `invoke_callback`.
     pub fn set_callback(&self, callback: Option<LogCallback>) {
         let addr = match callback {
             Some(f) => f as usize,
@@ -182,8 +219,7 @@ impl Logger {
         self.emit(Level::Error, message);
     }
 
-    /// The shared body of the three level methods (`Logger.cpp:97-195`, which
-    /// repeats this three times).
+    /// The shared body of the three level methods.
     fn emit(&self, level: Level, message: &str) {
         // 1. Under the lock: snapshot the callback, and write the file line
         //    only when no callback is registered.
@@ -196,8 +232,8 @@ impl Logger {
             cb
         };
 
-        // 2. Console echo, outside the lock: interleaving is acceptable and the
-        //    C++ deliberately avoids holding the mutex across slow I/O.
+        // 2. Console echo, outside the lock: interleaved console output is
+        //    acceptable, holding the mutex across slow I/O is not.
         if level == Level::Error {
             eprintln!("{message}");
         } else {
@@ -215,8 +251,8 @@ impl Logger {
             eprintln!("[Logger] Re-entrant callback dropped: {message}");
             return;
         }
-        // A C string cannot carry an interior NUL; the C++ passes
-        // `message.c_str()`, which truncates there too.
+        // A C string cannot carry an interior NUL, so a message holding one is
+        // delivered truncated at the first NUL rather than dropped.
         let Ok(cstr) = CString::new(message) else {
             let truncated: String = message.chars().take_while(|c| *c != '\0').collect();
             let Ok(cstr) = CString::new(truncated) else {
@@ -230,8 +266,7 @@ impl Logger {
 
     fn call_guarded(&self, cb: LogCallback, cstr: &CString, message: &str) {
         IN_CALLBACK.with(|f| f.set(true));
-        // Mirror of the C++ `catch (...)` around the callback: a host callback
-        // that unwinds must not tear down the log call site.
+        // A host callback that unwinds must not tear down the log call site.
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // SAFETY: `cb` came from `set_callback` and `cstr` is a valid
             // nul-terminated string that outlives the call.
@@ -243,15 +278,22 @@ impl Logger {
         }
     }
 
-    /// Truncate `salma.log` and reopen it. Mirror of `Logger::clear_log`
-    /// (`Logger.cpp:197-223`). Returns whether the file is open afterwards.
+    /// Truncate `salma.log` and reopen it.
+    ///
+    /// Returns `true` only when the truncation and the reopen both succeeded.
+    /// A `false` return does not mean the log file is closed: on the
+    /// truncation-failure path the file is reopened in append mode and logging
+    /// continues, with `bytes_written` reseeded from the reopened file's size so
+    /// the rotation counter still matches what is on disk.
+    ///
+    /// Blocks on the state mutex and does file I/O.
     pub fn clear_log(&self) -> bool {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let path = state.directory.join("salma.log");
         state.file = None; // flush + close
 
         if File::create(&path).is_err() {
-            // Reopen in append mode even on failure, as the C++ does.
+            // Reopen in append mode even on failure, so logging survives.
             let (file, bytes) = open_append(&path);
             state.file = file;
             state.bytes_written = bytes;
@@ -280,7 +322,21 @@ impl Logger {
 
 impl FileState {
     /// Write one formatted line and rotate if the file has grown past the cap.
-    /// Mirror of `Logger::write_log_unlocked` (`Logger.cpp:235-265`).
+    /// The caller must hold the state mutex. Does nothing when there is no file
+    /// handle.
+    ///
+    /// **One-write invariant, do not break it.** `salma.log` has two independent
+    /// appending writers: this module, and the `Logger` compiled into
+    /// mo2-server, which resolves the same file because the DLL is deployed next
+    /// to the exe. Both open the file with O_APPEND (see `open_append`), and
+    /// O_APPEND makes one write atomic but cannot glue two writes together. Each
+    /// record must therefore reach the unbuffered `std::fs::File` in a single
+    /// `write_all` of the whole line, trailing newline included, which
+    /// `format_line` already appends. Do not wrap the handle in a `BufWriter`,
+    /// and do not split the newline into a second write: that produces torn
+    /// records, 129 damaged out of 11,547 lines in a sample log.
+    /// `Logger::write_log_unlocked` in `src/Logger.cpp` holds the same
+    /// invariant on the server side.
     fn write_line(&mut self, level: Level, message: &str) {
         let Some(file) = self.file.as_mut() else {
             return;
@@ -289,13 +345,50 @@ impl FileState {
         if file.write_all(line.as_bytes()).is_err() {
             return;
         }
-        // The C++ counts `line.size() + 1` for the newline it streams
-        // separately; `line` already carries it here, so count it as-is.
+        // The newline is part of `line` and the whole record goes out in one
+        // call, so the counter takes the line length with no `+ 1` adjustment.
+        // Adding one would drift the rotation point away from the real size.
         self.bytes_written += line.len() as u64;
         self.rotate_if_needed();
     }
 
-    /// Mirror of `Logger::rotate_if_needed` (`Logger.cpp:267-333`).
+    /// Rotate the log once it passes [`MAX_LOG_SIZE`]. The caller must hold the
+    /// state mutex.
+    ///
+    /// The check runs after the write, so the file always crosses the cap before
+    /// it rotates. `bytes_written` is seeded from the existing file size when the
+    /// handle is opened, so the count survives a process restart.
+    ///
+    /// ```text
+    ///   bytes_written >= MAX_LOG_SIZE (10 MiB)
+    ///             |
+    ///             v
+    ///    close salma.log
+    ///             |
+    ///             v
+    ///    salma.log.3 -> deleted          i == MAX_ROTATED_FILES
+    ///    salma.log.2 -> salma.log.3      loop runs i = 3, 2, 1;
+    ///    salma.log.1 -> salma.log.2      a missing file is skipped
+    ///             |
+    ///             v
+    ///    rename salma.log -> salma.log.1
+    ///        |                      |
+    ///     ok |                      | fails (file pinned by an antivirus
+    ///        |                      |        scanner or a log viewer)
+    ///        v                      v
+    ///   reopen append          reopen append
+    ///   bytes_written = 0      bytes_written unchanged
+    ///                            -> the file grows past the cap, no entries
+    ///                               are lost, and the next rotation catches up
+    /// ```
+    ///
+    /// Leaving the counter alone on the failure branch is deliberate, not an
+    /// oversight: it is what keeps entries from being dropped while the rename
+    /// cannot happen. Resetting it would leave the counter claiming an empty
+    /// file when the real one is already past the cap. Do not "fix" it.
+    ///
+    /// A failed delete or a failed rename of a rotated file only prints a
+    /// diagnostic to stderr; rotation continues.
     fn rotate_if_needed(&mut self) {
         if self.bytes_written < MAX_LOG_SIZE {
             return;
@@ -330,10 +423,10 @@ impl FileState {
         }
 
         // Rotate the current log to .1. A rename can still fail on Windows if
-        // an antivirus scanner or a log viewer pins the file. When it does the
-        // C++ deliberately does NOT reset the counter: the existing file is
-        // reopened in append mode and grows past the cap, which loses no
-        // entries and lets the next rotation catch up.
+        // an antivirus scanner or a log viewer pins the file. When it does, the
+        // counter is deliberately left alone: the existing file is reopened in
+        // append mode and grows past the cap, which loses no entries and lets
+        // the next rotation catch up.
         let current = dir.join("salma.log");
         if let Err(err) = fs::rename(&current, dir.join("salma.log.1")) {
             eprintln!("[Logger] Failed to rotate salma.log -> salma.log.1: {err}");
@@ -349,8 +442,12 @@ impl FileState {
 }
 
 /// Open `path` in append mode, reporting the existing size so the rotation
-/// counter continues from where a previous process left off
-/// (`Logger.cpp:57-67`).
+/// counter continues from where a previous process left off.
+///
+/// Never fails. On an open error it prints a diagnostic to stderr and returns
+/// `(None, 0)`, which puts the logger into the degraded, file-less mode
+/// described on [`Logger::instance`]. The handle is deliberately unbuffered:
+/// see the one-write invariant on `FileState::write_line`.
 fn open_append(path: &Path) -> (Option<File>, u64) {
     match OpenOptions::new().create(true).append(true).open(path) {
         Ok(file) => {
@@ -367,7 +464,8 @@ fn open_append(path: &Path) -> (Option<File>, u64) {
     }
 }
 
-/// Broken-down local time, the fields `localtime_s` fills plus milliseconds.
+/// Broken-down local time: calendar fields plus milliseconds, the exact set the
+/// log line format needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Stamp {
     year: i32,
@@ -379,11 +477,11 @@ struct Stamp {
     millis: u32,
 }
 
-/// Current LOCAL time.
+/// Current local time.
 ///
-/// On Windows this is `GetLocalTime`, which applies the same timezone and DST
-/// rules as the C++ `localtime_s`, so timestamps stay comparable line for line.
-/// `std` has no local-time conversion, so there is no portable alternative.
+/// On Windows this is `GetLocalTime`, which applies the machine's timezone and
+/// DST rules, so a salma line is comparable to any other line in the log. `std`
+/// has no local-time conversion, so there is no portable alternative.
 #[cfg(windows)]
 fn now_local() -> Stamp {
     use windows_sys::Win32::System::SystemInformation::GetLocalTime;
@@ -438,10 +536,12 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
     ((y + i64::from(m <= 2)) as i32, m as u32, d as u32)
 }
 
-/// Format one log line, newline included.
+/// Format one log line, newline included:
+/// `{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {level} {message}\n`.
 ///
-/// Mirror of the `std::format` call at `Logger.cpp:252-261`:
-/// `"{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}.{:03d} {} {}"`.
+/// The trailing newline is part of the format string because each record must
+/// reach the file in a single write; see the one-write invariant on
+/// `FileState::write_line`.
 fn format_line(s: Stamp, level: &str, message: &str) -> String {
     format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} {} {}\n",
@@ -499,8 +599,8 @@ mod tests {
         assert_eq!(Level::Error.as_str(), "ERROR");
     }
 
-    /// An empty message still produces a well-formed line ending in a single
-    /// space before the newline, as the C++ format does.
+    /// An empty message still produces a well-formed line, ending in a single
+    /// space before the newline.
     #[test]
     fn empty_message_still_formats() {
         assert_eq!(
@@ -538,7 +638,7 @@ mod tests {
         );
     }
 
-    // Registering and clearing the callback is covered ONCE, by
+    // Registering and clearing the callback is covered once, by
     // `capi::tests::set_log_callback_reaches_the_logger`, which drives the same
     // code through the actual ABI export. Duplicating it here would race: the
     // callback is process-global and cargo runs tests in this binary in
