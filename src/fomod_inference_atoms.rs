@@ -1,22 +1,25 @@
-//! Atom expansion for inference - Rust port of `src/FomodInferenceAtoms.hpp`
-//! / `.cpp`, plus the schema-v2 [`assemble_json`] and its anonymous-namespace
-//! helpers (`build_plugin_object`, `lookup_*_diag`) added in Task 10, and
-//! [`add_output_tree`] (whose C++ home is `FomodInferenceService.cpp`; it is
-//! ported here so this module owns the full byte oracle - see PARITY-NOTES
-//! "Task 10").
+//! Atom expansion and response assembly for inference.
 //!
-//! Resolves IR file entries into concrete [`FomodAtom`]s by matching against
-//! the archive entry list, builds the destination index and exclusion set the
-//! solver scores against, builds the [`TargetTree`] from the installed files,
-//! and assembles the schema-v2 inference response. The C++ `log_warning` call
-//! sites (unsafe destinations, out-of-bounds selection indices, output-tree
-//! cap) are reproduced verbatim.
+//! Two halves, both owned here so the whole inference output is produced in one
+//! place:
+//!
+//! - **Expansion.** Resolve the FOMOD IR's file entries into concrete
+//!   [`FomodAtom`]s against the archive's entry list, index those atoms by
+//!   destination, work out which destinations carry no solver signal, and build
+//!   the [`TargetTree`] from the files the installed mod actually contains.
+//! - **Assembly.** Turn a solver result plus its diagnostics into the schema-v2
+//!   JSON response, then attach the `outputTree` and `reproDetail` siblings.
+//!
+//! Four warnings reach `logs/salma.log` from here, all tagged `[infer]`: a
+//! skipped unsafe destination during expansion, an out-of-bounds selection index
+//! during assembly, and one per truncated payload for `outputTree` and
+//! `reproDetail`.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::fomod_atom::{AtomIndex, ExpandedAtoms, FomodAtom, Origin, TargetFile, TargetTree};
 use crate::fomod_csp_types::SolverResult;
-use crate::fomod_forward_simulator::SimulatedTree;
+use crate::fomod_forward_simulator::{DestStatus, SimulatedTree};
 use crate::fomod_ir::{FomodFileEntry, FomodInstaller, total_flat_plugins};
 use crate::inference_diagnostics::{
     GroupDiagnostics, InferenceDiagnostics, PluginDiagnostics, StepDiagnostics,
@@ -26,28 +29,67 @@ use crate::json::Value;
 use crate::logger::Logger;
 use crate::utils::{is_safe_destination, normalize_path};
 
-/// Inference-side wrapper for path-traversal validation. Thin forwarder to
-/// [`is_safe_destination`] so call sites in the inference pipeline read
-/// symmetrically with the FomodService pipeline (mirror of
-/// `mo2core::is_safe_dest`).
+/// Destination validation for the inference pipeline. Forwards to
+/// [`is_safe_destination`].
+///
+/// Read that function's contract before relying on this as a traversal guard. It
+/// normalizes first, and normalization deletes `..` segments, so
+/// `is_safe_dest("..")` is true. The one live rejection is a normalized form
+/// whose second byte is `:`, a Windows drive letter such as `c:/windows`. A
+/// rooted destination is not rejected: normalization strips leading slashes
+/// before the leading-slash branch is reached, so `is_safe_dest("/etc/passwd")`
+/// is true as well.
 pub fn is_safe_dest(dest: &str) -> bool {
     is_safe_destination(dest)
 }
 
-/// Expand a single [`FomodFileEntry`] into concrete [`FomodAtom`]s by
-/// matching against archive entries. Mirror of `mo2core::expand_entry`.
+/// Expand one [`FomodFileEntry`] into atoms and append them to `out`.
 ///
-/// For folder entries, performs a prefix search over `sorted_entries` (which
-/// must be lexicographically sorted) to find all archive members under the
-/// source directory, producing one atom per match. For single-file entries,
-/// produces exactly one atom. Unsafe destinations (path traversal) are
-/// skipped with a warning. A top-level
-/// `meta.ini` destination is skipped as well, mirroring
-/// [`build_target_tree`]'s exclusion of the installed-side MO2 metadata file.
+/// The two branches differ in ways that matter:
 ///
-/// All atoms produced by ONE call share the same `doc_order` value; the
-/// caller increments it per file-entry expansion, not per atom.
-#[allow(clippy::too_many_arguments)] // one-to-one with the C++ signature
+/// - **`entry.is_folder == true`**: a prefix search over `sorted_entries`, which
+///   the caller must have put through [`normalize_path`] (lowercase, forward
+///   slashes, no leading or trailing slash) and sorted in byte order, finds
+///   every archive member under the source directory and emits one atom per
+///   match. The search compares those strings directly against
+///   `FomodFileEntry::source`, which the parser normalizes the same way, so a
+///   `sorted_entries` string not already in that form (mixed case, backslashes)
+///   matches nothing, silently, and yields no atom. A folder whose
+///   source matches nothing emits no atoms. Each atom's `dest_path` is freshly
+///   normalized; `source_path` is the matched `sorted_entries` string stored
+///   verbatim.
+/// - **`entry.is_folder == false`**: exactly one atom is emitted and
+///   `sorted_entries` is never consulted. The source is not checked for
+///   existence in the archive, so an entry naming a missing source still
+///   produces an atom, with `file_size` 0. The atom's `dest_path` is
+///   `entry.destination` verbatim; only the `meta.ini` test below normalizes it
+///   first. `source_path` is `entry.source` verbatim.
+///
+/// The normalized form [`FomodAtom`] documents for `source_path` is the caller's
+/// guarantee, not this function's: nothing here lowercases or re-separates
+/// either string.
+///
+/// Both branches skip two kinds of destination, and nothing else suppresses an
+/// atom:
+///
+/// - A destination that normalizes to the top-level `meta.ini` is skipped
+///   silently, matching [`build_target_tree`]'s exclusion of the installed-side
+///   MO2 metadata file. Keeping it would put a file in every simulated tree that
+///   the target tree can never hold, making an exact match unreachable.
+/// - A destination [`is_safe_dest`] rejects is skipped and logged. That check
+///   rejects a drive-qualified destination such as `c:/evil` and nothing else.
+///   It rejects neither `..` traversal nor a rooted path: normalization deletes
+///   `..` segments and leading slashes before the check, and the file branch
+///   then stores the raw destination, so an atom whose `dest_path` still reads
+///   `../evil` or `/etc/passwd` can be produced.
+///
+/// All atoms from one call share `doc_order`. The caller increments it per file
+/// entry, not per atom.
+///
+/// `entry_sizes` maps an archive entry path, in that same normalized form, to
+/// its uncompressed size in bytes. A path missing from the map gives `file_size`
+/// 0, which every later size comparison treats as unknown and lets pass.
+#[allow(clippy::too_many_arguments)] // flat expansion inputs, no useful grouping
 pub fn expand_entry(
     entry: &FomodFileEntry,
     sorted_entries: &[String],
@@ -59,31 +101,29 @@ pub fn expand_entry(
     out: &mut Vec<FomodAtom>,
 ) {
     if entry.is_folder {
-        // An empty source means "root of archive" - match every entry.
-        //
-        // The combination below relies on two empty-string identities to fall
-        // out without a special-case branch in the loop:
-        //   * partition_point over "" returns 0 because "" is
-        //     lexicographically less-than-or-equal to any other string.
+        // An empty source means "root of archive": match every entry. Two
+        // empty-string identities make that fall out with no special case:
+        //   * partition_point over "" returns 0, because "" sorts at or before
+        //     every other string.
         //   * str::starts_with("") is unconditionally true.
-        // So the loop iterates every entry exactly once.
+        // So the loop visits every entry exactly once.
         //
-        // For a non-root folder the prefix is anchored with a trailing slash
-        // so that a folder entry "foo" does NOT spuriously match a sibling
-        // file "foobar.esp" - the slash forces a path-boundary match.
+        // For a non-root folder the prefix carries a trailing slash, which
+        // forces a path-boundary match: without it, folder entry "foo" would
+        // also match the sibling file "foobar.esp".
         let mut prefix = entry.source.clone();
         if !prefix.is_empty() && !prefix.ends_with('/') {
             prefix.push('/');
         }
 
-        // C++ std::lower_bound: first element >= prefix.
+        // First entry at or after the prefix.
         let start = sorted_entries.partition_point(|e| e.as_str() < prefix.as_str());
         for entry_path in &sorted_entries[start..] {
             if !entry_path.starts_with(&prefix) {
                 break;
             }
             let rel = &entry_path[prefix.len()..];
-            // Raw concatenation BEFORE normalization, exactly as in C++.
+            // Concatenate raw, normalize once afterwards.
             let dest = if entry.destination.is_empty() {
                 rel.to_string()
             } else {
@@ -91,9 +131,9 @@ pub fn expand_entry(
             };
 
             let norm_dest = normalize_path(&dest);
-            // Skip archive-shipped top-level meta.ini: build_target_tree
-            // excludes the installed one as MO2 metadata, so producing it
-            // here would make exact_match permanently unreachable.
+            // Skip an archive-shipped top-level meta.ini: build_target_tree
+            // excludes the installed one as MO2 metadata, so emitting it here
+            // would make exact_match unreachable.
             if norm_dest == "meta.ini" {
                 continue;
             }
@@ -120,8 +160,8 @@ pub fn expand_entry(
         }
     } else {
         // Same top-level meta.ini exclusion as the folder branch. The parser
-        // normalizes destinations already; normalize again for direct
-        // callers - but note the atom's dest_path stays the RAW
+        // normalizes destinations already; normalizing again covers a direct
+        // caller. It normalizes for the test only: the atom keeps the raw
         // entry.destination, and is_safe_dest also runs on the raw value.
         if normalize_path(&entry.destination) == "meta.ini" {
             return;
@@ -150,21 +190,42 @@ pub fn expand_entry(
     }
 }
 
-/// Expand all FOMOD file entries into atoms using three ordered passes.
-/// Mirror of `mo2core::expand_all_atoms`.
+/// Expand every FOMOD file entry into atoms, grouped by origin.
 ///
-/// Three separate passes are intentional: they encode different
-/// document_order ranges to ensure correct priority semantics in the FOMOD
-/// spec:
+/// Four separate traversals, numbered here the way the in-function comments
+/// number them. Splitting them is deliberate, but `document_order` is not the
+/// reason: no production code reads [`FomodAtom`]'s `document_order`, so the
+/// ranges below label the traversal sequence rather than driving it. What the
+/// split fixes is the order inside each `per_plugin` bucket.
+/// [`crate::fomod_forward_simulator`] applies a selected plugin's whole bucket
+/// at once, so loops 2 and 3 put a plugin's normal atoms ahead of its auto
+/// atoms, and merging them flips the winner of an equal-priority conflict inside
+/// one plugin. `PARITY-NOTES.md`, section "The `>=` overwrite rule vs
+/// `execute_file_operations` stable-sort", argues from those ranges that the
+/// simulator and `execute_file_operations` pick the same winners, and names the
+/// phase-2/phase-3 split as the exception.
 ///
-/// - Pass 1: required files (lowest document_order range)
-/// - Pass 2: normal plugin files, then always-install/installIfUsable plugin
-///   files (middle range, auto entries after normal ones)
-/// - Pass 3: conditional install patterns (highest range)
+/// ```text
+/// doc_order counter, one increment per file entry, never per atom:
 ///
-/// `doc_order` is a single counter incremented per file-entry expansion call
-/// (all atoms from one folder entry share one document_order). Merging the
-/// passes into a single loop would break the document_order invariant.
+///   loop 1  required files          [0 .. R)
+///   loop 2  plugin entries, normal  [R .. R+N)      flat_idx walks 0..P
+///   loop 3  plugin entries, auto    [R+N .. R+N+A)  flat_idx restarts at 0
+///   loop 4  conditional patterns    [R+N+A .. end)
+///
+///   one <folder> entry -> many atoms, all sharing that entry's doc_order
+/// ```
+///
+/// A "normal" entry sets neither `always_install` nor `install_if_usable`; an
+/// "auto" entry sets either. Loops 2 and 3 walk the same step/group/plugin
+/// structure and write into the same `per_plugin[flat_idx]` buckets, so one
+/// plugin's bucket holds its normal atoms first and its auto atoms after, even
+/// though a later plugin's normal atoms carry a lower `document_order` than this
+/// plugin's auto atoms.
+///
+/// These four loops are not the install replay's three passes in
+/// [`crate::fomod_service`], nor the simulator's four phases in
+/// [`crate::fomod_forward_simulator`]. Different numberings of different work.
 pub fn expand_all_atoms(
     installer: &FomodInstaller,
     sorted_entries: &[String],
@@ -173,7 +234,7 @@ pub fn expand_all_atoms(
     let mut result = ExpandedAtoms::default();
     let mut doc_order = 0i32;
 
-    // Required files.
+    // Loop 1: required files.
     for entry in &installer.required_files {
         expand_entry(
             entry,
@@ -188,12 +249,13 @@ pub fn expand_all_atoms(
         doc_order += 1;
     }
 
-    // Count total plugins; per_plugin is sized BEFORE the walk.
+    // per_plugin is sized before the walk, so loops 2 and 3 can index into it.
     result
         .per_plugin
         .resize_with(total_flat_plugins(installer) as usize, Vec::new);
 
-    // Pass 1: normal (non-always) plugin file entries.
+    // Loop 2: normal plugin file entries (neither alwaysInstall nor
+    // installIfUsable).
     let mut flat_idx = 0usize;
     for step in &installer.steps {
         for group in &step.groups {
@@ -218,8 +280,9 @@ pub fn expand_all_atoms(
         }
     }
 
-    // Pass 2: always-install and installIfUsable entries (higher doc_order),
-    // SAME traversal with flat_idx recomputed from 0.
+    // Loop 3: auto plugin file entries (alwaysInstall or installIfUsable), at a
+    // higher doc_order. Same traversal as loop 2, with flat_idx restarted at 0
+    // so the atoms land in the same per_plugin buckets.
     let mut flat_idx = 0usize;
     for step in &installer.steps {
         for group in &step.groups {
@@ -244,7 +307,7 @@ pub fn expand_all_atoms(
         }
     }
 
-    // Conditional patterns.
+    // Loop 4: conditional install patterns.
     result
         .per_conditional
         .resize_with(installer.conditional_patterns.len(), Vec::new);
@@ -267,13 +330,21 @@ pub fn expand_all_atoms(
     result
 }
 
-/// Build an index that groups all atoms by their destination path. Mirror of
-/// `mo2core::build_atom_index`.
+/// Group every atom by its destination path.
 ///
-/// Iterates every atom via [`ExpandedAtoms::for_each`] (required, then
-/// per_plugin in flat order, then per_conditional), so the per-destination
-/// `Vec` order matches the C++ exactly - downstream conflict resolution
-/// depends on it.
+/// Iterates via [`ExpandedAtoms::for_each`] (required, then per_plugin in flat
+/// order, then per_conditional), so each destination's `Vec` is in a
+/// deterministic order.
+///
+/// No current consumer depends on that order. Conflict resolution does not read
+/// this index: the simulator resolves over [`ExpandedAtoms`], and the real
+/// installer resolves over its sorted `FileOperation` queue. The CSP precompute
+/// sums per-plugin evidence and breaks on the first hash hit; the remaining
+/// consumers insert into hash sets. Keep the order anyway, so an order-sensitive
+/// consumer added later starts from a defined sequence rather than an arbitrary
+/// one.
+///
+/// Map keys are the atoms' `dest_path` values, cloned as-is.
 pub fn build_atom_index(atoms: &ExpandedAtoms) -> AtomIndex {
     let mut index = AtomIndex::new();
     atoms.for_each(|a| {
@@ -285,18 +356,21 @@ pub fn build_atom_index(atoms: &ExpandedAtoms) -> AtomIndex {
     index
 }
 
-/// Identify destinations that are only targeted by auto-install atoms and
-/// should be excluded from solver scoring. Mirror of
-/// `mo2core::compute_excluded_dests`.
+/// Find the destinations that carry no solver signal, so scoring can ignore
+/// them.
 ///
-/// A destination is excluded when every atom targeting it is an
-/// always_install/install_if_usable plugin atom AND all atoms originate from
-/// the same source path. Required-origin atoms keep the destination in play
-/// (they let the solver detect incomplete installations where expected
-/// Required files are missing from the target). Destinations with any
-/// conditional-origin atom are never excluded, because which conditionals
-/// fire depends on flags, which depend on plugin selections - they carry
-/// solver signal.
+/// A destination is excluded when every atom targeting it is an `always_install`
+/// or `install_if_usable` plugin atom and all of them share one source path.
+/// Such a destination looks the same under every selection, so it can neither
+/// confirm nor rule anything out.
+///
+/// Two cases stay in play on purpose:
+///
+/// - A Required-origin atom keeps its destination in, which is how the solver
+///   can still see an incomplete installation whose expected required files are
+///   missing from the target.
+/// - Any conditional-origin atom keeps its destination in, because which
+///   conditionals fire depends on flags, and flags depend on plugin selections.
 pub fn compute_excluded_dests(atom_index: &AtomIndex) -> HashSet<String> {
     let mut excluded = HashSet::new();
     for (dest, atoms) in atom_index {
@@ -310,9 +384,9 @@ pub fn compute_excluded_dests(atom_index: &AtomIndex) -> HashSet<String> {
                     has_conditional = true;
                 }
                 Origin::Required => {
-                    // Required files are always installed, but keeping them
-                    // in the comparison lets the solver detect incomplete
-                    // installations (intentional, see the C++ comment).
+                    // Required files always install, but keeping them in the
+                    // comparison is what lets the solver detect an incomplete
+                    // installation. Deliberate; do not fold into the auto case.
                     all_auto = false;
                 }
                 Origin::Plugin => {
@@ -325,8 +399,7 @@ pub fn compute_excluded_dests(atom_index: &AtomIndex) -> HashSet<String> {
         if has_conditional {
             continue;
         }
-        // Exclude only if all atoms are auto-installed AND all from the same
-        // source.
+        // Exclude only when every atom is auto-installed and all share a source.
         if all_auto && sources.len() <= 1 {
             excluded.insert(dest.clone());
         }
@@ -334,13 +407,15 @@ pub fn compute_excluded_dests(atom_index: &AtomIndex) -> HashSet<String> {
     excluded
 }
 
-/// Build a [`TargetTree`] from the files already installed in the mod
-/// directory. Mirror of `mo2core::build_target_tree`.
+/// Build a [`TargetTree`] from the files already installed in the mod directory.
 ///
-/// Creates a [`TargetFile`] entry for each installed file (keyed by relative
-/// path), recording its size for later comparison against candidate atoms.
-/// The MO2 metadata file `meta.ini` (top-level, exact key) is skipped since
-/// it is never part of FOMOD installations.
+/// One [`TargetFile`] per installed file, keyed by relative path and carrying
+/// the size that later comparisons check candidate atoms against. Hashes stay 0
+/// here and are filled in lazily, only for contested destinations.
+///
+/// A top-level `meta.ini` is skipped on an exact key match. It is MO2 metadata
+/// and never part of a FOMOD installation; [`expand_entry`] drops the same
+/// destination on the atom side so the two trees stay comparable.
 pub fn build_target_tree(installed_files: &HashMap<String, u64>) -> TargetTree {
     let mut target = TargetTree::new();
     for (rel_path, &file_size) in installed_files {
@@ -359,18 +434,14 @@ pub fn build_target_tree(installed_files: &HashMap<String, u64>) -> TargetTree {
 }
 
 // ---------------------------------------------------------------------------
-// Assemble the schema-v2 JSON from a solver result + diagnostics
-// (mirror of `assemble_json` and its anonymous-namespace helpers in
-// `src/FomodInferenceAtoms.cpp:306-467`).
+// Assemble the schema-v2 JSON from a solver result plus diagnostics.
 // ---------------------------------------------------------------------------
 
-/// Maximum number of `outputTree` entries emitted before truncation. Mirror of
-/// the C++ `kMaxOutputTreeEntries` (`src/FomodInferenceService.cpp:470`).
+/// Maximum number of `outputTree` entries emitted before truncation.
 const MAX_OUTPUT_TREE_ENTRIES: usize = 5000;
 
-/// Build a plugin JSON object from name + diagnostic fields. Mirror of the C++
-/// `build_plugin_object`. Always carries `name` and `selected`; `confidence` and
-/// `reasons` ride along when the diagnostic record exists for this position.
+/// Build one plugin object. Always carries `name` and `selected`; `confidence`
+/// and `reasons` ride along when a diagnostic record exists for this position.
 fn build_plugin_object(name: &str, selected: bool, diag: Option<&PluginDiagnostics>) -> Value {
     let mut j = Value::object();
     j.insert("name", Value::string(name));
@@ -386,8 +457,8 @@ fn build_plugin_object(name: &str, selected: bool, diag: Option<&PluginDiagnosti
     j
 }
 
-/// Look up the per-plugin diagnostic record, or `None` if any index is out of
-/// range. Mirror of the C++ `lookup_plugin_diag`.
+/// Per-plugin diagnostic record, or `None` when any of the three indices is out
+/// of range.
 fn lookup_plugin_diag(
     diag: &InferenceDiagnostics,
     s: usize,
@@ -400,28 +471,30 @@ fn lookup_plugin_diag(
         .and_then(|group| group.plugins.get(p))
 }
 
-/// Look up the per-group diagnostic record. Mirror of `lookup_group_diag`.
+/// Per-group diagnostic record, or `None` when either index is out of range.
 fn lookup_group_diag(diag: &InferenceDiagnostics, s: usize, g: usize) -> Option<&GroupDiagnostics> {
     diag.steps.get(s).and_then(|step| step.groups.get(g))
 }
 
-/// Look up the per-step diagnostic record. Mirror of `lookup_step_diag`.
+/// Per-step diagnostic record, or `None` when the index is out of range.
 fn lookup_step_diag(diag: &InferenceDiagnostics, s: usize) -> Option<&StepDiagnostics> {
     diag.steps.get(s)
 }
 
-/// Convert a [`SolverResult`] + [`InferenceDiagnostics`] into the schema-v2 JSON
-/// response object. Mirror of `mo2core::assemble_json`.
+/// Turn a [`SolverResult`] plus its [`InferenceDiagnostics`] into the schema-v2
+/// response object.
 ///
-/// Walks the installer's step/group/plugin hierarchy and cross-references the
-/// solver's 3-D boolean selection grid to classify each plugin as selected or
-/// deselected. Out-of-bounds selection indices log a warning and default to
-/// `false` (deselected).
+/// Walks the installer's step/group/plugin hierarchy and reads the solver's
+/// `[step][group][plugin]` boolean grid to sort each plugin into `plugins`
+/// (selected) or `deselected`. An out-of-bounds selection index logs a warning
+/// and counts as deselected, so a short grid degrades instead of failing.
 ///
-/// The returned object carries `schema_version`, `steps`, and `diagnostics`;
-/// [`add_output_tree`] adds the `outputTree` sibling afterward (its C++ home is
-/// `FomodInferenceService.cpp`, but it is ported here so this module owns the
-/// full byte oracle - see PARITY-NOTES "Task 10").
+/// The returned object carries exactly three keys: `schema_version`, `steps` and
+/// `diagnostics`. That is not the complete response. The pipeline then calls
+/// [`add_output_tree`], which adds `outputTree` and, when capped,
+/// `outputTreeTruncated` and `outputTreeTotal`; and [`add_repro_detail`], which
+/// adds `reproDetail`. Both run on the normal path and on the Tier-1 `meta.ini`
+/// cache path, so a consumer can rely on those keys being present.
 pub fn assemble_json(
     installer: &FomodInstaller,
     result: &SolverResult,
@@ -460,8 +533,8 @@ pub fn assemble_json(
             let mut j_selected = Value::array();
             let mut j_deselected = Value::array();
             for (pi, plugin) in group.plugins.iter().enumerate() {
-                // The C++ warns only on the out-of-bounds branch, so the lookup
-                // keeps the Option instead of collapsing to `unwrap_or(false)`.
+                // The warning fires only on the out-of-bounds branch, so keep
+                // the Option instead of collapsing to `unwrap_or(false)`.
                 let sel = match result
                     .selections
                     .get(si)
@@ -504,15 +577,19 @@ pub fn assemble_json(
     out
 }
 
-/// Attach the inferred install's virtual output tree to `out` as a flat,
-/// path-sorted `outputTree` array of `{path, size, source}`. Mirror of the C++
-/// `add_output_tree` (`src/FomodInferenceService.cpp:468-503`).
+/// Attach the inferred install's virtual output tree to `out` as a flat
+/// `outputTree` array of `{path, size, source}`. `path` is the atom's
+/// `dest_path`, `source` its archive entry path, and `size` its `file_size`,
+/// where 0 means unknown rather than empty. The payload carries no separate
+/// unknown marker, so a consumer that sums `size` under-counts.
 ///
 /// The simulation's file map is unordered, so entries are sorted by destination
-/// path (byte order) for a stable diff. Large trees are capped at
-/// [`MAX_OUTPUT_TREE_ENTRIES`]; when capped, the `outputTreeTruncated` /
-/// `outputTreeTotal` siblings record the full count. `out` must be a
-/// [`Value::Object`] (panics otherwise, mirroring the C++ `json&` contract).
+/// path in byte order, which is what makes two runs diffable. The array is
+/// capped at [`MAX_OUTPUT_TREE_ENTRIES`]; when it is, the `outputTreeTruncated`
+/// and `outputTreeTotal` siblings carry the flag and the full count, and a
+/// warning goes to `logs/salma.log`.
+///
+/// `out` must be a [`Value::Object`]. Anything else panics.
 pub fn add_output_tree(out: &mut Value, sim: &SimulatedTree) {
     let mut entries: Vec<&FomodAtom> = sim.files.values().collect();
     entries.sort_by(|a, b| a.dest_path.cmp(&b.dest_path));
@@ -539,6 +616,94 @@ pub fn add_output_tree(out: &mut Value, sim: &SimulatedTree) {
         out.insert("outputTreeTruncated", Value::Bool(true));
         out.insert("outputTreeTotal", Value::Int(total as i64));
     }
+}
+
+/// Maximum number of paths carried in `reproDetail` before truncation. Set to
+/// [`MAX_OUTPUT_TREE_ENTRIES`] so one number bounds both payloads.
+///
+/// Sharing the number does not make the two payloads line up, and that is a
+/// known limitation. `outputTree` truncates the simulated files sorted by path.
+/// `reproDetail` truncates the union of diverging target destinations and extra
+/// simulated destinations, also sorted by path, which is a different sequence.
+/// So a path past this cap can still belong to a row that survived into the
+/// capped `outputTree`, and that row then shows unmarked.
+///
+/// Worked example: 4000 missing destinations under `a/` plus 6000 extra
+/// destinations under `z/` give a 10000-path classification whose 5000-path
+/// prefix is 4000 `a/` entries and only 1000 `z/` entries, while `outputTree`
+/// shows 5000 `z/` rows, 4000 of them visible and unmarked.
+///
+/// Treat the marks as a stable prefix, never as a complete set. Capping missing
+/// and extra separately would remove the asymmetry, at the cost of two budgets.
+const MAX_REPRO_DETAIL_PATHS: usize = MAX_OUTPUT_TREE_ENTRIES;
+
+/// Add the `reproDetail` sibling: which destinations diverged, by category.
+///
+/// `diagnostics.repro` counts how many files were missing, extra or mismatched.
+/// This names them, so a reader of the output tree can mark individual rows
+/// instead of being handed a number. The bucket keys are the same four the
+/// counter object uses, so the tally and the paths read as one vocabulary.
+///
+/// Emitted unconditionally, with empty buckets on a clean run, so a consumer can
+/// read "key present, all four buckets empty" as "this run reproduced
+/// everything" without checking a second signal.
+///
+/// The `reproDetail` object holds four bucket keys, one per [`DestStatus`]
+/// value, and up to two more when the list is capped:
+///
+/// | key              | value  | present when                     |
+/// |------------------|--------|----------------------------------|
+/// | `missing`        | array  | always                           |
+/// | `extra`          | array  | always                           |
+/// | `size_mismatch`  | array  | always                           |
+/// | `hash_mismatch`  | array  | always                           |
+/// | `truncated`      | `true` | `classified` is longer than [`MAX_REPRO_DETAIL_PATHS`] |
+/// | `total`          | number | same condition as `truncated`    |
+///
+/// The keys serialize in sorted order, because [`Value::Object`] is a sorted
+/// map. Inside each bucket the paths keep the order of `classified`.
+///
+/// The two truncation markers sit inside `reproDetail`, while
+/// `outputTreeTruncated` and `outputTreeTotal` are siblings of `outputTree`. A
+/// consumer reading the markers has to look in a different place for each
+/// payload.
+///
+/// `classified` is expected sorted by path, as
+/// [`classify_dests`](crate::fomod_forward_simulator::classify_dests) returns it,
+/// so truncation keeps a stable prefix rather than an arbitrary sample.
+///
+/// `out` must be a [`Value::Object`]. Anything else panics, the same contract
+/// [`add_output_tree`] carries. Truncating writes a warning line to
+/// `logs/salma.log`.
+pub fn add_repro_detail(out: &mut Value, classified: &[(String, DestStatus)]) {
+    let total = classified.len();
+    let truncated = total > MAX_REPRO_DETAIL_PATHS;
+    if truncated {
+        Logger::instance().log_warning(&format!(
+            "[infer] Repro detail capped at {MAX_REPRO_DETAIL_PATHS} of {total} paths"
+        ));
+    }
+
+    let mut buckets = Value::object();
+    for status in [
+        DestStatus::Missing,
+        DestStatus::Extra,
+        DestStatus::SizeMismatch,
+        DestStatus::HashMismatch,
+    ] {
+        let mut arr = Value::array();
+        for (dest, st) in classified.iter().take(MAX_REPRO_DETAIL_PATHS) {
+            if *st == status {
+                arr.push(Value::string(dest));
+            }
+        }
+        buckets.insert(status.as_str(), arr);
+    }
+    if truncated {
+        buckets.insert("truncated", Value::Bool(true));
+        buckets.insert("total", Value::Int(total as i64));
+    }
+    out.insert("reproDetail", buckets);
 }
 
 #[cfg(test)]
@@ -600,7 +765,7 @@ mod tests {
 
     #[test]
     fn folder_prefix_requires_path_boundary() {
-        // "foo" must NOT match "foobar.esp"; the trailing slash anchors it.
+        // "foo" must not match "foobar.esp"; the trailing slash anchors it.
         let sorted = entries(&["foo/inside.txt", "foobar.esp", "foo.txt"]);
         let atoms = expand_one(&folder("foo", "out"), &sorted);
         assert_eq!(dests(&atoms), ["out/inside.txt"]);
@@ -635,8 +800,8 @@ mod tests {
         let sorted = entries(&["src/sub/a.txt"]);
         let atoms = expand_one(&folder("src", "dest/"), &sorted);
         assert_eq!(dests(&atoms), ["dest/sub/a.txt"]);
-        // Uppercase destination is lowercased by normalize_path; the
-        // source_path stays the sorted entry string AS-IS.
+        // normalize_path lowercases the destination; source_path keeps the
+        // sorted entry string unchanged.
         let sorted2 = entries(&["src/A.txt"]);
         let atoms2 = expand_one(&folder("src", "Dest"), &sorted2);
         assert_eq!(dests(&atoms2), ["dest/a.txt"]);
@@ -708,8 +873,8 @@ mod tests {
 
     #[test]
     fn file_branch_keeps_destination_unchanged() {
-        // The file branch does NOT re-normalize dest_path (the parser already
-        // normalized it); is_safe_dest runs on the raw destination.
+        // The file branch does not re-normalize dest_path, because the parser
+        // already normalized it; is_safe_dest runs on the raw destination.
         let entry = file("src/a.esp", "sub/a.esp");
         let mut out = Vec::new();
         expand_entry(
@@ -755,11 +920,10 @@ mod tests {
             &mut out,
         );
         assert!(out.is_empty());
-        // "../evil" normalizes to "evil" (normalize_path drops ".."), which
-        // IS safe post-normalization - but the file branch checks the RAW
-        // destination, and is_safe_destination("../evil") normalizes
-        // internally too, so it is accepted. Pin the raw/normalized split:
-        // the atom keeps the raw destination string.
+        // normalize_path drops "..", so "../evil" normalizes to "evil" and
+        // passes the safety check. The file branch checks the raw destination,
+        // and is_safe_destination normalizes internally too, so it is accepted.
+        // Pins the raw/normalized split: the atom keeps the raw string.
         expand_entry(
             &file("src/x.txt", "../evil"),
             &entries(&[]),
@@ -859,13 +1023,13 @@ mod tests {
         assert!(atoms.required.iter().all(|a| a.conditional_index == -1));
         assert_eq!(dests(&atoms.required), ["a.txt", "b.txt"]);
 
-        // per_plugin sized to total_flat_plugins BEFORE the walk.
+        // per_plugin is sized to total_flat_plugins before the walk.
         assert_eq!(atoms.per_plugin.len(), 3);
         assert_eq!(compute_flat_starts(&installer), vec![vec![0], vec![2]]);
 
-        // Pass 1 (normal entries): plugin0 doc 1, plugin1 doc 2.
-        // Pass 2 (auto entries):   plugin1 doc 3, plugin2 doc 4.
-        // Pass 3 (conditionals):   pattern0 entries doc 5 and 6.
+        // Loop 2 (normal plugin entries): plugin0 doc 1, plugin1 doc 2.
+        // Loop 3 (auto plugin entries):   plugin1 doc 3, plugin2 doc 4.
+        // Loop 4 (conditionals):          pattern0 entries doc 5 and 6.
         let p0 = &atoms.per_plugin[0];
         assert_eq!(p0.len(), 1);
         assert_eq!(p0[0].document_order, 1);
@@ -874,7 +1038,7 @@ mod tests {
 
         let p1 = &atoms.per_plugin[1];
         assert_eq!(p1.len(), 2);
-        // Normal entry first (pass 1), auto entry second (pass 2).
+        // Normal entry first (loop 2), auto entry second (loop 3).
         assert_eq!(p1[0].dest_path, "p1.esp");
         assert_eq!(p1[0].document_order, 2);
         assert!(!p1[0].always_install);
@@ -1127,5 +1291,53 @@ mod tests {
         assert!(!is_safe_dest("C:/evil"));
         // ".." normalizes to empty -> safe, same as utils::is_safe_destination.
         assert!(is_safe_dest(".."));
+    }
+
+    // --- reproDetail ---------------------------------------------------------------
+
+    /// The wire contract the UI reads: four buckets, keyed by the same names
+    /// `diagnostics.repro` counts under, each dest in exactly one bucket.
+    #[test]
+    fn add_repro_detail_buckets_by_category() {
+        let classified = vec![
+            ("a/extra.dds".to_string(), DestStatus::Extra),
+            ("b/hash.dds".to_string(), DestStatus::HashMismatch),
+            ("c/gone.dds".to_string(), DestStatus::Missing),
+            ("d/size.dds".to_string(), DestStatus::SizeMismatch),
+        ];
+        let mut out = Value::object();
+        add_repro_detail(&mut out, &classified);
+
+        let d = out.get("reproDetail").expect("reproDetail emitted");
+        let bucket = |k: &str| match d.get(k) {
+            Some(Value::Array(items)) => items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect::<Vec<_>>(),
+            other => panic!("{k} should be an array, got {other:?}"),
+        };
+        assert_eq!(bucket("missing"), vec!["c/gone.dds".to_string()]);
+        assert_eq!(bucket("extra"), vec!["a/extra.dds".to_string()]);
+        assert_eq!(bucket("size_mismatch"), vec!["d/size.dds".to_string()]);
+        assert_eq!(bucket("hash_mismatch"), vec!["b/hash.dds".to_string()]);
+        // Not truncated, so neither marker rides along.
+        assert!(d.get("truncated").is_none());
+        assert!(d.get("total").is_none());
+    }
+
+    /// A clean run still emits the key with empty buckets, so a consumer can
+    /// read "present and empty" as "reproduced everything" without a second
+    /// signal to check.
+    #[test]
+    fn add_repro_detail_emits_empty_buckets_on_a_clean_run() {
+        let mut out = Value::object();
+        add_repro_detail(&mut out, &[]);
+        let d = out.get("reproDetail").expect("reproDetail emitted");
+        for k in ["missing", "extra", "size_mismatch", "hash_mismatch"] {
+            match d.get(k) {
+                Some(Value::Array(items)) => assert!(items.is_empty(), "{k} should be empty"),
+                other => panic!("{k} should be an array, got {other:?}"),
+            }
+        }
     }
 }
