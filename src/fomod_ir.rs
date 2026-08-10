@@ -1,42 +1,82 @@
-//! FOMOD intermediate representation - Rust port of `src/FomodIR.hpp`.
+//! FOMOD intermediate representation: the parsed shape of a ModuleConfig.xml.
 //!
-//! Strongly-typed IR mirroring the FOMOD ModuleConfig XML schema. The XML is
-//! parsed once (see [`crate::fomod_ir_parser`]) into these structures, which
-//! the dependency evaluator, forward simulator, and CSP solver consume without
-//! re-reading XML.
+//! [`crate::fomod_ir_parser`] builds these structures once. The dependency
+//! evaluator, the propagator, the forward simulator and the CSP solver all read
+//! them, and none of them goes back to the XML.
 //!
-//! Hierarchy (struct -> XML element):
+//! Containment, with the XML element each field comes from:
 //!
-//! | Struct                    | XML element                                |
-//! |---------------------------|--------------------------------------------|
-//! | [`FomodInstaller`]        | `<config>`                                 |
-//! | [`FomodStep`]             | `<installStep>`                            |
-//! | [`FomodGroup`]            | `<group>`                                  |
-//! | [`FomodPlugin`]           | `<plugin>`                                 |
-//! | [`FomodFileEntry`]        | `<file>` / `<folder>`                      |
-//! | [`FomodCondition`]        | `<dependencies>` / `<pattern>`             |
-//! | [`FomodConditionalPattern`] | `<pattern>` in `<conditionalFileInstalls>` |
+//! ```text
+//! FomodInstaller                                    <config>
+//!  |- module_dependencies: Option<FomodCondition>    <moduleDependencies>
+//!  |- required_files: Vec<FomodFileEntry>            <requiredInstallFiles>/<file|folder>
+//!  |- steps: Vec<FomodStep>                          <installSteps>/<installStep>
+//!  |   |- visible: Option<FomodCondition>            <visible>
+//!  |   '- groups: Vec<FomodGroup>                    <optionalFileGroups>/<group>
+//!  |        '- plugins: Vec<FomodPlugin>             <plugins>/<plugin>
+//!  |             |- r#type: PluginType               <typeDescriptor>/<type>
+//!  |             |- type_patterns: Vec<FomodTypePattern>
+//!  |             |    (condition + result_type)      <dependencyType>/<patterns>/<pattern>
+//!  |             |- files: Vec<FomodFileEntry>       <files>/<file|folder>
+//!  |             |- condition_flags: Vec<(String, String)>
+//!  |             |                                   <conditionFlags>/<flag>
+//!  |             '- dependencies: Option<FomodCondition>
+//!  |                                                 <dependencies>
+//!  '- conditional_patterns: Vec<FomodConditionalPattern>
+//!       (condition + files)                          <conditionalFileInstalls>/<patterns>/<pattern>
+//! ```
 //!
-//! Field names, variant sets, and per-field defaults are kept identical to the
-//! C++ structs (fields named `type` in C++ become `r#type` here).
+//! [`FomodCondition`] is the one type not tied to a single element. It comes
+//! from a `<dependencies>` element (a composite node) or from one of the seven
+//! leaf elements `<flagDependency>`, `<fileDependency>`, `<gameDependency>`,
+//! `<pluginDependency>`, `<fomodDependency>`, `<fommDependency>` and
+//! `<foseDependency>`. The tree above marks the five places a condition hangs
+//! off the IR: module dependencies, step visibility, plugin dependencies,
+//! type-pattern conditions and conditional-pattern conditions.
+//!
+//! # Which vectors carry document order
+//!
+//! Every later stage depends on this split:
+//!
+//! | Field                                                                 | Order                                            |
+//! |-----------------------------------------------------------------------|--------------------------------------------------|
+//! | `steps`, `groups`, `plugins`                                          | sorted by the parent element's `order` attribute |
+//! | `required_files`, `FomodPlugin::files`, `type_patterns`,              |                                                  |
+//! | `condition_flags`, `conditional_patterns`, `FomodCondition::children` | raw XML child order                              |
+//!
+//! The sort runs through [`crate::utils::get_ordered_nodes`]: an absent `order`
+//! attribute and the exact value `"Ascending"` sort by `name` ascending,
+//! `"Descending"` sorts by `name` in reverse, and every other value, including
+//! `"Explicit"`, keeps XML order. [`FomodStep::ordinal`] records the position
+//! after that sort, and the plugin order fixes each plugin's flat index.
+//!
+//! On the document-order side, file-entry order becomes the `document_order`
+//! tiebreaker on [`crate::fomod_atom::FomodAtom`], and `type_patterns` order
+//! decides which type override wins.
 
 use crate::types::PluginType;
 
-/// Logical operator for combining child conditions. Mirror of
-/// `mo2core::FomodConditionOp`.
+/// Logical operator for combining child conditions.
+///
+/// The empty-children case is asymmetric and load-bearing: it is how the IR
+/// encodes both "always true" and "always false". See the variant docs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FomodConditionOp {
-    /// All child conditions must be true (logical conjunction).
+    /// All child conditions must be true. A composite with no children is
+    /// true. This is the operator of `FomodCondition::default()`, so a default
+    /// condition is always true, and the parser installs that default whenever
+    /// a `<pattern>` carries no `<dependencies>` element.
     #[default]
     And,
-    /// At least one child condition must be true (logical disjunction).
+    /// At least one child condition must be true. A composite with no children
+    /// is false. The parser uses an empty `Or` as its always-false value when
+    /// condition nesting exceeds
+    /// [`crate::fomod_dependency_evaluator::MAX_DEPENDENCY_DEPTH`].
     Or,
 }
 
-/// Parse a `FomodConditionOp` name. Mirror of the C++
-/// `enum_map<FomodConditionOp>` specialization in `src/FomodIR.hpp` used via
-/// `parse_enum`: exact case-sensitive string match, lookup miss (including the
-/// empty string) returns the map default `And`.
+/// Parse a `FomodConditionOp` name: exact, case-sensitive match. Any other
+/// string, the empty string included, returns `And`.
 pub fn parse_condition_op(s: &str) -> FomodConditionOp {
     match s {
         "And" => FomodConditionOp::And,
@@ -45,10 +85,8 @@ pub fn parse_condition_op(s: &str) -> FomodConditionOp {
     }
 }
 
-/// Map a [`FomodConditionOp`] to its FOMOD name. Mirror of the C++
-/// `enum_to_string<FomodConditionOp>`. Every variant is in the map, so the
-/// C++ `"Unknown"` miss value is unreachable; the exhaustive match encodes
-/// that directly.
+/// Map a [`FomodConditionOp`] to the name FOMOD spells it with. Exhaustive, so
+/// it always round-trips back through [`parse_condition_op`].
 pub fn condition_op_to_string(op: FomodConditionOp) -> &'static str {
     match op {
         FomodConditionOp::And => "And",
@@ -56,8 +94,7 @@ pub fn condition_op_to_string(op: FomodConditionOp) -> &'static str {
     }
 }
 
-/// Discriminator for the predicate a leaf condition tests. Mirror of
-/// `mo2core::FomodConditionType`.
+/// Discriminator for the predicate a leaf condition tests.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FomodConditionType {
     /// `<flagDependency>` - tests a user-set condition flag.
@@ -79,14 +116,41 @@ pub enum FomodConditionType {
     Composite,
 }
 
-/// Recursive condition tree node - either a leaf predicate or a composite.
-/// Mirror of `mo2core::FomodCondition`.
+/// Recursive condition tree node: either a leaf predicate or a composite.
 ///
-/// When `r#type != Composite`, the leaf fields (`flag_name`, `flag_value`,
-/// `file_path`, `version`, `plugin_name`, `fomod_name`) are populated
-/// according to the discriminator and `op` / `children` are ignored. When
-/// `r#type == Composite`, only `op` and `children` are meaningful and the
-/// leaf fields are ignored.
+/// `r#type` decides which fields mean anything. `Composite` uses `op` and
+/// `children` and ignores the leaf fields; every other discriminator uses its
+/// leaf fields and ignores `op` and `children`. The leaf fields are
+/// `flag_name`, `flag_value`, `file_path`, `file_state`, `version`,
+/// `plugin_name`, `plugin_type` and `fomod_name`.
+///
+/// Shape of a tree, and which fields carry the value for each node kind:
+///
+/// ```text
+/// Composite(op = And)         op + children meaningful, leaf fields ignored
+///  |- Flag(flag_name, flag_value)
+///  |- File(file_path, file_state)
+///  '- Composite(op = Or)
+///       |- Plugin(plugin_name, plugin_type)
+///       '- Game(version)
+/// ```
+///
+/// Composite truth table, including the two empty cases the whole IR relies on:
+///
+/// | Node           | Children    | Evaluates to                                                                                    |
+/// |----------------|-------------|-------------------------------------------------------------------------------------------------|
+/// | Composite(And) | none        | true. This is `FomodCondition::default()`, and what a `<pattern>` with no `<dependencies>` gets |
+/// | Composite(Or)  | none        | false. This is the parser's depth-truncation bail                                               |
+/// | Composite(And) | one or more | true only when every child is true                                                              |
+/// | Composite(Or)  | one or more | true when any child is true                                                                     |
+///
+/// Hand-built conditions trip over `file_state` and `plugin_type`: the parser
+/// defaults both to `"Active"` when the XML attribute is absent, so an empty
+/// string never occurs on a parsed tree. An empty `file_state` still behaves
+/// like `"Active"`, but the evaluator logs an "Unknown file dependency state"
+/// warning for it; an empty `plugin_type` behaves like `"Active"` silently.
+///
+/// Evaluation lives in [`crate::fomod_dependency_evaluator`], not here.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodCondition {
     /// Discriminator; default `Composite`.
@@ -99,13 +163,20 @@ pub struct FomodCondition {
     pub flag_value: String,
     /// Leaf: file path (`File`).
     pub file_path: String,
-    /// Leaf: Active, Inactive, Missing (`File`).
+    /// Leaf: required state of the file named by `file_path` (`File`). FOMOD
+    /// defines `"Active"` (the parser's default), `"Inactive"` and
+    /// `"Missing"`. Any other value warns and is treated as `"Active"`.
     pub file_state: String,
     /// Leaf: version string (`Game`, `Fomm`, `Fose`).
     pub version: String,
     /// Leaf: plugin name (`Plugin`).
     pub plugin_name: String,
-    /// Leaf: Active/Inactive (`Plugin`).
+    /// Leaf: required activation state of the game plugin file (.esp/.esm)
+    /// named by `plugin_name` (`Plugin`). FOMOD defines `"Active"` (the
+    /// parser's default) and `"Inactive"`; any other value behaves like
+    /// `"Active"`. This is not the FOMOD selection type: that is
+    /// [`crate::types::PluginType`], held by `FomodPlugin::r#type`. Two
+    /// different concepts with similar names, both in scope in this module.
     pub plugin_type: String,
     /// Leaf: FOMOD package name (`Fomod`).
     pub fomod_name: String,
@@ -113,43 +184,60 @@ pub struct FomodCondition {
     pub children: Vec<FomodCondition>,
 }
 
-/// A single source-to-destination file or folder mapping. Mirror of
-/// `mo2core::FomodFileEntry`.
+/// One source-to-destination mapping, from a `<file>` or `<folder>` element.
+/// Folder entries expand into individual file atoms during install planning.
 ///
-/// Represents a `<file>` or `<folder>` element. Folder entries are expanded
-/// into individual file atoms during installation planning.
+/// The parser normalizes `source` and `destination` with
+/// [`crate::utils::normalize_path`]. That normalization is lossy and
+/// load-bearing: strings are ASCII-lowercased, backslashes become forward
+/// slashes, leading `./` and `/` and the trailing `/` are stripped, repeated
+/// slashes collapse, and `.` and `..` segments are dropped. Later stages
+/// compare these strings against archive entry names and target-tree keys,
+/// normalized the same way, so a case-sensitive or backslash-bearing
+/// comparison against either field will not match.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodFileEntry {
-    /// Archive-relative source path (normalized, with archive prefix).
+    /// Archive-relative source path: the archive prefix joined with the XML
+    /// `source` attribute, then normalized (lowercase, forward slashes, no
+    /// leading or trailing slash).
     pub source: String,
-    /// Mod-relative destination path (normalized).
+    /// Mod-relative destination path, normalized the same way as `source`.
+    /// For a `<file>` entry the parser first resolves it through
+    /// [`crate::utils::resolve_file_destination`], which substitutes the
+    /// source filename for an empty destination and appends the source
+    /// filename to a destination that ends with a separator.
     pub destination: String,
     /// Overwrite priority; higher values win conflicts (default 0).
     pub priority: i32,
     /// True if this entry came from a `<folder>` element.
     pub is_folder: bool,
-    /// XML `alwaysInstall` attribute.
+    /// Install this entry even when the owning plugin is not selected. Comes
+    /// from the XML `alwaysInstall` attribute, which is true only for the
+    /// values `"true"` and `"1"` (case-insensitive) and false when absent.
     pub always_install: bool,
-    /// XML `installIfUsable` attribute.
+    /// Install this entry when the owning plugin is not selected, unless the
+    /// plugin's effective type is `NotUsable`. Comes from the XML
+    /// `installIfUsable` attribute, parsed with the same true/1 rule as
+    /// `always_install`.
     pub install_if_usable: bool,
 }
 
-/// A condition that, when met, overrides a plugin's declared type. Mirror of
-/// `mo2core::FomodTypePattern`.
+/// A condition that, when met, overrides a plugin's declared type.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodTypePattern {
-    /// Condition that triggers this override.
+    /// Condition that triggers this override. A `<pattern>` with no
+    /// `<dependencies>` child keeps the default here, and that default is an
+    /// empty `And` composite, which is always true.
     pub condition: FomodCondition,
     /// Plugin type to apply when the condition is met (default `Optional`).
     pub result_type: PluginType,
 }
 
 /// A selectable option within a group, carrying files and condition flags.
-/// Mirror of `mo2core::FomodPlugin`.
 ///
-/// `r#type` (possibly overridden by `type_patterns`) controls selection
-/// constraints. When selected, the plugin's `files` are added to the install
-/// plan and its `condition_flags` are set for downstream condition evaluation.
+/// `r#type`, possibly overridden by `type_patterns`, controls the selection
+/// constraint. Selecting the plugin adds its `files` to the install plan and
+/// sets its `condition_flags` for later condition evaluation.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodPlugin {
     /// Display name from the `name` attribute.
@@ -157,18 +245,23 @@ pub struct FomodPlugin {
     /// Base selection type (default `Optional`; may be overridden by
     /// `type_patterns`).
     pub r#type: PluginType,
-    /// Conditional type overrides from `<dependencyType>/<patterns>`.
+    /// Conditional type overrides from `<dependencyType>/<patterns>`, in XML
+    /// document order. The evaluator takes the first pattern whose condition
+    /// is met, so this order decides which override wins.
     pub type_patterns: Vec<FomodTypePattern>,
-    /// Files installed when this plugin is selected.
+    /// Files installed when this plugin is selected, in XML document order.
+    /// Entries that set `always_install` or `install_if_usable` are also
+    /// installed when the plugin is not selected.
     pub files: Vec<FomodFileEntry>,
-    /// Flag name/value pairs set when selected.
+    /// Flag name/value pairs set when selected, in XML document order. A later
+    /// pair with the same name overwrites an earlier one.
     pub condition_flags: Vec<(String, String)>,
-    /// Optional prerequisite conditions for this plugin.
+    /// Optional prerequisite conditions for this plugin. `None` means the
+    /// `<plugin>` has no `<dependencies>` child.
     pub dependencies: Option<FomodCondition>,
 }
 
-/// Selection cardinality constraint for a group of plugins. Mirror of
-/// `mo2core::FomodGroupType`.
+/// Selection cardinality constraint for a group of plugins.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FomodGroupType {
     /// User must select exactly one plugin in the group.
@@ -184,10 +277,8 @@ pub enum FomodGroupType {
     SelectAny,
 }
 
-/// Parse a `FomodGroupType` name. Mirror of the C++
-/// `enum_map<FomodGroupType>` specialization in `src/FomodIR.hpp` used via
-/// `parse_enum`: exact case-sensitive string match, lookup miss (including
-/// the empty string) returns the map default `SelectAny`.
+/// Parse a `FomodGroupType` name: exact, case-sensitive match. Any other
+/// string, the empty string included, returns `SelectAny`.
 pub fn parse_group_type(s: &str) -> FomodGroupType {
     match s {
         "SelectExactlyOne" => FomodGroupType::SelectExactlyOne,
@@ -199,10 +290,8 @@ pub fn parse_group_type(s: &str) -> FomodGroupType {
     }
 }
 
-/// Map a [`FomodGroupType`] to its FOMOD name. Mirror of the C++
-/// `enum_to_string<FomodGroupType>`. Every variant is in the map, so the
-/// C++ `"Unknown"` miss value is unreachable; the exhaustive match encodes
-/// that directly.
+/// Map a [`FomodGroupType`] to the name FOMOD spells it with. Exhaustive, so
+/// it always round-trips back through [`parse_group_type`].
 pub fn group_type_to_string(group_type: FomodGroupType) -> &'static str {
     match group_type {
         FomodGroupType::SelectExactlyOne => "SelectExactlyOne",
@@ -213,63 +302,72 @@ pub fn group_type_to_string(group_type: FomodGroupType) -> &'static str {
     }
 }
 
-/// A named group of plugins sharing a selection cardinality constraint.
-/// Mirror of `mo2core::FomodGroup`.
+/// A named group of plugins sharing one selection cardinality constraint.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodGroup {
     /// Display name from the `name` attribute.
     pub name: String,
-    /// Selection cardinality constraint for this group (default `SelectAny`).
+    /// Selection cardinality constraint for this group (default `SelectAny`,
+    /// which is also what an unrecognized `type` attribute parses to).
     pub r#type: FomodGroupType,
-    /// Selectable options within this group.
+    /// Selectable options within this group, in the order the
+    /// `<plugins order="...">` attribute selects. This order fixes each
+    /// plugin's flat index across the whole installer.
     pub plugins: Vec<FomodPlugin>,
 }
 
 /// One wizard page presented to the user, optionally gated by a visibility
-/// condition. Mirror of `mo2core::FomodStep`.
+/// condition.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodStep {
     /// Display name from the `name` attribute.
     pub name: String,
-    /// Zero-based position in the wizard sequence (default 0).
+    /// Zero-based position in the wizard sequence (default 0). The parser
+    /// assigns it after applying the `<installSteps order="...">` attribute,
+    /// so it is the presentation position, not the XML child position.
     pub ordinal: i32,
-    /// Visibility condition; step is shown only when met.
+    /// Visibility condition; step is shown only when met. `None` means the
+    /// step has no `<visible>` element and is always shown.
     pub visible: Option<FomodCondition>,
-    /// Option groups presented on this wizard page.
+    /// Option groups presented on this wizard page, in the order the
+    /// `<optionalFileGroups order="...">` attribute selects.
     pub groups: Vec<FomodGroup>,
 }
 
 /// Files installed when a condition is met, from `<conditionalFileInstalls>`.
-/// Mirror of `mo2core::FomodConditionalPattern`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodConditionalPattern {
-    /// Condition evaluated after all wizard steps complete.
+    /// Condition evaluated after all wizard steps complete. As on
+    /// [`FomodTypePattern::condition`], a `<pattern>` with no `<dependencies>`
+    /// child keeps the default empty `And` composite, which is always true.
     pub condition: FomodCondition,
     /// Files installed when the condition is met.
     pub files: Vec<FomodFileEntry>,
 }
 
-/// Top-level IR for a complete FOMOD installer definition. Mirror of
-/// `mo2core::FomodInstaller`.
-///
-/// Holds the full parsed content of a ModuleConfig.xml: module-level
-/// dependencies, unconditionally required files, the ordered wizard steps,
-/// and any conditional install patterns evaluated after all steps complete.
+/// Top-level IR for one FOMOD installer definition: the whole parsed content
+/// of a ModuleConfig.xml. Module-level dependencies, unconditionally required
+/// files, the ordered wizard steps, and the conditional install patterns
+/// evaluated after all steps complete.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct FomodInstaller {
-    /// Global prerequisites from `<moduleDependencies>`.
+    /// Global prerequisites from `<moduleDependencies>`. `None` means the
+    /// `<config>` has no `<moduleDependencies>` element.
     pub module_dependencies: Option<FomodCondition>,
-    /// Unconditionally installed files from `<requiredInstallFiles>`.
+    /// Unconditionally installed files from `<requiredInstallFiles>`, in XML
+    /// document order.
     pub required_files: Vec<FomodFileEntry>,
-    /// Ordered wizard pages from `<installSteps>`.
+    /// Wizard pages from `<installSteps>`, already sorted by the
+    /// `<installSteps order="...">` attribute.
     pub steps: Vec<FomodStep>,
-    /// Post-wizard conditional installs from `<conditionalFileInstalls>`.
+    /// Post-wizard conditional installs from `<conditionalFileInstalls>`, in
+    /// XML document order. An `order` attribute never reorders `<pattern>`
+    /// children; only steps, groups and plugins are reordered.
     pub conditional_patterns: Vec<FomodConditionalPattern>,
 }
 
-/// Count the total number of plugins across all steps and groups. Mirror of
-/// `mo2core::total_flat_plugins`; returns `i32` like the C++ `int`, suitable
-/// for sizing flat index arrays in the CSP solver.
+/// Total plugin count across all steps and groups. `i32`, to match the flat
+/// index arrays the CSP solver sizes from it.
 pub fn total_flat_plugins(installer: &FomodInstaller) -> i32 {
     let mut total = 0i32;
     for step in &installer.steps {
@@ -280,9 +378,10 @@ pub fn total_flat_plugins(installer: &FomodInstaller) -> i32 {
     total
 }
 
-/// Build a `[step][group]` -> flat plugin start index map. Mirror of
-/// `mo2core::compute_flat_starts`: `result[step_idx][group_idx]` is the flat
-/// index of that group's first plugin.
+/// Build a `[step][group]` to flat-plugin-start index map:
+/// `result[step_idx][group_idx]` is the flat index of that group's first
+/// plugin. Walks steps and groups in IR order, so the indices it hands out
+/// agree with [`total_flat_plugins`].
 pub fn compute_flat_starts(installer: &FomodInstaller) -> Vec<Vec<i32>> {
     let mut flat_starts = Vec::with_capacity(installer.steps.len());
     let mut flat = 0i32;
@@ -301,7 +400,7 @@ pub fn compute_flat_starts(installer: &FomodInstaller) -> Vec<Vec<i32>> {
 mod tests {
     use super::*;
 
-    // --- defaults (must match the C++ in-struct initializers) ---
+    // --- per-field defaults ---
 
     #[test]
     fn condition_default_is_composite_and_with_no_children() {
@@ -349,8 +448,7 @@ mod tests {
 
     #[test]
     fn parse_condition_op_miss_defaults_to_and() {
-        // C++ EnumStringMap::from_string is an exact case-sensitive
-        // comparison; every miss returns the map default (And).
+        // Matching is exact and case-sensitive; every miss returns And.
         assert_eq!(parse_condition_op(""), FomodConditionOp::And);
         assert_eq!(parse_condition_op("or"), FomodConditionOp::And);
         assert_eq!(parse_condition_op("OR"), FomodConditionOp::And);

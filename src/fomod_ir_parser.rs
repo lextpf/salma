@@ -1,35 +1,56 @@
-//! XML -> IR parser - Rust port of `src/FomodIRParser.hpp` / `.cpp`, plus the
-//! pugixml document-load semantics its C++ callers rely on.
+//! Parse `fomod/ModuleConfig.xml` bytes into the [`FomodInstaller`] IR.
 //!
-//! The C++ callers load bytes with `pugi::xml_document::load_buffer` using
-//! DEFAULT options (`src/FomodInferenceService.cpp:908`,
-//! `src/InstallationService.cpp:316` via `load_file`), then hand the document
-//! to `FomodIRParser::parse`. This module mirrors that split:
+//! roxmltree does the parsing, but what this module accepts, and the text it
+//! reads back out, is pugixml's behavior under pugixml's default parse options.
+//! That is the reference the rest of the engine is calibrated against: a
+//! document pugixml loads has to load here too, and has to yield the same
+//! attribute and text values, or inference and install replay disagree with the
+//! installed trees they are trying to reproduce. roxmltree is stricter in some
+//! places and more lenient in others, so every gap is closed deliberately, and
+//! the unit tests at the bottom of this file pin each case. Divergences that
+//! remain on purpose are listed in PARITY-NOTES.md.
 //!
-//! - [`decode_xml_bytes`]: pugixml `encoding_auto` equivalent (BOM +
-//!   byte-pattern + declaration-encoding detection, transcode to UTF-8,
-//!   strip the BOM scalar) - fallible.
+//! Four stages, then one wrapper that runs all four:
+//!
+//! ```text
+//! bytes -> decode_xml_bytes -> pugixml_lenient_pass -> load_document -> parse -> FomodInstaller
+//!          detect encoding      rewrite what              depth guard,   no <config> root
+//!          strip the BOM        pugixml tolerates         then roxmltree -> default installer
+//!              |                     |                         |                 |
+//!              v                     v                         v                 v
+//!          Err(Decode)           infallible                Err(TooDeep)       infallible
+//!                                                         Err(Parse)
+//! ```
+//!
+//! - [`decode_xml_bytes`]: detect the encoding from the BOM, the leading byte
+//!   pattern, or the declaration, transcode to UTF-8, and strip the BOM
+//!   scalar. Fallible.
 //! - `pugixml_lenient_pass` (internal, applied by [`parse_module_config`]):
 //!   rewrites the malformed constructs pugixml tolerates (bare `&`, unknown
 //!   entity references, `--` inside comments, stray `]]>` in character data,
 //!   misplaced or malformed `<?xml ...?>` declarations) into well-formed
-//!   equivalents with the same pugixml-observable semantics, so roxmltree
-//!   accepts them.
-//! - [`load_document`]: roxmltree parse of the decoded text - fallible, and
-//!   guarded by [`MAX_ELEMENT_DEPTH`]: roxmltree recurses once per element
-//!   nesting level inside `Document::parse`, so unbounded depth would abort
-//!   the process with an uncatchable stack overflow where pugixml's
-//!   iterative parser succeeds (bounded-depth divergence, see PARITY-NOTES).
-//! - [`parse`]: `FomodIRParser::parse` equivalent (document + archive prefix
-//!   -> [`FomodInstaller`]) - infallible; a document without a `<config>`
-//!   root element yields a default-constructed installer.
-//! - [`parse_module_config`]: convenience composition of the three, keeping
-//!   the roxmltree borrow internal so callers pass bytes and receive an owned
-//!   IR.
+//!   equivalents with the same observable semantics, so roxmltree accepts
+//!   them. Infallible.
+//! - [`load_document`]: roxmltree parse of the decoded text, guarded by
+//!   [`MAX_ELEMENT_DEPTH`] because roxmltree recurses once per element nesting
+//!   level. Fallible.
+//! - [`parse`]: document plus archive prefix to [`FomodInstaller`].
+//!   Infallible; a document without a `<config>` root element yields a
+//!   default-constructed installer.
+//! - [`parse_module_config`]: the four stages in one call, keeping the
+//!   roxmltree borrow internal so callers pass bytes and receive an owned IR.
 //!
-//! Behavioral parity notes (validated by the unit tests below and the fixture
-//! suite in `tests/fomod_ir_fixtures.rs`) are recorded in
-//! `PARITY-NOTES.md` under "Task 4".
+//! Calling [`load_document`] on its own skips the lenient pass, with two
+//! consequences: malformed input that pugixml tolerates is rejected instead of
+//! rewritten, and DTD-declared entity references are no longer neutralized
+//! before roxmltree expands them, because [`load_document`] enables
+//! `allow_dtd`.
+//!
+//! Names such as `guess_buffer_encoding`, `strconv_pcdata` and `parse_question`
+//! in the comments below identify the pugixml 1.15 function whose behavior the
+//! adjacent code reproduces. pugixml is not a dependency of this crate; the
+//! names are there so the reproduced behavior can be looked up, not so the
+//! source can be opened from a checkout.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -48,32 +69,51 @@ use crate::utils::{
     xml_bool_attribute_true,
 };
 
-/// Guard against malicious/malformed XML: depth bounds the
-/// `compile_condition_impl` recursion, breadth prevents CPU-bound DoS from
-/// millions of sibling nodes. Mirror of `MAX_CONDITION_CHILDREN` in
-/// `src/FomodIRParser.cpp`. Document-level element nesting is separately
-/// bounded by [`MAX_ELEMENT_DEPTH`] before roxmltree ever parses.
+/// Maximum element children `compile_condition_impl` reads from a single
+/// `<dependencies>` node. It keeps millions of sibling nodes from becoming a
+/// CPU-bound denial of service.
+///
+/// This constant bounds breadth only. Two other bounds guard this file and are
+/// easy to confuse with it:
+///
+/// - [`MAX_DEPENDENCY_DEPTH`] bounds the `compile_condition_impl` recursion,
+///   that is, how deeply `<dependencies>` elements may nest inside each other.
+/// - [`MAX_ELEMENT_DEPTH`] bounds document-level element nesting of any kind,
+///   and is checked before roxmltree ever parses.
 const MAX_CONDITION_CHILDREN: i32 = 10000;
 
-/// Maximum element nesting depth accepted by [`load_document`]. No C++
-/// counterpart: pugixml 1.15's `xml_parser::parse` is an iterative cursor
-/// loop with no per-depth recursion, so the C++ pipeline parses arbitrarily
-/// deep documents. roxmltree 0.21.1 recurses once per nesting level inside
-/// `Document::parse`, and a crafted deeply nested ModuleConfig.xml aborts
-/// the process with an uncatchable STATUS_STACK_OVERFLOW (not a Rust panic,
-/// so the `catch_unwind` at the C ABI boundary cannot contain it). Measured
-/// against the pinned roxmltree with the default 1 MiB Windows main-thread
-/// stack: a debug build parses total depth 65 but dies at 81; a release
-/// build dies around 2000. Enforcing the bound BEFORE roxmltree runs turns
-/// that abort into [`FomodXmlError::TooDeep`] - a documented bounded-depth
-/// divergence from pugixml (PARITY-NOTES "Task 4"). 48 covers every
-/// meaningful FOMOD shape (~8 structural levels plus the 32-level
-/// [`MAX_DEPENDENCY_DEPTH`] ceiling on nested `<dependencies>`) with margin
-/// below the shallowest measured overflow.
+/// Maximum element nesting depth accepted by [`load_document`].
+///
+/// roxmltree 0.21.1 recurses once per nesting level inside `Document::parse`,
+/// so a crafted deeply nested ModuleConfig.xml aborts the process with an
+/// uncatchable STATUS_STACK_OVERFLOW. That is not a Rust panic, so the
+/// `catch_unwind` at the C ABI boundary cannot contain it. Measured against the
+/// pinned roxmltree on the default 1 MiB Windows main-thread stack: a debug
+/// build parses total depth 65 but dies at 81; a release build dies around
+/// 2000. Checking the bound before roxmltree runs turns that abort into
+/// [`FomodXmlError::TooDeep`]. pugixml parses arbitrarily deep documents, so
+/// this bound is a deliberate divergence (PARITY-NOTES.md).
+///
+/// Why 48. The deepest schema path this parser walks before the first
+/// `<dependencies>` is 11 elements:
+///
+/// ```text
+/// config > installSteps > installStep > optionalFileGroups > group
+///        > plugins > plugin > typeDescriptor > dependencyType
+///        > patterns > pattern
+/// ```
+///
+/// The outermost `<dependencies>` therefore sits at element depth 12 and
+/// compiles at condition depth 0. A fully nested condition chain adds the
+/// 32-level [`MAX_DEPENDENCY_DEPTH`] ceiling, reaching element depth 44, and
+/// its leaf `<flagDependency>` sits at element depth 45. So 48 accepts every
+/// FOMOD shape this parser can compile, with a margin of exactly 3 levels.
+/// Raising [`MAX_DEPENDENCY_DEPTH`] without raising this constant makes the
+/// deepest legal condition trees fail to load.
 pub const MAX_ELEMENT_DEPTH: usize = 48;
 
-/// Errors from the document-load half of the pipeline (the C++
-/// `doc.load_buffer` failure path; `FomodIRParser::parse` itself never fails).
+/// Errors from the document-load half of the pipeline. [`parse`] itself never
+/// fails, so nothing past loading can produce one of these.
 #[derive(Debug)]
 pub enum FomodXmlError {
     /// The byte buffer could not be transcoded to UTF-8 text under the
@@ -81,10 +121,9 @@ pub enum FomodXmlError {
     Decode(String),
     /// roxmltree rejected the decoded document as not well-formed.
     Parse(roxmltree::Error),
-    /// The document nests elements deeper than [`MAX_ELEMENT_DEPTH`] (the
-    /// carried value). pugixml parses such input (iterative parser, no
-    /// per-depth recursion); roxmltree would abort the process with an
-    /// uncatchable stack overflow, so [`load_document`] rejects it up front.
+    /// The document nests elements deeper than [`MAX_ELEMENT_DEPTH`], which is
+    /// the carried value. roxmltree would abort the process with an uncatchable
+    /// stack overflow, so [`load_document`] rejects the document up front.
     TooDeep(usize),
 }
 
@@ -103,12 +142,11 @@ impl fmt::Display for FomodXmlError {
 impl std::error::Error for FomodXmlError {}
 
 // ---------------------------------------------------------------------------
-// Document loading: pugixml encoding_auto + DEFAULT parse options equivalent
+// Document loading: encoding detection, then pugixml's default-options
+// accept set
 // ---------------------------------------------------------------------------
 
-/// Encodings pugixml's `encoding_auto` can select for byte input (wchar modes
-/// aside). Mirror of the subset of `pugi::xml_encoding` reachable from
-/// `guess_buffer_encoding`.
+/// The encodings [`guess_buffer_encoding`] can select for byte input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum XmlEncoding {
     Utf8,
@@ -119,19 +157,20 @@ enum XmlEncoding {
     Latin1,
 }
 
-/// pugixml `ct_space`: `\r`, `\n`, space, tab.
+/// The pugixml `ct_space` class: `\r`, `\n`, space, tab.
 fn is_ct_space(b: u8) -> bool {
     matches!(b, b'\t' | b'\n' | b'\r' | b' ')
 }
 
-/// pugixml `ct_symbol`: any byte > 127, `a-z`, `A-Z`, `0-9`, `_`, `:`, `-`, `.`.
+/// The pugixml `ct_symbol` class: any byte > 127, `a-z`, `A-Z`, `0-9`, `_`,
+/// `:`, `-`, `.`.
 fn is_ct_symbol(b: u8) -> bool {
     b > 127 || b.is_ascii_alphanumeric() || matches!(b, b'_' | b':' | b'-' | b'.')
 }
 
-/// Extract the `encoding` attribute value from an XML declaration. Exact port
-/// of pugixml 1.15 `parse_declaration_encoding` (only consulted by the
-/// auto-detector for the latin1 check).
+/// Extract the `encoding` attribute value from an XML declaration, exactly as
+/// pugixml `parse_declaration_encoding` does. Only the latin1 check in
+/// [`guess_buffer_encoding`] consults it.
 fn parse_declaration_encoding(data: &[u8]) -> Option<&[u8]> {
     let size = data.len();
     // Check if we have a non-empty XML declaration.
@@ -196,11 +235,12 @@ fn parse_declaration_encoding(data: &[u8]) -> Option<&[u8]> {
     None
 }
 
-/// Exact port of pugixml 1.15 `guess_buffer_encoding` (what `encoding_auto`
-/// runs, per XML spec Appendix F.1): BOM checks first, then `<` byte-pattern
-/// probes for BOM-less UTF-16/32, then a declaration `encoding=` probe that
-/// only recognizes ISO-8859-1/latin1; everything else is treated as UTF-8.
-/// Buffers shorter than 4 bytes skip detection entirely and are UTF-8.
+/// Detect the encoding of a byte buffer the way pugixml `guess_buffer_encoding`
+/// does, following XML spec Appendix F.1. The probe order is part of the
+/// contract: BOM checks first, then `<` byte-pattern probes for BOM-less
+/// UTF-16/32, then a declaration `encoding=` probe that recognizes only
+/// ISO-8859-1/latin1. Anything else is treated as UTF-8, and buffers shorter
+/// than 4 bytes skip detection entirely and are UTF-8.
 fn guess_buffer_encoding(data: &[u8]) -> XmlEncoding {
     // Skip encoding autodetection if the input buffer is too small.
     if data.len() < 4 {
@@ -251,7 +291,7 @@ fn guess_buffer_encoding(data: &[u8]) -> XmlEncoding {
     if d0 == 0x3c && d1 == 0x3f && d2 == 0x78 && d3 == 0x6d {
         if let Some(enc) = parse_declaration_encoding(data) {
             // pugixml compares with `(c | ' ')` per letter, exact for digits
-            // and '-'; eq_ignore_ascii_case has identical accept sets here.
+            // and '-'; eq_ignore_ascii_case accepts the same set here.
             if enc.eq_ignore_ascii_case(b"iso-8859-1") || enc.eq_ignore_ascii_case(b"latin1") {
                 return XmlEncoding::Latin1;
             }
@@ -262,8 +302,8 @@ fn guess_buffer_encoding(data: &[u8]) -> XmlEncoding {
 }
 
 fn decode_utf16(bytes: &[u8], big_endian: bool) -> Result<String, FomodXmlError> {
-    // pugixml converts size / sizeof(uint16_t) units; a trailing odd byte is
-    // ignored (chunks_exact drops the remainder the same way).
+    // A trailing odd byte is ignored: pugixml converts whole uint16_t units,
+    // and chunks_exact drops the remainder the same way.
     let units: Vec<u16> = bytes
         .chunks_exact(2)
         .map(|c| {
@@ -293,15 +333,15 @@ fn decode_utf32(bytes: &[u8], big_endian: bool) -> Result<String, FomodXmlError>
         .collect()
 }
 
-/// Transcode a raw ModuleConfig.xml byte buffer to UTF-8 text, mirroring
-/// pugixml `load_buffer` with `encoding_auto`: detect the encoding from BOM /
-/// byte patterns / declaration ([`guess_buffer_encoding`]), convert to UTF-8,
-/// and strip the leading BOM scalar (pugixml `parse_skip_bom`) so it never
-/// reaches the parser.
+/// Transcode a raw ModuleConfig.xml byte buffer to UTF-8 text: detect the
+/// encoding ([`guess_buffer_encoding`]), convert, and strip the leading BOM
+/// scalar so it never reaches the parser.
 ///
-/// Stricter than pugixml on malformed input by construction: invalid UTF-8 /
-/// lone UTF-16 surrogates / out-of-range UTF-32 units are hard errors here,
-/// where pugixml would pass mangled bytes through. See PARITY-NOTES.
+/// Stricter than pugixml on malformed input by construction: invalid UTF-8,
+/// lone UTF-16 surrogates and out-of-range UTF-32 units are hard errors here,
+/// where pugixml passes mangled bytes through. A Rust `String` cannot hold
+/// those byte sequences, so the strictness is not a choice. See
+/// PARITY-NOTES.md.
 pub fn decode_xml_bytes(bytes: &[u8]) -> Result<String, FomodXmlError> {
     let text = match guess_buffer_encoding(bytes) {
         XmlEncoding::Utf8 => std::str::from_utf8(bytes)
@@ -313,22 +353,23 @@ pub fn decode_xml_bytes(bytes: &[u8]) -> Result<String, FomodXmlError> {
         XmlEncoding::Utf32Be => decode_utf32(bytes, true)?,
         XmlEncoding::Latin1 => bytes.iter().map(|&b| b as char).collect(),
     };
-    // pugixml parse_skip_bom: drop the BOM scalar after conversion.
+    // Drop the BOM scalar after conversion (pugixml parse_skip_bom).
     match text.strip_prefix('\u{feff}') {
         Some(stripped) => Ok(stripped.to_string()),
         None => Ok(text),
     }
 }
 
-/// Byte length of the reference at the start of `s` (which must start with
-/// `&`) when BOTH pugixml's escape decoder (`strconv_escape`,
-/// pugixml.cpp:2501) and roxmltree's `consume_reference` accept it and decode
-/// it to the same scalar; `None` when they disagree and the ampersand must be
-/// neutralized. The agreed set: the five predefined named entities, and
-/// character references (lowercase `x` hex prefix only, on both sides) whose
-/// digits parse to an XML-valid char. Outside that set pugixml leaves the run
-/// literal (or, for XML-invalid code points, emits raw scalar bytes) while
-/// roxmltree hard-fails the load.
+/// Byte length of the reference at the start of `s`, which must start with
+/// `&`, when pugixml's escape decoder (`strconv_escape`) and roxmltree's
+/// `consume_reference` both accept it and decode it to the same scalar.
+/// `None` means the two disagree and the ampersand has to be neutralized.
+///
+/// The agreed set is the five predefined named entities, plus character
+/// references whose digits parse to an XML-valid char, with a lowercase `x`
+/// hex prefix or none. Outside that set pugixml leaves the run literal, or
+/// emits raw scalar bytes for XML-invalid code points, while roxmltree
+/// hard-fails the load.
 fn agreed_reference_len(s: &str) -> Option<usize> {
     let rest = &s[1..];
     for named in ["lt;", "gt;", "amp;", "apos;", "quot;"] {
@@ -337,7 +378,7 @@ fn agreed_reference_len(s: &str) -> Option<usize> {
         }
     }
     let num = rest.strip_prefix('#')?;
-    // Both sides accept only a LOWERCASE 'x' hex prefix; "&#X41;" is left
+    // Both sides accept only a lowercase 'x' hex prefix; "&#X41;" is left
     // literal by pugixml and rejected by roxmltree.
     let (digits_tail, radix, prefix_len) = match num.strip_prefix('x') {
         Some(hex) => (hex, 16u32, 3usize),
@@ -350,14 +391,13 @@ fn agreed_reference_len(s: &str) -> Option<usize> {
     if digits.is_empty() || !digits.bytes().all(|b| char::from(b).is_digit(radix)) {
         return None;
     }
-    // Values that overflow u32: pugixml accumulates with unsigned wraparound
-    // (pugixml.cpp:2509-2554), so `&#x100000041;` decodes to "A" there, while
-    // roxmltree rejects the reference outright. No agreement - neutralize, so
-    // the port keeps the literal text (documented residual divergence, see
-    // PARITY-NOTES "Task 4").
+    // Values that overflow u32: pugixml accumulates with unsigned wraparound,
+    // so `&#x100000041;` decodes to "A" there, while roxmltree rejects the
+    // reference outright. No agreement, so neutralize and keep the literal
+    // text (a residual divergence, see PARITY-NOTES.md).
     let code = u32::from_str_radix(digits, radix).ok()?;
-    // Surrogates / beyond U+10FFFF: pugixml writes mangled UTF-8, roxmltree
-    // substitutes U+FFFD - no agreement, neutralize to the literal text.
+    // Surrogates and anything beyond U+10FFFF: pugixml writes mangled UTF-8,
+    // roxmltree substitutes U+FFFD. No agreement, so keep the literal text.
     let ch = char::from_u32(code)?;
     // roxmltree's XML Char check: control chars other than \t \n \r and
     // U+FFFE/U+FFFF hard-fail there, while pugixml emits the raw scalar.
@@ -399,46 +439,46 @@ fn doctype_len(s: &str) -> usize {
 }
 
 /// Rewrite decoded XML text so roxmltree accepts the malformed constructs
-/// pugixml (DEFAULT parse options) tolerates, preserving pugixml's observable
-/// semantics. pugi `load_buffer` SUCCEEDS on such input and the C++ callers
-/// proceed to build an IR from it, so hard-failing here would be a real
-/// divergence (see PARITY-NOTES "Task 4"). Four rewrites:
+/// pugixml tolerates under default parse options, preserving pugixml's
+/// observable semantics. pugixml loads such input, so rejecting it here would
+/// fail packages the engine is expected to install (PARITY-NOTES.md). Four
+/// rewrites:
 ///
 /// - Every `&` that does not begin a reference both parsers agree on
 ///   ([`agreed_reference_len`]) becomes `&amp;`. pugixml's escape decoder
-///   cancels on bare ampersands and unknown/undeclared entity references,
-///   leaving them literal in the value; the escaped form decodes back to
-///   exactly that literal text. This also neutralizes references to entities
-///   declared in an internal DTD BEFORE roxmltree could expand them - pugixml
-///   skips the DOCTYPE and keeps `&name;` literal.
+///   cancels on bare ampersands and on unknown or undeclared entity
+///   references, leaving them literal in the value, and the escaped form
+///   decodes back to exactly that literal text. This also neutralizes
+///   references to entities declared in an internal DTD before roxmltree can
+///   expand them, matching pugixml, which skips the DOCTYPE and keeps `&name;`
+///   literal.
 /// - A comment body roxmltree rejects (`--` inside, or a trailing `-`) is
-///   blanked. pugixml only scans for the first `-->` and, with default
+///   blanked. pugixml scans only for the first `-->` and, with default
 ///   options, drops comments from the tree entirely, so the body is
-///   unobservable; the span boundary (the first `-->`) is preserved.
-/// - A stray `]]>` outside CDATA/comments/DOCTYPE/PIs becomes `]]&gt;`.
-///   pugixml's pcdata scanner only stops at `<`, `&`, and `\r`
-///   (strconv_pcdata, pugixml.cpp:2712-2742), so the run is ordinary
-///   character data in C++; roxmltree forbids `]]>` in character data. The
-///   escaped form decodes back to the same literal text (also inside
-///   attribute values, where both parsers already accept it raw and the
-///   rewrite is a no-op semantically).
-/// - An XML declaration (`<?xml` followed by whitespace, up to the first
-///   `?>`) becomes the `<!-- -->` placeholder. pugixml with default options
-///   (parse_declaration and parse_pi both off) skips EVERY `<?...?>` span by
-///   scanning for the first `?>` with no position or grammar validation
-///   (parse_question skip branch, pugixml.cpp:3283-3289), so a declaration
+///   unobservable; the span boundary at that first `-->` is preserved.
+/// - A stray `]]>` outside CDATA, comments, DOCTYPE and PIs becomes `]]&gt;`.
+///   pugixml's pcdata scanner (`strconv_pcdata`) stops only at `<`, `&` and
+///   `\r`, so the run is ordinary character data there, while roxmltree
+///   forbids `]]>` in character data. The escaped form decodes back to the
+///   same literal text, inside attribute values too, where both parsers
+///   already accept it raw and the rewrite changes no meaning.
+/// - An XML declaration (`<?xml` followed by whitespace, up to the first `?>`)
+///   becomes the `<!-- -->` placeholder. With `parse_declaration` and
+///   `parse_pi` both off, which is the default, pugixml skips every `<?...?>`
+///   span by scanning for the first `?>` and validates neither position nor
+///   grammar (the `parse_question` skip branch), so a declaration
 ///   may be preceded by whitespace, lack the mandatory `version`, or sit
-///   mid-document; roxmltree validates all of that and hard-fails. A comment
+///   mid-document. roxmltree validates all of that and hard-fails. A comment
 ///   is equally absent from the pugixml tree and splits a pcdata run exactly
-///   like the skipped span did. Valid declarations are rewritten too - they
-///   are unobservable either way, and this avoids replicating roxmltree's
+///   like the skipped span did. Valid declarations are rewritten too: they are
+///   unobservable either way, and this avoids replicating roxmltree's
 ///   declaration grammar. Other `<?...?>` targets (`<?xml-stylesheet`,
 ///   `<?XML`, bare `<?xml?>`) are valid roxmltree PIs, invisible to the
-///   pugixml tree view helpers below, and are copied verbatim.
+///   tree-view helpers below, and are copied verbatim.
 ///
-/// CDATA sections and the DOCTYPE (including its internal subset) are copied
-/// verbatim. Runs before [`load_document`], so `Document::input_text` and the
-/// raw-range helpers below see the rewritten text consistently.
+/// CDATA sections and the DOCTYPE, internal subset included, are copied
+/// verbatim. This runs before [`load_document`], so `Document::input_text` and
+/// the raw-range helpers below all see the rewritten text.
 fn pugixml_lenient_pass(text: &str) -> Cow<'_, str> {
     let bytes = text.as_bytes();
     let mut out = String::new();
@@ -472,9 +512,9 @@ fn pugixml_lenient_pass(text: &str) -> Cow<'_, str> {
                     let Some(end) = after.find("?>") else {
                         break; // unterminated PI: both parsers reject
                     };
-                    // Declaration-like span: '<?xml' + whitespace. See the
-                    // doc comment; pugixml skips it wherever it appears and
-                    // however malformed, roxmltree validates it.
+                    // Declaration-like span: '<?xml' plus whitespace. pugixml
+                    // skips it wherever it appears and however malformed;
+                    // roxmltree validates it. See the doc comment.
                     let after_bytes = after.as_bytes();
                     if after.starts_with("xml")
                         && after_bytes.len() > 3
@@ -522,14 +562,16 @@ fn pugixml_lenient_pass(text: &str) -> Cow<'_, str> {
 }
 
 /// True when the document's element nesting depth exceeds
-/// [`MAX_ELEMENT_DEPTH`]. A single iterative pass: comments, CDATA sections,
-/// the DOCTYPE (including its internal subset), and PIs are skipped
-/// wholesale; start tags are scanned to their closing `>` honoring quoted
-/// attribute values (raw `>` and `/` are legal inside them); self-closing
-/// tags add no depth. Unterminated constructs report "not exceeded" so
-/// roxmltree produces its own, more precise error for them. Documents this
-/// scan miscounts are not well-formed and fail the roxmltree parse anyway;
-/// for well-formed input the count is exact.
+/// [`MAX_ELEMENT_DEPTH`].
+///
+/// One iterative pass, no recursion, because it has to survive the input it is
+/// there to reject. Comments, CDATA sections, the DOCTYPE with its internal
+/// subset, and PIs are skipped wholesale; start tags are scanned to their
+/// closing `>` honoring quoted attribute values, inside which raw `>` and `/`
+/// are legal; self-closing tags add no depth. Unterminated constructs report
+/// "not exceeded" so roxmltree can produce its own, more precise error. The
+/// count is exact for well-formed input, and anything this scan miscounts is
+/// not well-formed and fails the roxmltree parse anyway.
 fn element_depth_exceeds(text: &str) -> bool {
     let bytes = text.as_bytes();
     let mut depth = 0usize;
@@ -605,18 +647,17 @@ fn element_depth_exceeds(text: &str) -> bool {
     false
 }
 
-/// Parse decoded text into a roxmltree document. Together with
-/// [`decode_xml_bytes`] and `pugixml_lenient_pass` this is the
-/// `pugi::xml_document::load_buffer` equivalent (DEFAULT pugixml options; see
-/// PARITY-NOTES for the option mapping). `allow_dtd` is enabled so a harmless
-/// DOCTYPE does not hard-fail where pugixml would skip it; entity references
-/// to DTD-declared entities never reach expansion because
-/// [`parse_module_config`] neutralizes them in the lenient pass first.
+/// Parse decoded text into a roxmltree document.
+///
+/// `allow_dtd` is enabled so a harmless DOCTYPE does not hard-fail where
+/// pugixml would skip it. References to DTD-declared entities never reach
+/// expansion, because [`parse_module_config`] neutralizes them in the lenient
+/// pass first; that ordering is what makes `allow_dtd` safe here.
 ///
 /// Element nesting deeper than [`MAX_ELEMENT_DEPTH`] is rejected as
-/// [`FomodXmlError::TooDeep`] BEFORE roxmltree runs: its per-depth recursion
-/// would otherwise abort the whole process with an uncatchable stack
-/// overflow on input that pugixml (and therefore the C++ pipeline) parses.
+/// [`FomodXmlError::TooDeep`] before roxmltree runs: its per-depth recursion
+/// would otherwise abort the whole process with an uncatchable stack overflow
+/// on input pugixml parses without complaint.
 pub fn load_document(text: &str) -> Result<Document<'_>, FomodXmlError> {
     if element_depth_exceeds(text) {
         return Err(FomodXmlError::TooDeep(MAX_ELEMENT_DEPTH));
@@ -628,11 +669,10 @@ pub fn load_document(text: &str) -> Result<Document<'_>, FomodXmlError> {
     Document::parse_with_options(text, options).map_err(FomodXmlError::Parse)
 }
 
-/// Bytes -> owned [`FomodInstaller`] in one call: [`decode_xml_bytes`] +
-/// `pugixml_lenient_pass` + [`load_document`] + [`parse`]. The roxmltree
-/// document borrows the decoded text, so the borrow stays inside this
-/// function; callers (inference and install services, Tasks 12/15) hand over
-/// bytes and receive an owned IR.
+/// Bytes to an owned [`FomodInstaller`] in one call: [`decode_xml_bytes`],
+/// `pugixml_lenient_pass`, [`load_document`], [`parse`]. The roxmltree document
+/// borrows the decoded text, so that borrow stays inside this function and the
+/// inference and install services hand over bytes and receive an owned IR.
 pub fn parse_module_config(
     bytes: &[u8],
     archive_prefix: &str,
@@ -646,21 +686,43 @@ pub fn parse_module_config(
 // ---------------------------------------------------------------------------
 // pugixml tree-view helpers
 //
-// pugixml with DEFAULT parse options builds a tree of elements, non-whitespace
-// pcdata, and cdata nodes; comments, PIs, the declaration, and whitespace-only
-// pcdata are NOT in the tree. roxmltree keeps everything, so these helpers
-// reproduce the pugixml view. Name matching: pugixml compares raw qualified
-// names; roxmltree local names match them for every un-prefixed element (the
-// only kind FOMOD schemas produce) - see PARITY-NOTES for the edge cases.
+// Under default parse options pugixml's tree holds elements, non-whitespace
+// pcdata and cdata nodes. Comments, PIs, the declaration and whitespace-only
+// pcdata are absent from it. roxmltree keeps all of them, so these helpers
+// reproduce the pugixml view. On name matching: pugixml compares raw qualified
+// names, and roxmltree local names match them for every un-prefixed element,
+// which is the only kind FOMOD schemas produce. Edge cases in PARITY-NOTES.md.
+//
+// The invisible fact all three text helpers turn on: roxmltree merges a run of
+// adjacent pcdata and CDATA chunks into one text node whose range() covers only
+// the first raw chunk. pugixml keeps the chunks as separate nodes.
+//
+//   source:    <flag>  abc<![CDATA[def]]>tail</flag>
+//                     ^^^^^^^^^^^^^^^^^^^^^^^^^
+//   roxmltree: [ one text node, decoded value "  abcdeftail" ]
+//              range() covers only the first raw chunk: "  abc"
+//   pugixml:   [pcdata "  abc"] [cdata "def"] [pcdata "tail"]
+//              node.text() -> "  abc"   (first node in the pugi tree)
+//
+// Whitespace-only chunk before a CDATA section:
+//
+//   source:    <flag>  <![CDATA[ ]]></flag>
+//   roxmltree: [ one text node "   " ]
+//   pugixml:   [pcdata dropped] [cdata " "]  -> node.text() = " "
+//              (a cdata node exists even when it is whitespace-only or empty)
+//
+// So text_node_exists_in_pugi_tree and pugi_text walk the raw input chunks
+// instead of trusting the merged node: existence is decided on raw source
+// chars, while the value comes from the decoded text.
 // ---------------------------------------------------------------------------
 
-/// First element child with the given name: pugixml `node.child(name)`.
+/// First element child with the given name, as pugixml `node.child(name)`.
 fn child<'a, 'input>(node: Node<'a, 'input>, name: &str) -> Option<Node<'a, 'input>> {
     node.children()
         .find(|c| c.is_element() && c.tag_name().name() == name)
 }
 
-/// Element children with the given name, in document order: pugixml
+/// Element children with the given name, in document order, as pugixml
 /// `node.children(name)`.
 fn named_children<'a, 'input>(
     node: Node<'a, 'input>,
@@ -670,25 +732,27 @@ fn named_children<'a, 'input>(
         .filter(move |c| c.is_element() && c.tag_name().name() == name)
 }
 
-/// Attribute value with a fallback: pugixml `attribute(name).as_string(def)`.
+/// Attribute value with a fallback, as pugixml
+/// `attribute(name).as_string(def)`. An attribute present but empty yields the
+/// empty string, not the fallback.
 fn attr_or<'a>(node: Node<'a, '_>, name: &str, default: &'a str) -> &'a str {
     node.attribute(name).unwrap_or(default)
 }
 
-/// True when the string is empty or all pugixml `ct_space` bytes. pugixml
-/// decides whether to drop a pcdata run on the RAW source chars, BEFORE escape
-/// expansion (`PUGI_IMPL_SKIPWS` stops at the '&' of a character reference),
-/// so callers must pass the raw input slice, never the decoded text: raw
-/// `&#32;` is a pcdata node whose decoded value is " ", not a dropped run.
+/// True when the string is empty or all pugixml `ct_space` bytes.
+///
+/// Pass the raw input slice, never the decoded text. pugixml decides whether to
+/// drop a pcdata run on the raw source chars, before escape expansion, because
+/// `PUGI_IMPL_SKIPWS` stops at the `&` of a character reference. So raw `&#32;`
+/// is a pcdata node whose decoded value is " ", not a dropped run, and passing
+/// decoded text here would drop it.
 fn is_ws_only(s: &str) -> bool {
     s.bytes().all(is_ct_space)
 }
 
-/// True when this roxmltree text node would exist in the pugixml tree.
-/// roxmltree merges adjacent pcdata/CDATA runs into a single text node whose
-/// `range()` covers only the first raw chunk; a chunk adjacent to a CDATA
-/// section always yields a pugixml node (cdata is kept even when
-/// whitespace-only), otherwise pcdata whose RAW source chars are
+/// True when this roxmltree text node would exist in the pugixml tree. A chunk
+/// adjacent to a CDATA section always yields a pugixml node, since cdata is
+/// kept even when whitespace-only; otherwise pcdata whose raw source chars are
 /// whitespace-only is dropped (see [`is_ws_only`]).
 fn text_node_exists_in_pugi_tree(doc: &Document, node: Node) -> bool {
     let input = doc.input_text();
@@ -698,15 +762,16 @@ fn text_node_exists_in_pugi_tree(doc: &Document, node: Node) -> bool {
         || !is_ws_only(&input[range.start..range.end])
 }
 
-/// pugixml `node.first_child()` truthiness: any element, cdata, or
+/// pugixml `node.first_child()` truthiness: true for any element, cdata or
 /// non-whitespace pcdata child.
 fn pugi_has_first_child(doc: &Document, node: Node) -> bool {
     node.children()
         .any(|c| c.is_element() || (c.is_text() && text_node_exists_in_pugi_tree(doc, c)))
 }
 
-/// pugixml `parse_eol`: `\r\n` -> `\n`, lone `\r` -> `\n`. Only needed on the
-/// raw-chunk path below; roxmltree already normalizes its decoded text.
+/// Normalize line endings as pugixml `parse_eol` does: `\r\n` to `\n`, lone
+/// `\r` to `\n`. Only the raw-chunk path below needs it; roxmltree already
+/// normalizes its decoded text.
 fn normalize_eol(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -723,14 +788,16 @@ fn normalize_eol(s: &str) -> String {
     out
 }
 
-/// pugixml `parse_escapes` + `parse_eol` over one raw pcdata chunk: decode the
-/// five predefined entities and character references, leave anything
-/// unrecognized literal (as pugixml does), and normalize line endings on the
-/// LITERAL segments only - a reference-produced `\r` (e.g. `&#13;`) survives
-/// in both pugixml and roxmltree, so it must not be re-normalized here. Only
-/// used for chunks roxmltree merged into a neighboring CDATA section; the
-/// document has already parsed (post lenient pass), so undeclared entities
-/// cannot reach here, but the literal-`&` fallback is kept defensively.
+/// Decode one raw pcdata chunk the way pugixml's `parse_escapes` plus
+/// `parse_eol` do: decode the five predefined entities and character
+/// references, leave anything unrecognized literal, and normalize line endings
+/// on the literal segments only.
+///
+/// Normalizing the whole chunk would be wrong: a reference-produced `\r`, such
+/// as `&#13;`, survives in both pugixml and roxmltree and must not be rewritten
+/// to `\n`. Only chunks roxmltree merged into a neighboring CDATA section come
+/// through here. The document has already parsed by then, so undeclared
+/// entities cannot reach this code, and the literal-`&` fallback is defensive.
 fn decode_pcdata_chunk(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
@@ -772,15 +839,15 @@ fn decode_pcdata_chunk(raw: &str) -> String {
     out
 }
 
-/// pugixml `node.text().as_string()`: the value of the FIRST pcdata/cdata
-/// child in the pugixml tree - never concatenated mixed content. Element
-/// children are skipped over (pugixml `xml_text` scans past them), and
-/// whitespace-only pcdata does not exist in that tree.
+/// The value of the first pcdata or cdata child in the pugixml tree, as
+/// pugixml `node.text().as_string()`. Never concatenated mixed content:
+/// element children are skipped over, the way pugixml's `xml_text` scans past
+/// them, and whitespace-only pcdata does not exist in that tree.
 ///
-/// roxmltree merges directly adjacent pcdata/CDATA runs into one text node,
-/// so when a run involves CDATA this walks the raw chunks the way the pugixml
-/// tree stores them; the common no-CDATA case uses roxmltree's decoded text
-/// directly.
+/// roxmltree merges directly adjacent pcdata and CDATA runs into one text node,
+/// so a run that involves CDATA is walked chunk by chunk the way the pugixml
+/// tree stores it. The common no-CDATA case uses roxmltree's decoded text
+/// directly. Returns an empty string when the element has no such child.
 fn pugi_text(doc: &Document, node: Node) -> String {
     let input = doc.input_text();
     for node_child in node.children() {
@@ -790,9 +857,9 @@ fn pugi_text(doc: &Document, node: Node) -> String {
         let range = node_child.range();
         let starts_cdata = input[range.start..].starts_with("<![CDATA[");
         if !starts_cdata && !input[range.end..].starts_with("<![CDATA[") {
-            // Plain pcdata run (the common case): node existence is decided
-            // on the RAW source chars (pugixml drops ws-only pcdata before
-            // escape expansion, so raw `&#32;` IS a node); the value is
+            // Plain pcdata run (the common case): existence is decided on the
+            // raw source chars, because pugixml drops ws-only pcdata before
+            // escape expansion, so raw `&#32;` is a node. The value is
             // roxmltree's decoded text, exactly pugixml's pcdata value.
             if is_ws_only(&input[range.start..range.end]) {
                 continue; // not a node in the pugixml tree
@@ -809,8 +876,9 @@ fn pugi_text(doc: &Document, node: Node) -> String {
             }
             let chunk_end = input[pos..].find('<').map_or(input.len(), |e| pos + e);
             let raw_chunk = &input[pos..chunk_end];
-            // Existence on the RAW chunk (pre escape expansion), value from
-            // the decoded chunk - matching pugixml's drop-then-decode order.
+            // Existence from the raw chunk, before escape expansion; value
+            // from the decoded chunk. That is pugixml's drop-then-decode
+            // order, and swapping it loses whitespace character references.
             if !is_ws_only(raw_chunk) {
                 return decode_pcdata_chunk(raw_chunk);
             }
@@ -826,11 +894,12 @@ fn pugi_text(doc: &Document, node: Node) -> String {
     String::new()
 }
 
-/// pugixml `xml_attribute::as_int(0)`: missing attribute -> 0; otherwise the
-/// pugixml 1.15 `string_to_integer<unsigned int>` semantics, ported exactly:
-/// skip leading `ct_space`, optional sign, `0x`/`0X` hex prefix support,
-/// digits until the first non-digit (`"abc"` -> 0, `"12abc"` -> 12), and
-/// saturation to `i32::MIN`/`i32::MAX` on overflow.
+/// Read an attribute as an integer the way pugixml `as_int(0)` does. A missing
+/// attribute is 0. Otherwise: skip leading `ct_space`, take an optional sign,
+/// accept a `0x` or `0X` hex prefix, consume digits until the first non-digit
+/// (`"abc"` gives 0, `"12abc"` gives 12), and saturate to `i32::MIN` or
+/// `i32::MAX` on overflow. It never fails, so a garbage `priority` attribute
+/// silently becomes 0 rather than rejecting the installer.
 fn pugi_as_int(attr: Option<&str>) -> i32 {
     let Some(value) = attr else {
         return 0;
@@ -877,8 +946,7 @@ fn pugi_as_int(attr: Option<&str>) -> i32 {
             i += 1;
         }
         let digits = i - start;
-        // 32-bit constants from the C++ template: max_digits10 = 10,
-        // max_lead = '4', high_bit = 31.
+        // 32-bit constants: max_digits10 = 10, max_lead = '4', high_bit = 31.
         overflow = digits >= 10
             && !(digits == 10 && (b[start] < b'4' || (b[start] == b'4' && result >> 31 != 0)));
     }
@@ -896,11 +964,32 @@ fn pugi_as_int(attr: Option<&str>) -> i32 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// compile_condition: recursively convert a <dependencies> XML node into IR
-// ---------------------------------------------------------------------------
-
-/// Mirror of `FomodIRParser::compile_condition`.
+/// Compile a `<dependencies>` element into a [`FomodCondition`] tree.
+///
+/// Infallible: every malformed input degrades to a well-formed condition, so
+/// the caller never handles an error. The degradations are the part worth
+/// knowing.
+///
+/// **Attribute defaults.** `operator` on the composite defaults to `"And"`,
+/// `state` on `<fileDependency>` and `type` on `<pluginDependency>` default to
+/// `"Active"`. Every other leaf attribute defaults to the empty string. An
+/// unrecognized `operator` value parses to `And`, not to an error.
+///
+/// **Breadth.** Element children past [`MAX_CONDITION_CHILDREN`] are dropped
+/// silently and the walk stops there. The counter increments before the
+/// element name is dispatched, so an unknown element consumes a cap slot even
+/// though it contributes no child.
+///
+/// **Depth.** A `<dependencies>` nested deeper than [`MAX_DEPENDENCY_DEPTH`]
+/// does not fail: the subtree is replaced by an empty `Or` composite, which
+/// evaluates to always-false, and its real children are discarded.
+///
+/// **Logging.** Breadth truncation, depth truncation and every skipped unknown
+/// element write a warning through [`Logger`], which appends to
+/// `logs/salma.log` and fires the host log callback. That is real file I/O on
+/// the parse path, and on adversarial input the unknown-element warning fires
+/// once per skipped child, up to [`MAX_CONDITION_CHILDREN`] lines for a single
+/// condition node.
 fn compile_condition(deps_node: Node) -> FomodCondition {
     compile_condition_impl(deps_node, 0)
 }
@@ -912,8 +1001,7 @@ fn compile_condition_impl(deps_node: Node, depth: i32) -> FomodCondition {
     };
 
     if depth > MAX_DEPENDENCY_DEPTH {
-        // Bail out with an always-false empty Or to safely reject overly deep
-        // conditions.
+        // Reject the subtree with an always-false empty Or.
         Logger::instance().log_warning(
             "[fomod] Condition nesting exceeds maximum depth, treating as always-false",
         );
@@ -982,11 +1070,11 @@ fn compile_condition_impl(deps_node: Node, depth: i32) -> FomodCondition {
                     .push(compile_condition_impl(node_child, depth + 1));
             }
             _ => {
-                // `child_name` is roxmltree's LOCAL name, while the C++ logs
-                // pugixml's qualified name (prefix included). Every match arm
-                // above compares against the same local name, so the port is
-                // self-consistent; only a prefixed unknown element renders
-                // differently (see PARITY-NOTES).
+                // `child_name` is roxmltree's local name, the same name every
+                // match arm above compares against, so the dispatch and this
+                // message agree. pugixml would log the qualified name, prefix
+                // included; only a prefixed unknown element reads differently
+                // (see PARITY-NOTES.md).
                 Logger::instance().log_warning(&format!(
                     "[fomod] Unknown condition element \"{child_name}\" skipped"
                 ));
@@ -997,16 +1085,13 @@ fn compile_condition_impl(deps_node: Node, depth: i32) -> FomodCondition {
     cond
 }
 
-// ---------------------------------------------------------------------------
-// parse_file_entry: convert a <file> or <folder> XML node into IR
-// ---------------------------------------------------------------------------
-
-/// Mirror of `FomodIRParser::parse_file_entry`.
+/// Build one [`FomodFileEntry`] from a `<file>` or `<folder>` element. See
+/// [`parse`] for how `archive_prefix` and the destination fallbacks combine.
 fn parse_file_entry(node: Node, archive_prefix: &str) -> FomodFileEntry {
     let mut entry = FomodFileEntry::default();
     let source_attr = attr_or(node, "source", "");
-    // A PRESENT destination attribute is used verbatim (even when empty);
-    // only an ABSENT attribute falls back to the source value.
+    // A present destination attribute is used verbatim, even when empty; only
+    // an absent attribute falls back to the source value.
     let dest_raw = node.attribute("destination").unwrap_or(source_attr);
 
     let is_folder = node.tag_name().name() == "folder";
@@ -1034,8 +1119,9 @@ fn parse_file_entry(node: Node, archive_prefix: &str) -> FomodFileEntry {
     entry
 }
 
-/// Iterate `<file>`/`<folder>` child elements with non-empty `source`
-/// attributes. Mirror of the C++ `for_each_file_node`.
+/// Iterate the `<file>` and `<folder>` child elements that carry a non-empty
+/// `source` attribute. Everything else, including text nodes and elements with
+/// an empty `source`, is skipped without a warning.
 fn file_nodes<'a, 'input>(parent: Node<'a, 'input>) -> impl Iterator<Item = Node<'a, 'input>> + 'a {
     parent.children().filter(|node| {
         if !node.is_element() {
@@ -1049,10 +1135,10 @@ fn file_nodes<'a, 'input>(parent: Node<'a, 'input>) -> impl Iterator<Item = Node
     })
 }
 
-/// Collect the named element children of an optional parent and order them
-/// per the parent's `order` attribute: the pugixml-typed C++
-/// `get_ordered_nodes(parent, child_name)` wired to roxmltree via the generic
-/// Task 3 port (missing parent -> pugixml null node -> empty list).
+/// Collect the named element children of an optional parent and order them by
+/// the parent's `order` attribute through
+/// [`crate::utils::get_ordered_nodes`]. A `None` parent yields an empty list,
+/// so a missing `<installSteps>` or `<plugins>` is not an error.
 fn ordered_children<'a, 'input>(
     parent: Option<Node<'a, 'input>>,
     child_name: &str,
@@ -1069,19 +1155,29 @@ fn ordered_children<'a, 'input>(
     })
 }
 
-// ---------------------------------------------------------------------------
-// parse: main entry point - walk the FOMOD XML and build the IR
-// ---------------------------------------------------------------------------
-
-/// Mirror of `FomodIRParser::parse(doc, archive_prefix)`: walk the document
-/// and build a fully populated [`FomodInstaller`]. All source paths are
-/// prefixed with `archive_prefix` and normalized. Infallible: a document
-/// without a `<config>` root element returns a default (empty) installer,
-/// and malformed or unknown elements are skipped.
+/// Walk the document and build a fully populated [`FomodInstaller`].
+/// Infallible: a document without a `<config>` root element returns a default
+/// empty installer, and malformed or unknown elements are skipped.
+///
+/// `archive_prefix` is the archive-relative directory that holds the `fomod`
+/// folder, and it must not end with a separator, because this function inserts
+/// the `/` itself. An empty prefix prepends nothing at all, not even a
+/// separator, so `""` yields source paths exactly as the XML spells them. The
+/// caller in `fomod_inference_service` derives the prefix as a substring with
+/// no trailing separator.
+///
+/// Every produced [`FomodFileEntry`] has `source` and `destination` normalized
+/// by [`crate::utils::normalize_path`]: lowercase, forward slashes, no leading
+/// or trailing slash. A `<file>` destination first goes through
+/// [`crate::utils::resolve_file_destination`], the least obvious behavior here:
+/// an empty destination becomes the source filename, and a destination ending
+/// in `/` or `\` is treated as a directory and gets the source filename
+/// appended. `<folder>` destinations skip that step, so an empty folder
+/// destination stays empty and the folder lands at the mod root.
 pub fn parse(doc: &Document, archive_prefix: &str) -> FomodInstaller {
     let mut installer = FomodInstaller::default();
-    // pugixml doc.child("config"): first element child of the document named
-    // "config" (comments before the root are not in the pugixml tree).
+    // First element child of the document named "config", as pugixml
+    // doc.child("config"); comments before the root are not in that tree.
     let Some(config) = doc
         .root()
         .children()
@@ -1237,7 +1333,7 @@ mod tests {
         parse_module_config(xml.as_bytes(), prefix).expect("well-formed test XML must load")
     }
 
-    // --- trap (a): doc.child("config") ---
+    // --- config root lookup ---
 
     #[test]
     fn missing_config_root_returns_empty_default_installer() {
@@ -1254,7 +1350,7 @@ mod tests {
         assert_eq!(installer.steps[0].name, "A");
     }
 
-    // --- trap (b): moduleDependencies dispatch ---
+    // --- moduleDependencies dispatch ---
 
     #[test]
     fn module_dependencies_prefers_dependencies_child() {
@@ -1298,9 +1394,9 @@ mod tests {
 
     #[test]
     fn text_content_makes_module_dependencies_present_but_childless() {
-        // Non-whitespace pcdata IS a pugixml child, so first_child() is
-        // truthy and moduleDependencies compiles from itself; the pcdata is
-        // not an element, so the composite has no children.
+        // Non-whitespace pcdata counts as a pugixml child, so first_child()
+        // is truthy and moduleDependencies compiles from itself; the pcdata
+        // is not an element, so the composite has no children.
         let installer = parse_str("<config><moduleDependencies>x</moduleDependencies></config>");
         let deps = installer.module_dependencies.expect("present");
         assert_eq!(deps.r#type, FomodConditionType::Composite);
@@ -1308,7 +1404,7 @@ mod tests {
         assert!(deps.children.is_empty());
     }
 
-    // --- trap (c): compile_condition ---
+    // --- compile_condition ---
 
     fn compile_from(xml: &str) -> FomodCondition {
         let installer = parse_str(xml);
@@ -1471,8 +1567,8 @@ mod tests {
 
     #[test]
     fn unknown_elements_still_count_toward_the_children_cap() {
-        // The C++ ++child_count happens before the name dispatch, so skipped
-        // unknown elements consume cap slots.
+        // The counter increments before the name dispatch, so skipped unknown
+        // elements consume cap slots.
         let mut xml = String::from("<config><moduleDependencies><dependencies>");
         for _ in 0..9999 {
             xml.push_str("<unknownElement/>");
@@ -1487,7 +1583,7 @@ mod tests {
         assert_eq!(cond.children[0].flag_name, "f0");
     }
 
-    // --- trap (d): parse_file_entry ---
+    // --- parse_file_entry ---
 
     fn required_entries(files_xml: &str, prefix: &str) -> Vec<FomodFileEntry> {
         let xml =
@@ -1497,8 +1593,9 @@ mod tests {
 
     #[test]
     fn destination_present_but_empty_differs_from_absent() {
-        // <file destination=""> -> resolve_file_destination falls back to the
-        // source FILENAME; absent destination falls back to the full source.
+        // <file destination=""> falls back to the source filename through
+        // resolve_file_destination; an absent destination falls back to the
+        // full source path.
         let entries = required_entries(
             "<file source=\"Dir/Plugin.esp\" destination=\"\"/>\
              <file source=\"Dir/Plugin.esp\"/>",
@@ -1595,7 +1692,7 @@ mod tests {
         assert!(!entries[3].always_install && !entries[3].install_if_usable);
     }
 
-    // --- trap (e): for_each_file_node filter ---
+    // --- file/folder node filter ---
 
     #[test]
     fn file_nodes_require_file_or_folder_name_and_non_empty_source() {
@@ -1613,7 +1710,7 @@ mod tests {
         assert_eq!(entries[1].source, "okdir");
     }
 
-    // --- trap (f): ordering via the order attribute on the PARENT ---
+    // --- ordering, read from the order attribute on the parent ---
 
     fn steps_xml(order_attr: &str) -> String {
         let order = if order_attr.is_empty() {
@@ -1660,8 +1757,8 @@ mod tests {
 
     #[test]
     fn step_order_garbage_falls_through_to_document_order() {
-        // The C++ comparator only sorts on exactly "Ascending"/"Descending";
-        // anything else (including casing mismatches) keeps document order.
+        // Only the exact values "Ascending" and "Descending" sort; anything
+        // else, casing mismatches included, keeps document order.
         let installer = parse_str(&steps_xml("ascending"));
         assert_eq!(step_names(&installer), ["Charlie", "Alice", "Bob"]);
         let installer = parse_str(&steps_xml("garbage"));
@@ -1692,7 +1789,7 @@ mod tests {
         assert_eq!(a_plugins, ["a", "z"], "Ascending plugins sorted by name");
     }
 
-    // --- trap (g): step ordinal and visible ---
+    // --- step ordinal and visibility ---
 
     #[test]
     fn ordinals_are_assigned_after_ordering() {
@@ -1746,7 +1843,7 @@ mod tests {
         assert!(step_with_visible("\n\t ").visible.is_none());
     }
 
-    // --- trap (h): typeDescriptor ---
+    // --- typeDescriptor ---
 
     fn plugin_from(plugin_inner: &str) -> FomodPlugin {
         let xml = format!(
@@ -1805,8 +1902,8 @@ mod tests {
         assert_eq!(p0.condition.op, FomodConditionOp::Or);
         assert_eq!(p0.condition.children.len(), 1);
 
-        // ABSENT dependencies -> default-constructed condition: Composite/And
-        // with no children = always-true.
+        // Absent dependencies leave the default condition: Composite/And
+        // with no children, which is always true.
         let p1 = &plugin.type_patterns[1];
         assert_eq!(p1.result_type, PluginType::CouldBeUsable);
         assert_eq!(p1.condition, FomodCondition::default());
@@ -1828,7 +1925,7 @@ mod tests {
         assert_eq!(plugin.type_patterns.len(), 1);
     }
 
-    // --- trap (i): conditionFlags first-text-node semantics ---
+    // --- conditionFlags first-text-node semantics ---
 
     #[test]
     fn flag_value_is_first_text_node_not_concatenated_mixed_content() {
@@ -1936,7 +2033,7 @@ mod tests {
         );
     }
 
-    // --- trap (j): conditionalFileInstalls ---
+    // --- conditionalFileInstalls ---
 
     #[test]
     fn conditional_patterns_default_condition_and_file_filter() {
@@ -1973,7 +2070,7 @@ mod tests {
         assert!(installer.conditional_patterns.is_empty());
     }
 
-    // --- trap (k): plugin dependencies ---
+    // --- plugin dependencies ---
 
     #[test]
     fn plugin_dependencies_are_compiled_when_present() {
@@ -2140,13 +2237,12 @@ mod tests {
         assert!(matches!(err, FomodXmlError::Parse(_)));
     }
 
-    // --- element nesting depth guard (review finding, third pass) ---
+    // --- element nesting depth guard ---
     //
-    // pugixml 1.15 parses arbitrarily deep documents (iterative cursor loop);
     // roxmltree 0.21.1 recurses per nesting level inside Document::parse and
     // aborts the process with an uncatchable stack overflow (measured: debug
     // parses total depth 65, dies at 81, on a 1 MiB stack). load_document
-    // bounds the depth BEFORE roxmltree runs; see MAX_ELEMENT_DEPTH.
+    // bounds the depth before roxmltree runs; see MAX_ELEMENT_DEPTH.
 
     /// `<config>` (depth 1) wrapping `total_depth - 1` nested `<d>` elements.
     fn deeply_nested_doc(total_depth: usize) -> String {
@@ -2164,9 +2260,9 @@ mod tests {
 
     #[test]
     fn element_depth_at_the_limit_still_parses() {
-        // Exercises REAL roxmltree recursion at the bound in this test's
-        // build profile; a passing run is evidence the bound is safe with
-        // margin (debug overflow starts around depth 81).
+        // Drives real roxmltree recursion at the bound in this test's build
+        // profile, so a passing run is evidence the bound is safe with margin
+        // (debug overflow starts around depth 81).
         let installer = parse_str(&deeply_nested_doc(MAX_ELEMENT_DEPTH));
         assert_eq!(installer, FomodInstaller::default());
     }
@@ -2184,10 +2280,11 @@ mod tests {
 
     #[test]
     fn depth_guard_counts_only_real_element_nesting() {
-        // Comment/CDATA/PI bodies and the DOCTYPE internal subset may contain
-        // `<d>` lookalikes, quoted attribute values may contain raw `>` and
-        // `/>`, and siblings/self-closing elements add no depth - none of it
-        // may trip the guard on a document whose real nesting is legal.
+        // Comment, CDATA and PI bodies and the DOCTYPE internal subset may
+        // contain `<d>` lookalikes, quoted attribute values may contain raw
+        // `>` and `/>`, and siblings and self-closing elements add no depth.
+        // None of it may trip the guard on a document whose real nesting is
+        // legal.
         let mut xml = String::from(
             "<!DOCTYPE config [<!ENTITY d \"x\">]>\
              <config a=\"x>y/>\"><installSteps order=\"Explicit\">\
@@ -2209,12 +2306,12 @@ mod tests {
         assert_eq!(installer.steps[0].name, "a > b > c");
     }
 
-    // --- character-reference whitespace: pcdata existence on RAW chars ---
+    // --- character-reference whitespace: pcdata existence on raw chars ---
     //
-    // pugixml drops a whitespace-only pcdata run based on the RAW source
-    // chars BEFORE escape expansion (PUGI_IMPL_SKIPWS stops at the '&' of a
-    // character reference, pugixml.cpp:3476-3496), so raw `&#32;` IS a pcdata
-    // node whose decoded value is " ". Review findings 1/7 (Task 4).
+    // pugixml drops a whitespace-only pcdata run based on the raw source chars
+    // before escape expansion, because PUGI_IMPL_SKIPWS stops at the '&' of a
+    // character reference. So raw `&#32;` is a pcdata node whose decoded value
+    // is " ".
 
     #[test]
     fn charref_whitespace_flag_value_is_a_real_pcdata_node() {
@@ -2254,7 +2351,7 @@ mod tests {
     #[test]
     fn charref_whitespace_survives_in_merged_pcdata_cdata_runs() {
         // The raw first chunk "&#32;" is not whitespace-only, so it is the
-        // pcdata node pugixml's text() returns; value decodes to " ".
+        // pcdata node text() returns; its value decodes to " ".
         let plugin = plugin_from(
             "<conditionFlags><flag name=\"x\">&#32;<![CDATA[cd]]></flag></conditionFlags>",
         );
@@ -2273,12 +2370,12 @@ mod tests {
         );
     }
 
-    // --- pugixml leniency pre-pass: inputs pugixml ACCEPTS must build the
-    //     same IR here (review finding 2) ---
+    // --- lenient pre-pass: input pugixml accepts must build the same IR
+    //     here ---
 
     #[test]
     fn bare_ampersand_in_attribute_stays_literal() {
-        // pugi load_buffer succeeds and the C++ IR carries the raw name.
+        // pugixml loads this and carries the raw name through to the IR.
         let installer = parse_str(
             "<config><installSteps order=\"Explicit\">\
              <installStep name=\"Body & Soul\"><optionalFileGroups/></installStep>\
@@ -2320,7 +2417,7 @@ mod tests {
     #[test]
     fn dtd_declared_entities_stay_literal_like_pugixml() {
         // pugixml skips the DOCTYPE entirely, so '&foo;' cancels in its
-        // escape decoder and stays literal; roxmltree would EXPAND it, but
+        // escape decoder and stays literal; roxmltree would expand it, but
         // the lenient pass neutralizes the reference first.
         let installer = parse_str(
             "<!DOCTYPE config [<!ENTITY foo \"bar\">]>\
@@ -2386,16 +2483,16 @@ mod tests {
 
     #[test]
     fn stray_cdata_terminator_stays_literal_like_pugixml() {
-        // pugixml's pcdata scanner only stops at '<', '&', '\r'
-        // (strconv_pcdata, pugixml.cpp:2712-2742), so a stray ']]>' is
-        // ordinary character data in C++ and the IR carries it; roxmltree
-        // forbids it, the lenient pass rewrites it to ']]&gt;'.
+        // pugixml's pcdata scanner (strconv_pcdata) stops only at '<', '&'
+        // and '\r', so a stray ']]>' is ordinary character data there and
+        // reaches the IR; roxmltree forbids it, so the lenient pass rewrites
+        // it to ']]&gt;'.
         let plugin = plugin_from("<conditionFlags><flag name=\"x\">a]]>b</flag></conditionFlags>");
         assert_eq!(
             plugin.condition_flags,
             vec![("x".to_string(), "a]]>b".to_string())]
         );
-        // Element content where only pcdata EXISTENCE matters.
+        // Element content, where only pcdata existence matters.
         let installer =
             parse_str("<config><moduleDependencies>a]]>b</moduleDependencies></config>");
         let deps = installer.module_dependencies.expect("present");
@@ -2420,10 +2517,10 @@ mod tests {
     #[test]
     fn xml_declarations_are_skipped_like_pugixml() {
         // pugixml with default options (parse_declaration and parse_pi both
-        // off) skips ANY '<?...?>' by scanning for the first '?>', with no
-        // position or grammar validation (parse_question skip branch,
-        // pugixml.cpp:3283-3289); roxmltree validates declarations. The
-        // lenient pass rewrites '<?xml' + whitespace spans to '<!-- -->'.
+        // off) skips any '<?...?>' by scanning for the first '?>', with no
+        // position or grammar validation (the parse_question skip branch);
+        // roxmltree validates declarations. The lenient pass rewrites '<?xml'
+        // plus whitespace spans to '<!-- -->'.
         let step_doc = |prolog: &str, epilog: &str| {
             format!(
                 "{prolog}<config><installSteps order=\"Explicit\">{epilog}\
@@ -2443,8 +2540,8 @@ mod tests {
         // (d) declaration after a leading comment.
         let installer = parse_str(&step_doc("<!-- c --><?xml version=\"1.0\"?>", ""));
         assert_eq!(installer.steps[0].name, "A");
-        // (e) mid-text: the placeholder comment splits the pcdata run the
-        // way the skipped span did in pugixml, so text() is the FIRST run.
+        // (e) mid-text: the placeholder comment splits the pcdata run the way
+        // the skipped span did in pugixml, so text() is the first run.
         let plugin = plugin_from(
             "<conditionFlags><flag name=\"x\">a<?xml version=\"1.0\"?>b</flag></conditionFlags>",
         );
@@ -2464,12 +2561,11 @@ mod tests {
     #[test]
     fn overflowing_char_refs_stay_literal_not_pugixml_wraparound() {
         // Residual divergence inside the recovered reference class, see
-        // PARITY-NOTES "Task 4": pugixml strconv_escape accumulates the code
-        // point with unsigned wraparound (pugixml.cpp:2509-2554), so
-        // 0x100000041 mod 2^32 = 0x41 decodes to "A" and 4294967341 mod 2^32
-        // = 45 decodes to "-". roxmltree rejects the overflow, so the
-        // lenient pass neutralizes the '&' and the port keeps the literal
-        // reference text.
+        // PARITY-NOTES.md: pugixml strconv_escape accumulates the code point
+        // with unsigned wraparound, so 0x100000041 mod 2^32 = 0x41 decodes to
+        // "A" and 4294967341 mod 2^32 = 45 decodes to "-". roxmltree rejects
+        // the overflow, so the lenient pass neutralizes the '&' and the
+        // literal reference text survives instead.
         let plugin = plugin_from(
             "<conditionFlags><flag name=\"x\">&#x100000041; &#4294967341;</flag>\
              </conditionFlags>",
@@ -2480,15 +2576,14 @@ mod tests {
         );
     }
 
-    // --- accepted strictness divergences (review findings 2/5): pugixml
-    //     parses these and the C++ pipeline proceeds to infer, the port
-    //     intentionally declines. Pinned so the boundary stays deliberate;
-    //     rationale in PARITY-NOTES "Task 4". ---
+    // --- accepted strictness divergences: pugixml parses these and this
+    //     parser declines. Pinned so the boundary stays deliberate;
+    //     rationale in PARITY-NOTES.md. ---
 
     #[test]
     fn accepted_divergence_multiple_root_elements_fail() {
-        // pugixml has no single-root rule; doc.child("config") finds the
-        // second root and C++ parses fully.
+        // pugixml has no single-root rule; its doc.child("config") finds the
+        // second root and parses the document fully.
         let err = parse_module_config(b"<junk/><config><installSteps/></config>", "").unwrap_err();
         assert!(matches!(err, FomodXmlError::Parse(_)));
     }
@@ -2502,15 +2597,14 @@ mod tests {
 
     #[test]
     fn accepted_divergence_windows_1252_bytes_fail_decode() {
-        // The most likely real-world hit in the still-rejected inventory
-        // (PARITY-NOTES "Task 4"): a ModuleConfig.xml saved as windows-1252
-        // with byte 0x92 (curly apostrophe) in a plugin name.
-        // guess_buffer_encoding recognizes only ISO-8859-1/latin1
-        // (pugixml.cpp:2053-2068), so the declared windows-1252 falls through
-        // to UTF-8: pugixml does not validate UTF-8, C++ builds a full IR
-        // carrying the raw 0x92 byte (mojibake), and the C++ DLL infers.
-        // Rust strings cannot hold that byte sequence, so the port declines
-        // with a Decode error (Task 1 ABI decision; Task 16 corpus revisit).
+        // The most likely real-world rejection (PARITY-NOTES.md): a
+        // ModuleConfig.xml saved as windows-1252 with byte 0x92, a curly
+        // apostrophe, in a plugin name. guess_buffer_encoding recognizes only
+        // ISO-8859-1 and latin1, so a declared windows-1252 falls through to
+        // UTF-8. pugixml does not validate UTF-8 and would carry the raw 0x92
+        // byte through as mojibake; a Rust String cannot hold it, so this
+        // parser declines with a Decode error. To measure how often this
+        // happens, run scripts/run_harness.py against a live MO2 instance.
         let mut bytes = b"<?xml version=\"1.0\" encoding=\"windows-1252\"?>\
             <config><installSteps order=\"Explicit\"><installStep name=\"S\">\
             <optionalFileGroups order=\"Explicit\"><group name=\"G\" type=\"SelectAny\">\
@@ -2527,8 +2621,8 @@ mod tests {
 
     #[test]
     fn accepted_divergence_undeclared_namespace_prefix_fails() {
-        // pugixml is namespace-unaware; the C++ parser ignores the xsi
-        // attribute and proceeds. roxmltree resolves prefixes and fails.
+        // pugixml is namespace-unaware and ignores the xsi attribute;
+        // roxmltree resolves prefixes and fails on the undeclared one.
         let err = parse_module_config(
             b"<config xsi:noNamespaceSchemaLocation=\"x\"><installSteps/></config>",
             "",
@@ -2565,10 +2659,11 @@ mod tests {
 
     #[test]
     fn accepted_divergence_prefixed_elements_match_local_names() {
-        // Review finding 4: pugixml compares raw qualified names, so C++
-        // sees no "config" root here and returns the default installer; the
-        // port matches namespace-local names and parses. Accepted (real
-        // FOMOD schemas are noNamespaceSchemaLocation, never prefixed).
+        // pugixml compares raw qualified names, so it finds no "config" root
+        // here and yields a default installer; this parser matches
+        // namespace-local names and parses the document. Accepted, because
+        // real FOMOD schemas use noNamespaceSchemaLocation and are never
+        // prefixed.
         let installer = parse_str(
             "<ns:config xmlns:ns=\"urn:x\"><ns:installSteps order=\"Explicit\">\
              <ns:installStep name=\"A\"><ns:optionalFileGroups/></ns:installStep>\
