@@ -1,46 +1,68 @@
 //! Resolve a mod's source archive from its `meta.ini` `installationFile` value.
 //!
-//! Rust port of `src/FomodArchiveResolver.hpp`/`.cpp`. Backs the
-//! `resolveModArchive` C ABI export, which the MO2 Python plugin
-//! (`scripts/mo2-salma.py`) and the dashboard FOMOD scan both call so the two
-//! agree on which archive a mod folder maps to.
+//! Backs the `resolveModArchive` C ABI export, which both the MO2 Python plugin
+//! (`scripts/mo2-salma.py`) and the dashboard FOMOD scan call, so the two agree
+//! on which archive a mod folder maps to.
 //!
-//! Search order, first hit wins (`FomodArchiveResolver.hpp:22-29`):
+//! Step 1 is a gate, not a candidate. An absolute `archive_value` is decided on
+//! the spot: if it does not exist the result is empty and candidates 2 to 6 are
+//! never probed. Only a relative value reaches the first-hit-wins chain.
 //!
-//! 1. `archive_value` itself, when absolute
-//! 2. `$SALMA_DOWNLOADS_PATH/<archive_value>`
-//! 3. `<mod_folder>/<archive_value>`
-//! 4. `<mods_dir>/../<archive_value>`
-//! 5. `<mods_dir>/../downloads/<archive_value>`
-//! 6. `<mods_dir>/../../downloads/<archive_value>`
+//! ```text
+//! gate  archive_value == ""       -> ""   no disk access at all
+//! gate  archive_value absolute    -> exists ? archive_value : ""
+//!                                    a miss here is final, the chain is skipped
 //!
-//! This module has no logger call sites in the C++, so nothing is dropped here.
+//! chain (relative value only), first existing path wins:
+//!   2  <downloads>/<value>                  only when $SALMA_DOWNLOADS_PATH is
+//!                                           set and non-empty
+//!   3  <mod_folder>/<value>                 not emptiness-guarded: an empty
+//!                                           mod_folder probes the process CWD
+//!   4  <parent>/<value>                 \
+//!   5  <parent>/downloads/<value>       |   all three skipped when mods_dir is
+//!   6  <grandparent>/downloads/<value>  /   empty; 6 only when <parent> itself
+//!                                           has a parent
+//!   nothing exists                      -> ""
+//! ```
+//!
+//! `<parent>` is `parent_path(mods_dir)`, not `mods_dir/..`: a trailing
+//! separator on `mods_dir` makes `<parent>` the directory itself. See
+//! `parent_path`.
+//!
+//! The order above is a contract, not a preference. Three places state it: the
+//! diagram, `build_candidates` which builds the list, and
+//! `candidate_order_matches_the_documented_chain` which asserts it. Change one
+//! and the other two have to follow. `PARITY-NOTES.md` records why the order is
+//! what it is.
+//!
+//! Nothing here logs.
 
 use std::path::{Component, Path, PathBuf};
 
-/// C++ `std::filesystem::path::parent_path()`.
+/// Parent directory of `p`, following `std::filesystem::path::parent_path()`
+/// semantics.
 ///
-/// [`Path::parent`] is NOT a drop-in for this; it differs in two ways that both
-/// change which archive gets resolved:
+/// [`Path::parent`] is not a drop-in; it differs in two ways that both change
+/// which archive gets resolved:
 ///
-/// 1. **Trailing separator.** C++ path iteration appends an EMPTY final element
-///    when the path ends in a separator, so `parent_path("C:\MO2\mods\")` is
-///    `"C:\MO2\mods"`. Rust's [`Path::components`] discards the trailing
-///    separator, so `.parent()` yields `"C:\MO2"` - one directory too high, which
-///    would silently shift candidates 4-6 of the search chain. Callers do not
-///    normalize (`Mo2FomodController.cpp:439` and `scripts/mo2-salma.py:931`
-///    both pass the configured path straight through), so this is reachable.
-/// 2. **No relative part.** The standard returns `*this` when
-///    `has_relative_path()` is false, i.e. the drive-root and prefix-only cases
-///    (`C:\`, `C:`) that Rust reports as parentless.
+/// 1. **Trailing separator.** A path that ends in a separator has an empty final
+///    element, so the parent of `C:\MO2\mods\` is `C:\MO2\mods`. Rust's
+///    [`Path::components`] discards the trailing separator, so `.parent()`
+///    yields `C:\MO2`, one directory too high, silently shifting candidates 4 to
+///    6 of the search chain. Callers do not normalize: `process_single_mod` in
+///    `Mo2FomodController.cpp` and the FOMOD scan tool in
+///    `scripts/mo2-salma.py` both pass the configured path straight through, so
+///    a trailing separator does reach here.
+/// 2. **No relative part.** The drive-root and prefix-only cases (`C:\`, `C:`)
+///    return a copy of the input, where Rust reports no parent at all.
 ///
-/// Known unmodeled case: MSVC's `_Parse_root_name` treats `\\server` as the UNC
-/// root name while Rust's `Prefix::UNC` claims `\\server\share`, so a UNC
-/// `mods_dir` decomposes differently. A UNC MO2 mods directory is exotic and no
-/// caller produces one; recorded in PARITY-NOTES "Task 15" rather than modeled.
-/// Verbatim `\\?\` paths are likewise out of scope.
+/// One case stays unmodeled: a UNC `mods_dir` decomposes differently, because
+/// the UNC root name is `\\server` under these semantics but `\\server\share`
+/// under Rust's `Prefix::UNC`. No caller produces a UNC MO2 mods directory;
+/// `PARITY-NOTES.md` records the decision not to model it. Verbatim `\\?\` paths
+/// are out of scope as well.
 fn parent_path(p: &Path) -> PathBuf {
-    // No relative part -> the C++ returns a copy of itself.
+    // No relative part -> return a copy of the input.
     let has_relative = p.components().any(|c| {
         matches!(
             c,
@@ -51,9 +73,9 @@ fn parent_path(p: &Path) -> PathBuf {
         return p.to_path_buf();
     }
 
-    // A trailing separator run contributes ONE empty element, so dropping the
-    // last element just strips the separators. Lossy conversion is safe here:
-    // every path reaching this module crossed the C ABI as UTF-8.
+    // A run of trailing separators contributes one empty element, so dropping
+    // the last element just strips the separators. Lossy conversion is safe
+    // here: every path reaching this module crossed the C ABI as UTF-8.
     let s = p.as_os_str().to_string_lossy();
     let trimmed = s.trim_end_matches(['\\', '/']);
     if trimmed.len() < s.len() {
@@ -65,31 +87,42 @@ fn parent_path(p: &Path) -> PathBuf {
         .unwrap_or_else(|| p.to_path_buf())
 }
 
-/// C++ `std::filesystem::path::has_parent_path()`, i.e. a non-empty parent.
+/// True when `parent_path` yields a non-empty path.
 fn has_parent_path(p: &Path) -> bool {
     !parent_path(p).as_os_str().is_empty()
 }
 
 /// Resolve `archive_value` to an existing archive, or an empty path on a miss.
 ///
-/// Mirror of `mo2core::resolve_mod_archive`
-/// (`FomodArchiveResolver.cpp:11-55`). Behaviors reproduced exactly:
+/// The contract:
 ///
 /// - An empty `archive_value` resolves to nothing without touching the disk.
-/// - An ABSOLUTE `archive_value` is accepted only if it exists, and never falls
-///   through to the relative candidates (`FomodArchiveResolver.cpp:21-24`).
-///   A miss there is final.
-/// - `$SALMA_DOWNLOADS_PATH` is consulted only when set AND non-empty, matching
-///   the C++ `downloads && *downloads` guard.
-/// - An empty `mods_dir` skips candidates 4-6 entirely.
+/// - An absolute `archive_value` is accepted only if it exists, and never falls
+///   through to the relative candidates. A miss there is final.
+/// - `$SALMA_DOWNLOADS_PATH` is consulted only when set and non-empty.
+/// - An empty `mods_dir` skips candidates 4 to 6 entirely.
+/// - `mod_folder` has no emptiness guard, unlike `mods_dir`, so an empty
+///   `mod_folder` does not skip candidate 3. `mod_folder.join(archive_path)`
+///   then degrades to the bare relative archive name, and the existence probe
+///   resolves it against the process current directory, which is
+///   non-deterministic inside a DLL that MO2 loads. Deliberate, not an
+///   oversight: adding a guard changes which archive an empty `mod_folder`
+///   resolves to. See `PARITY-NOTES.md`.
 /// - The deepest candidate is added only when the parent itself has a parent.
+/// - The result is not absolutized. Nothing here canonicalizes, so the return
+///   value is the matching candidate exactly as it was built: absolute only when
+///   the input that produced it was absolute (an absolute `archive_value`, or an
+///   absolute `$SALMA_DOWNLOADS_PATH`, `mod_folder` or `mods_dir`). A relative
+///   `mod_folder` or `mods_dir` yields a relative path, which
+///   `capi::resolveModArchive` hands back verbatim across the C ABI, leaving the
+///   consumer to resolve it against its own working directory.
 ///
-/// Note that a ROOT-RELATIVE `archive_value` such as `\payload.7z` is not
-/// absolute on Windows (no drive prefix) on either side, so it reaches the join
-/// candidates, and both `std::filesystem::operator/` and [`Path::join`] let a
-/// rooted right-hand side REPLACE the base. That is the same rooted-path
-/// characteristic documented for `enqueue_entry` in PARITY-NOTES "Task 14";
-/// it is a read-only existence probe here, and it is reproduced, not fixed.
+/// A root-relative `archive_value` such as `\payload.7z` is not absolute on
+/// Windows, because it carries no drive prefix, so it reaches the join
+/// candidates, and [`Path::join`] lets a rooted right-hand side replace the
+/// base entirely. Here that is only a read-only existence probe. It is
+/// deliberate; see `PARITY-NOTES.md` and the same characteristic on
+/// `enqueue_entry`.
 pub fn resolve_mod_archive(archive_value: &str, mod_folder: &Path, mods_dir: &Path) -> PathBuf {
     if archive_value.is_empty() {
         return PathBuf::new();
@@ -104,10 +137,8 @@ pub fn resolve_mod_archive(archive_value: &str, mod_folder: &Path, mods_dir: &Pa
         };
     }
 
-    // `var_os` rather than `var`: the C++ `std::getenv` hands back raw bytes and
-    // never validates UTF-8, so a downloads path with non-UTF-8 components must
-    // still be usable here. Empty is treated as unset, matching `downloads &&
-    // *downloads`.
+    // `var_os` rather than `var`: a downloads path with non-UTF-8 components
+    // must still be usable, and `var` would drop it. Empty is treated as unset.
     let downloads = std::env::var_os("SALMA_DOWNLOADS_PATH").filter(|d| !d.is_empty());
 
     build_candidates(
@@ -121,13 +152,12 @@ pub fn resolve_mod_archive(archive_value: &str, mod_folder: &Path, mods_dir: &Pa
     .unwrap_or_default()
 }
 
-/// The ordered candidate list for a RELATIVE `archive_path`, with the downloads
+/// The ordered candidate list for a relative `archive_path`, with the downloads
 /// directory passed in rather than read from the environment.
 ///
-/// Split out of [`resolve_mod_archive`] so the search ORDER is testable without
+/// Split out of [`resolve_mod_archive`] so the search order is testable without
 /// mutating process-global environment state, which would race the other tests
-/// in this binary. The C++ builds the same vector inline
-/// (`FomodArchiveResolver.cpp:26-44`).
+/// in this binary.
 fn build_candidates(
     archive_path: &Path,
     downloads: Option<&Path>,
@@ -172,10 +202,10 @@ mod tests {
     /// A relative archive name no real downloads directory can already hold.
     ///
     /// `resolve_mod_archive` consults `$SALMA_DOWNLOADS_PATH` as candidate 2,
-    /// ahead of every scratch-tree candidate, and that variable IS set on a
-    /// developer box (`scripts/setup-env.bat`). A fixed name like `payload.7z`
-    /// would let a real download shadow the fixture and flip these assertions,
-    /// so each test resolves a name that cannot pre-exist.
+    /// ahead of every scratch-tree candidate, and `setup.bat` sets that variable
+    /// on a developer box. A fixed name like `payload.7z` would let a real
+    /// download shadow the fixture and flip these assertions, so each test
+    /// resolves a name that cannot already exist.
     fn unique_name() -> String {
         format!("payload-{}.7z", random_hex_string(12))
     }
@@ -208,14 +238,14 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    /// An absolute miss is FINAL: it must not fall through to the relative
+    /// An absolute miss is final: it must not fall through to the relative
     /// candidate chain even when a same-named file sits in the mod folder.
     #[test]
     fn absolute_missing_value_does_not_fall_through() {
         let root = scratch("abs-miss");
         let absent = root.join("ghost.7z");
-        // A file with the same NAME exists under the mod folder; the C++ still
-        // returns empty because the absolute branch returns unconditionally.
+        // A file with the same name exists under the mod folder, but the
+        // absolute branch returns unconditionally, so the result stays empty.
         touch(&root.join("ghost.7z.decoy"));
         let got = resolve_mod_archive(absent.to_str().unwrap(), &root, &root);
         assert_eq!(got, PathBuf::new());
@@ -276,8 +306,8 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    /// An empty mods_dir (the C ABI's null modsDir) skips candidates 4-6, so a
-    /// file that only the mods_dir chain would have found stays unresolved.
+    /// An empty mods_dir (the C ABI's null modsDir) skips candidates 4 to 6, so
+    /// a file that only the mods_dir chain would have found stays unresolved.
     #[test]
     fn empty_mods_dir_skips_the_mods_dir_candidates() {
         let root = scratch("nomods");
@@ -298,7 +328,7 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    /// The mod-folder candidate is checked BEFORE the mods_dir chain, so when
+    /// The mod-folder candidate is checked before the mods_dir chain, so when
     /// both hold a match the mod-folder copy wins.
     #[test]
     fn mod_folder_candidate_outranks_the_mods_dir_chain() {
@@ -316,9 +346,10 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
-    /// The full candidate ORDER, asserted without touching the environment.
-    /// Mirrors `FomodArchiveResolver.hpp:22-29` positions 2-6 (position 1, the
-    /// absolute short circuit, never reaches this list).
+    /// The full candidate order, asserted without touching the environment. This
+    /// test is the in-tree authority for positions 2 to 6 of the chain in the
+    /// module docs; position 1, the absolute short circuit, never reaches this
+    /// list.
     #[test]
     fn candidate_order_matches_the_documented_chain() {
         let archive = Path::new("mod.7z");
@@ -363,8 +394,8 @@ mod tests {
         assert_eq!(empty, vec![PathBuf::from(r"C:\game\mods\MyMod\mod.7z")]);
 
         // mods_dir = "C:\mods" -> parent "C:\", whose parent_path is itself, so
-        // has_parent_path stays true and the grandparent entry is still emitted
-        // (a duplicate of the sibling-downloads one), exactly as in the C++.
+        // has_parent_path stays true and the grandparent entry is still emitted,
+        // duplicating the sibling-downloads one.
         let shallow = build_candidates(archive, None, mod_folder, Path::new(r"C:\mods"));
         assert_eq!(
             shallow,
@@ -377,8 +408,8 @@ mod tests {
         );
     }
 
-    /// `parent_path` must mirror the C++ for drive roots, where Rust's
-    /// `Path::parent()` is `None` but `parent_path()` is a copy of the input.
+    /// At a drive root `Path::parent()` is `None`, while `parent_path` returns a
+    /// copy of the input.
     #[test]
     fn parent_path_mirrors_cpp_on_roots_and_relatives() {
         assert_eq!(
@@ -386,7 +417,7 @@ mod tests {
             PathBuf::from(r"C:\mods")
         );
         assert_eq!(parent_path(Path::new(r"C:\mods")), PathBuf::from(r"C:\"));
-        // has_relative_path() == false -> parent_path() is a copy of *this.
+        // No relative part -> parent_path returns a copy of the input.
         assert_eq!(parent_path(Path::new(r"C:\")), PathBuf::from(r"C:\"));
         assert_eq!(parent_path(Path::new("mods")), PathBuf::from(""));
 
@@ -395,13 +426,13 @@ mod tests {
         assert!(!has_parent_path(Path::new("mods")));
     }
 
-    /// A TRAILING SEPARATOR contributes an empty final element in the C++, so
-    /// the parent is the path minus the separator, NOT one level higher. Rust's
-    /// `Path::parent()` gets this wrong, which would shift candidates 4-6 up a
-    /// directory for any caller that passes a trailing-separator mods_dir.
+    /// A trailing separator contributes an empty final element, so the parent is
+    /// the path minus the separator, not one level higher. `Path::parent()`
+    /// disagrees, and inheriting it would shift candidates 4 to 6 up a directory
+    /// for any caller that passes a trailing-separator mods_dir.
     #[test]
     fn parent_path_keeps_the_directory_when_it_ends_in_a_separator() {
-        // The bug this pins: Path::parent() would say r"C:\MO2".
+        // The behavior this pins: Path::parent() would say r"C:\MO2".
         assert_eq!(
             Path::new(r"C:\MO2\mods\").parent(),
             Some(Path::new(r"C:\MO2")),
