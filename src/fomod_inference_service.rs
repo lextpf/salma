@@ -1,31 +1,95 @@
-//! Inference orchestration - Rust port of `src/FomodInferenceService.hpp`/`.cpp`.
+//! Inference orchestration: the single entry point that recovers which FOMOD
+//! options were originally selected.
 //!
-//! This is the integration capstone that ties every already-ported inference
-//! stage together behind the single entry point
-//! [`FomodInferenceService::infer_selections`]. It owns the stages the earlier
-//! tasks did NOT: the installed-file scan ([`scan_installed_files`]), the lazy
-//! contested-file hashing with the bounded instance cache
+//! [`FomodInferenceService::infer_selections`] compares an archive's FOMOD
+//! options against an already-installed mod and returns schema-v2 JSON. Every
+//! other inference module is a stage it drives. Four stages have no other home
+//! and live here: the installed-file scan ([`scan_installed_files`]), lazy
+//! hashing of contested files over an instance-scoped cache
 //! ([`FomodInferenceService::hash_contested_files`]), the Tier-1 `meta.ini`
-//! fomod-plus shortcut ([`try_fomod_plus_json`] + [`try_tier1_cache`]), and the
-//! pre-solve override computation ([`compute_overrides`]).
+//! fomod-plus shortcut ([`try_fomod_plus_json`] and [`try_tier1_cache`]), and
+//! the pre-solve override computation ([`compute_overrides`]).
 //!
-//! ## Exceptions-return-empty contract
+//! ## Pipeline, and every empty-string exit
 //!
-//! The C++ `infer_selections` wraps the whole pipeline in a
-//! `try { ... } catch (const std::exception&) { return ""; }`, and every ABI
-//! caller adds a `catch (...)` on top. The Rust port has no exceptions: each
-//! failure point (`archive not found`, `mod not found`, `not a FOMOD`, XML read
-//! miss, XML parse error) returns `String::new()` directly, and the ABI wrapper
-//! (`capi::inferFomodSelections`) supplies the panic firewall via `guard()`. No
-//! `Result` crosses the FFI boundary.
+//! ```text
+//!   0/9  banner
+//!          |-- archive path missing --------------------------> ""
+//!          |-- mod path missing ------------------------------> ""
+//!        try_fomod_plus_json(meta.ini) -> Option<Value>   candidate only
+//!   1/9  list_entries_with_sizes                          (t_list)
+//!   2/9  find fomod/moduleconfig.xml, shallowest path wins
+//!          |-- no candidate entry ----------------------------> ""
+//!   3/9  read_entries_batch(xml)
+//!          |-- entry not readable ----------------------------> ""
+//!   4/9  parse_module_config -> FomodInstaller
+//!          |-- XML parse error -------------------------------> ""
+//!   5/9  expand_all_atoms -> build_atom_index -> excluded dests
+//!   6/9  scan_installed_files -> build_target_tree         (t_scan)
+//!   7/9  hash_contested_files    mutates target + atoms + atom_index
+//!   7b   compute_overrides -> diag_builder.set_step_visibility
+//!        try_tier1_cache(candidate), only when a candidate exists
+//!          |-- Hit   -> build_tier1_json -------------------> dump(2)
+//!          |-- Abort -> malformed cached name --------------> ""
+//!          '-- Miss  -> fall through
+//!   7c   propagate -> diag_builder.absorb_propagation
+//!   8/9  solve_fomod_csp                                   (t_solve)
+//!   9/9  assemble_json + add_output_tree + add_repro_detail -> dump(2)
+//! ```
 //!
-//! ## `fully_resolved` is solver-internal
+//! The numbered labels are the ones the log lines emit. Tier-1 validation
+//! carries no letter on purpose: it runs between the 7b overrides and the 7c
+//! propagate, and a letter there would put the log vocabulary out of order. It
+//! sits at that point because it needs the overrides to simulate with, and
+//! because short-circuiting before the expensive propagate and solve is the
+//! whole point of the shortcut.
 //!
-//! The service NEVER branches on `propagation.fully_resolved`. It always calls
-//! `solve_fomod_csp`; the only service-level use of the propagation result is the
-//! `None`-vs-`Some(&propagation)` argument, decided by
-//! `propagation.resolved_groups.is_empty()`. All fully-resolved skip/seed logic
-//! lives inside `solve_fomod_csp` (Task 9), which this task does not touch.
+//! Tier 1 is a candidate, never a result. The cached blob is name-resolved
+//! against the parsed IR, forward-simulated with the same atoms and overrides
+//! the solver path uses, and discarded unless it reproduces the installed tree
+//! exactly.
+//!
+//! ## Any failure returns an empty string
+//!
+//! Six points return `String::new()`, each marked in the diagram above. No
+//! `Result` crosses the FFI boundary, and the contract covers error conditions
+//! only: `capi::inferFomodSelections` supplies the panic firewall via `guard()`.
+//!
+//! The [`Tier1Outcome::Abort`] exit is the least obvious of the six, because
+//! Tier 1 otherwise reads like an optional fast path. A cached fomod-plus blob
+//! whose step or group is not an object, or whose `name` key is present but not
+//! a string, fails the whole call: it yields `""` rather than falling through to
+//! propagate and solve. A Tier-1 miss is a different outcome and does fall
+//! through ([`Tier1Outcome::Miss`]).
+//!
+//! ## Propagation feeds the solver; `fully_resolved` is informational
+//!
+//! The service never branches on `propagation.fully_resolved`. It always calls
+//! `solve_fomod_csp`. The propagation result is read at three service-level
+//! sites:
+//!
+//! 1. The solver argument: `Some(&propagation)`, or `None` when
+//!    `propagation.resolved_groups.is_empty()`.
+//! 2. The Step-7c log line, which reads `resolved_groups.len()` and
+//!    `fully_resolved`.
+//! 3. `diag_builder.absorb_propagation(&propagation)`, which copies per-group
+//!    `resolved_by` plus per-plugin reason codes and details into the
+//!    diagnostics, and therefore into the emitted schema-v2 JSON. Removing the
+//!    propagate call would change the output document, not just the solver seed.
+//!
+//! `diag_builder.finalize(&result, &propagation, &installer)` is not a fourth
+//! use: its parameter is named `_propagation` and the body never reads it.
+//!
+//! Inside the solver the propagation result is consumed twice, and neither
+//! consumer is a skip. [`crate::fomod_csp_options::get_options_for_group`] drops
+//! any raw option that selects a plugin pruned from `narrowed_domains`, which is
+//! how a fully-resolved group collapses to a single option instead of being
+//! bypassed by a branch. `solve_fomod_csp` writes an empty `phase_per_group`
+//! entry for every group in `resolved_groups`, so diagnostics attribute those
+//! groups to propagation rather than to a CSP phase.
+//!
+//! `PropagationResult::fully_resolved` itself has no consumer anywhere in the
+//! crate: the propagator computes it and it appears only in log lines.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -38,10 +102,10 @@ use crate::fomod_atom::{AtomIndex, ExpandedAtoms, Origin, TargetTree};
 use crate::fomod_csp_solver::solve_fomod_csp;
 use crate::fomod_csp_types::InferenceOverrides;
 use crate::fomod_dependency_evaluator::ExternalConditionOverride;
-use crate::fomod_forward_simulator::{SimulatedTree, compare_trees, simulate};
+use crate::fomod_forward_simulator::{SimulatedTree, classify_dests, compare_trees, simulate};
 use crate::fomod_inference_atoms::{
-    add_output_tree, assemble_json, build_atom_index, build_target_tree, compute_excluded_dests,
-    expand_all_atoms,
+    add_output_tree, add_repro_detail, assemble_json, build_atom_index, build_target_tree,
+    compute_excluded_dests, expand_all_atoms,
 };
 use crate::fomod_ir::FomodInstaller;
 use crate::fomod_ir_parser::parse_module_config;
@@ -55,16 +119,14 @@ use crate::json::{self, Value};
 use crate::logger::Logger;
 use crate::utils::{fnv1a_hash, normalize_path, to_lower};
 
-/// Upper bound on cache entries before the entire cache is cleared. Mirror of the
-/// C++ `FomodInferenceService::kMaxCacheEntries`.
+/// Entry count above which the whole hash cache is cleared.
 pub const K_MAX_CACHE_ENTRIES: usize = 100_000;
 
-/// Maximum installed-file size (256 MiB) that is read into memory for hashing.
-/// Mirror of the C++ file-scoped `kMaxHashFileSize`.
+/// Largest installed file (256 MiB) read into memory for hashing. Anything
+/// bigger keeps its scanned size and a zero hash.
 const K_MAX_HASH_FILE_SIZE: u64 = 256 * 1024 * 1024;
 
-/// Cached FNV-1a content hash + uncompressed size for one archive entry. Mirror
-/// of `FomodInferenceService::CachedHash`.
+/// Cached FNV-1a content hash and uncompressed size for one archive entry.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CachedHash {
     /// FNV-1a content hash of the archive entry's data.
@@ -73,20 +135,25 @@ pub struct CachedHash {
     pub size: u64,
 }
 
-/// Reverse-engineers which FOMOD options were originally selected. Mirror of
-/// `mo2core::FomodInferenceService`.
+/// Reverse-engineers which FOMOD options were originally selected.
 ///
-/// A fresh instance is created per inference call (matching the C++ `CApi`
-/// creating a fresh `FomodInferenceService` per `inferFomodSelections` call), so
-/// the instance-scoped hash cache is effectively per-call in the DLL path; it is
-/// ported faithfully regardless (bound check + clear-all under one lock).
+/// `capi::inferFomodSelections` builds a fresh instance per call, so on the DLL
+/// path the hash cache always starts empty and the [`K_MAX_CACHE_ENTRIES`] cap
+/// never fires there. Only a caller that reuses one instance across calls, such
+/// as a test or direct library use, sees the cache retain anything.
 #[derive(Debug, Default)]
 pub struct FomodInferenceService {
     /// Instance-scoped hash cache for contested archive entries, keyed by
-    /// `"<archive_signature>\n<entry_path>"`. Bounded to
-    /// [`K_MAX_CACHE_ENTRIES`]; cleared wholesale when exceeded. The C++ pairs a
-    /// `std::mutex` with an `unordered_map`; a single `Mutex<HashMap>` captures
-    /// both.
+    /// `"<archive_signature>\n<entry_path>"`.
+    ///
+    /// Soft cap only. At the top of every
+    /// [`FomodInferenceService::hash_contested_files`] call the map is cleared
+    /// wholesale if it already holds more than [`K_MAX_CACHE_ENTRIES`] entries.
+    /// Inserts made later in that same call are not capped, so the map can end a
+    /// call above the cap. There is no insertion-time eviction and no LRU.
+    ///
+    /// The lock is taken up to three times per call and is never held across
+    /// archive I/O.
     cache: Mutex<HashMap<String, CachedHash>>,
 }
 
@@ -96,19 +163,43 @@ impl FomodInferenceService {
         FomodInferenceService::default()
     }
 
-    /// Infer FOMOD selections from an archive's FOMOD XML vs the installed files.
-    /// Mirror of `FomodInferenceService::infer_selections`.
+    /// Infer FOMOD selections by comparing the archive's FOMOD XML against the
+    /// installed files.
     ///
-    /// Returns schema-v2 JSON (`dump(2)`) on success, or an empty string on ANY
-    /// failure (archive/mod not found, not a FOMOD, XML read/parse failure). All
-    /// error paths collapse to `""`, mirroring the C++ outer try/catch.
+    /// Returns schema-v2 JSON (`dump(2)`) on success, or an empty string on any
+    /// of six failures: archive not found, mod not found, not a FOMOD, the XML
+    /// entry unreadable, an XML parse error, or a malformed Tier-1 cache blob.
+    /// The guarantee covers error conditions, not panics; `capi::guard` contains
+    /// those.
+    ///
+    /// `archive_path` and `mod_path` are host filesystem paths in the platform's
+    /// own separator form, and both must exist. The call logs its banner first,
+    /// then checks both paths and returns `""` if either is missing.
+    ///
+    /// # Cost and I/O
+    ///
+    /// Synchronous, blocking, and the most expensive entry point in the crate.
+    /// One call can take minutes. It:
+    ///
+    /// - lists the archive (`archive_service::list_entries_with_sizes`);
+    /// - reads and parses `fomod/ModuleConfig.xml` out of the archive;
+    /// - batch-reads archive entries for contested destinations and FNV-1a
+    ///   hashes them in memory;
+    /// - walks the whole `mod_path` tree recursively ([`scan_installed_files`]);
+    /// - reads entire installed files into memory to hash them, skipping any
+    ///   file larger than `K_MAX_HASH_FILE_SIZE` (256 MiB);
+    /// - runs a CSP search bounded by `CONFIG.time_limit_seconds`, which
+    ///   defaults to 600 seconds.
+    ///
+    /// It writes no file except the log, and runs entirely on the calling
+    /// thread.
     pub fn infer_selections(&self, archive_path: &str, mod_path: &str) -> String {
         let t_total = Instant::now();
         let logger = Logger::instance();
 
-        // (SVC 775-783) The banner reports the archive's extension WITH its dot
-        // and its size in MB to one decimal. An unreadable size is reported as
-        // 0.0 rather than failing, exactly as the C++ `error_code` overload does.
+        // The banner reports the archive extension with its dot, and the size in
+        // MB to one decimal. An unreadable size is reported as 0.0 rather than
+        // failing the call.
         let archive_ext = Path::new(archive_path)
             .extension()
             .map(|e| format!(".{}", e.to_string_lossy()))
@@ -124,7 +215,7 @@ impl FomodInferenceService {
         logger.log(&format!("[infer] Mod path: \"{mod_path}\""));
         logger.log("[infer] 0/9 Starting inference");
 
-        // (F1) Pre-try existence checks (SVC 787-794): both OUTSIDE the catch.
+        // Both paths must exist. Either miss ends the call with an empty string.
         if !Path::new(archive_path).exists() {
             logger.log_error(&format!("[infer] Archive not found: {archive_path}"));
             return String::new();
@@ -134,11 +225,10 @@ impl FomodInferenceService {
             return String::new();
         }
 
-        // (F1) Read the Tier-1 fomod-plus blob now, but only as a CANDIDATE.
-        // Reading never fails the call (its own errors collapse to `None`).
+        // Read the Tier-1 fomod-plus blob now, but only as a candidate. Reading
+        // never fails the call: its own errors collapse to `None`.
         let t_step = Instant::now();
         let fomod_plus = try_fomod_plus_json(Path::new(mod_path));
-        // The C++ tests `!is_null() && !empty()`; `None` here covers both.
         if fomod_plus.is_some() {
             logger.log(&format!(
                 "[infer] Tier 1 candidate: fomod-plus JSON found, will validate ({}ms)",
@@ -151,14 +241,13 @@ impl FomodInferenceService {
             ));
         }
 
-        // (F2) Everything below the C++ `try` maps a failure to "" via early
-        // return; no Result crosses FFI.
+        // Every failure below returns an empty string early; no Result crosses
+        // the FFI boundary.
         let archive_service = ArchiveService::new();
 
-        // Step 1: List archive entries with sizes. Each `t_*` below measures ONLY
-        // its own stage (the C++ resets a shared `t_step` before each one, SVC
-        // 824/945/1283); measuring from `t_total` would report cumulative elapsed
-        // time in `diagnostics.timings_ms`.
+        // Step 1: List archive entries with sizes. Each `t_*` below measures its
+        // own stage only; measuring from `t_total` would report cumulative
+        // elapsed time in `diagnostics.timings_ms`.
         logger.log("[infer] 1/9 Listing archive entries");
         let t_step = Instant::now();
         let listing = archive_service.list_entries_with_sizes(archive_path);
@@ -170,11 +259,13 @@ impl FomodInferenceService {
         ));
 
         // Build the sorted normalized entry index and the normalized sizes map.
-        // (SVC 836-848) NOTE the size lookup uses the ORIGINAL entry path against
-        // a map keyed by the NORMALIZED path, so sizes only propagate for entries
-        // whose raw path is already normalized. This under-population is a faithful
-        // reproduction of the C++ (its "Look up size using the original archive
-        // path" comment is wrong about the keying); see PARITY-NOTES "Task 12".
+        // The size lookup uses the original entry path against a map keyed by
+        // the normalized path, so a size propagates only for an entry whose raw
+        // path is already lowercase and forward-slashed; every other atom keeps
+        // file_size 0. That under-population is deliberate, not a typo: sizes
+        // feed contested-file detection and the solver's evidence scores, so
+        // changing the lookup key changes what this function infers. See
+        // PARITY-NOTES.md.
         let mut sorted_norm_entries: Vec<String> = Vec::with_capacity(listing.paths.len());
         let mut norm_entry_sizes: HashMap<String, u64> = HashMap::new();
         for entry in &listing.paths {
@@ -256,9 +347,6 @@ impl FomodInferenceService {
         let installer = match parse_module_config(xml_bytes, &fomod_prefix) {
             Ok(installer) => installer,
             Err(err) => {
-                // The C++ interpolates pugixml's `xml_parse_result::description()`;
-                // this interpolates roxmltree's error Display. Same trigger,
-                // different wording (see PARITY-NOTES "Task 17").
                 logger.log_error(&format!("[infer] XML parse failed: {err}"));
                 return String::new();
             }
@@ -287,8 +375,8 @@ impl FomodInferenceService {
             t_step.elapsed().as_millis()
         ));
 
-        // Step 6: Build the target tree from the installed-file scan. (SVC 945-948
-        // times the scan AND the tree build, not just the walk.)
+        // Step 6: Build the target tree from the installed-file scan. `t_scan`
+        // covers the walk and the tree build, not the walk alone.
         logger.log("[infer] 6/9 Scanning installed files");
         let t_step = Instant::now();
         let installed = scan_installed_files(Path::new(mod_path));
@@ -318,7 +406,7 @@ impl FomodInferenceService {
         // Step 7b: Pre-compute conditional + step-visibility overrides.
         let overrides = compute_overrides(&installer, &atoms, &atom_index, &target, &excluded);
 
-        // Feed step-visibility overrides into the diagnostics chain (SVC 963-982).
+        // Feed step-visibility overrides into the diagnostics chain.
         for (si, mode) in overrides.step_visible.iter().enumerate() {
             match mode {
                 ExternalConditionOverride::ForceTrue => diag_builder.set_step_visibility(
@@ -326,6 +414,10 @@ impl FomodInferenceService {
                     true,
                     ReasonCode::StepVisibilityForced,
                 ),
+                // Unreachable: compute_overrides produces only ForceTrue and
+                // Unknown, so no step is ever reported as not visible and its
+                // closing tally logs a `false` count that is structurally 0.
+                // The arm exists for match exhaustiveness.
                 ExternalConditionOverride::ForceFalse => {
                     diag_builder.set_step_visibility(si as i32, false, ReasonCode::StepNotVisible)
                 }
@@ -337,16 +429,18 @@ impl FomodInferenceService {
             }
         }
 
-        // Step 7d: Validate the Tier-1 cache candidate (if any) before the
-        // expensive propagate + solve. Short-circuit only on an EXACT reproduction.
+        // Tier-1 validation runs here, between the 7b overrides and the 7c
+        // propagate: it needs the overrides to simulate with, and
+        // short-circuiting before the expensive propagate and solve is the
+        // point. It carries no step letter because 7b and 7c are fixed by the
+        // log lines that emit them. Short-circuit only on an exact reproduction.
         if let Some(fp) = &fomod_plus {
             let total_ms = t_total.elapsed().as_millis() as i64;
             match try_tier1_cache(
                 fp, &installer, &atoms, &target, &excluded, &overrides, total_ms,
             ) {
                 Tier1Outcome::Hit(out) => return out.dump(2),
-                // A malformed step/group `name` throws in the C++ and unwinds to
-                // the outer catch, so the whole call yields "".
+                // A malformed step or group `name` fails the whole call.
                 Tier1Outcome::Abort => return String::new(),
                 Tier1Outcome::Miss => {}
             }
@@ -412,6 +506,13 @@ impl FomodInferenceService {
             Some(&overrides),
         );
         add_output_tree(&mut json_result, &out_sim);
+        // Which dests diverged, beside the counts the diagnostics already carry.
+        // Classified against the same excluded set the scorer used, or the marks
+        // would flag files compare_trees deliberately ignores.
+        add_repro_detail(
+            &mut json_result,
+            &classify_dests(&out_sim, &target, &excluded),
+        );
         let result_str = json_result.dump(2);
         logger.log(&format!(
             "[infer] Step 9 assemble JSON: {} bytes ({}ms)",
@@ -427,13 +528,44 @@ impl FomodInferenceService {
         result_str
     }
 
-    /// Hash contested files (target + atoms) for disambiguation. Mirror of
-    /// `FomodInferenceService::hash_contested_files`.
+    /// Hash contested files, in the target tree and in the atoms, so the solver
+    /// can tell same-sized candidates apart.
     ///
-    /// A dest is contested when it has more than one DISTINCT size-compatible
-    /// candidate source. For contested dests, the archive entries are read and
-    /// FNV-1a-hashed into the atoms, and the installed files are read and hashed
-    /// into the target. Nothing is hashed when no dest is contested.
+    /// A dest is contested when more than one distinct size-compatible source
+    /// can produce it. For a contested dest the archive entries are read and
+    /// FNV-1a-hashed into the atoms, and the installed file is read and hashed
+    /// into the target. When no dest is contested, which is the common case,
+    /// nothing is read and nothing is hashed.
+    ///
+    /// Three phases, with what each one mutates and under which filter:
+    ///
+    /// ```text
+    ///   phase 1  find_contested_dests(target, atom_index, excluded)
+    ///              -> contested_dests   (> 1 distinct size-compatible source)
+    ///              -> entries_to_read   (their archive source paths)
+    ///              [empty -> return; nothing is read, nothing is hashed]
+    ///
+    ///   phase 2  fetch_entry_hashes(archive_path, entries_to_read)
+    ///              cache hit  -> HashResult{source_hashes, source_sizes}
+    ///              cache miss -> read_entries_batch -> fnv1a_hash -> cache
+    ///              the cap was checked once before phase 1; these inserts
+    ///              are not capped
+    ///
+    ///   phase 3  apply_entry_hashes
+    ///              atom_index[dest] <- hash/size  only if dest is contested
+    ///              ExpandedAtoms.*  <- hash/size  for every atom sharing the
+    ///                                             source path, no dest filter
+    ///                                             <-- asymmetry
+    ///              target[dest]     <- fnv1a of the installed file, size =
+    ///                                  bytes read; skipped above 256 MiB
+    /// ```
+    ///
+    /// `atom_index` and `atoms` hold independent copies of each atom, and phase
+    /// 3 filters the two differently. See [`apply_entry_hashes`] for what that
+    /// asymmetry means for a reader of either copy.
+    ///
+    /// Mutates `target`, `atoms` and `atom_index` in place. Reads from the
+    /// archive and from disk. Blocking.
     pub fn hash_contested_files(
         &self,
         target: &mut TargetTree,
@@ -482,8 +614,7 @@ impl FomodInferenceService {
     }
 
     /// Phase 2 of contested hashing: check the instance cache, batch-read the
-    /// misses, FNV-1a-hash them, and update the cache. Mirror of the C++
-    /// file-scoped `fetch_entry_hashes`.
+    /// misses, FNV-1a-hash them, and put them in the cache.
     fn fetch_entry_hashes(
         &self,
         archive_path: &str,
@@ -527,8 +658,8 @@ impl FomodInferenceService {
             }
         }
 
-        // `missing_entries` is the miss count and is still intact here: the C++
-        // reads `missing_entries.size()` after its batch read too.
+        // The batch read borrows `missing_entries`, so it is still the miss
+        // count here.
         Logger::instance().log(&format!(
             "[infer] Contested hash cache: hits={cache_hits}, misses={}",
             missing_entries.len()
@@ -538,31 +669,26 @@ impl FomodInferenceService {
     }
 }
 
-// ---------------------------------------------------------------------------
-// try_fomod_plus_json
-// ---------------------------------------------------------------------------
-
-/// Read any cached fomod-plus JSON from `<mod>/meta.ini`. Mirror of
-/// `FomodInferenceService::try_fomod_plus_json`.
+/// Read any cached fomod-plus JSON from `<mod>/meta.ini`.
 ///
 /// Returns `Some(json)` only when the `[Settings]` key `fomod plus/fomod`
 /// (case-insensitive) holds a JSON object with a non-empty `steps` array;
-/// otherwise `None`. Reading/parsing errors collapse to `None`, matching the C++
-/// swallowing of its own errors. The INI quirks (10000-line cap; `[Settings]`
-/// case-insensitive gating with a non-`[Settings]` header turning tracking off;
-/// single outer-quote peel; the `""`/`{}`/`"{}"` rejects; first-match-wins) are
-/// reproduced exactly.
+/// otherwise `None`. Read and parse errors collapse to `None`, so this never
+/// fails the inference call.
+///
+/// The INI handling has quirks the unit tests pin, and each changes which blobs
+/// are accepted: a 10000-line cap; `[Settings]` gating that any later header
+/// turns off again; one outer quote pair peeled, once; `""`, `{}` and `"{}"`
+/// rejected; and the first matching key wins whether or not it validates.
 pub fn try_fomod_plus_json(mod_path: &Path) -> Option<Value> {
     let meta_ini = mod_path.join("meta.ini");
     if !meta_ini.exists() {
         return None;
     }
-    // Read as raw bytes and work on them directly. The C++ reads the file with
-    // `std::getline` into a `std::string` (raw bytes, no decoding) and hands the
-    // value straight to `nlohmann::json::parse`, which REJECTS ill-formed UTF-8
-    // (parse_error 316). Decoding the file lossily up front would turn a bad byte
-    // into U+FFFD and parse a blob the C++ discards, flipping a Tier-1 miss into
-    // a hit; the value is therefore strict-UTF-8-validated below instead.
+    // Read raw bytes and work on them directly. The value is validated as strict
+    // UTF-8 further down instead of being decoded lossily here: lossy decoding
+    // turns a bad byte into U+FFFD and then parses a blob that has to be
+    // rejected, which flips a Tier-1 miss into a hit.
     let bytes = fs::read(&meta_ini).ok()?;
 
     let mut in_settings = false;
@@ -604,9 +730,8 @@ pub fn try_fomod_plus_json(mod_path: &Path) -> Option<Value> {
             return None;
         }
 
-        // nlohmann rejects ill-formed UTF-8 with parse_error 316, which the C++
-        // catches like any other parse failure -> Tier-1 miss. It reaches the
-        // same "Failed to parse" line, so the log is emitted here too.
+        // Ill-formed UTF-8 is a parse failure like any other: log it as one and
+        // take the Tier-1 miss.
         let Ok(value) = std::str::from_utf8(value) else {
             Logger::instance()
                 .log("[infer] Failed to parse fomod-plus JSON: invalid UTF-8 in value");
@@ -628,8 +753,6 @@ pub fn try_fomod_plus_json(mod_path: &Path) -> Option<Value> {
                 return None;
             }
             Err(err) => {
-                // The C++ interpolates nlohmann's `parse_error::what()`; this
-                // interpolates the port's own parser error.
                 Logger::instance().log(&format!("[infer] Failed to parse fomod-plus JSON: {err}"));
                 return None;
             }
@@ -638,26 +761,26 @@ pub fn try_fomod_plus_json(mod_path: &Path) -> Option<Value> {
     None
 }
 
-/// Split raw file bytes into lines with `std::getline(ifs, line)` semantics: one
-/// line per `\n`-terminated segment, plus a final unterminated segment only when
-/// it is non-empty. (`bytes.split(b'\n')` alone would yield a spurious trailing
-/// empty line for the usual newline-terminated file, shifting the 10000-line cap
-/// by one.) The `\r` of a CRLF pair is left in place; the caller trims it, as the
-/// C++ does.
+/// Split raw file bytes into lines: one line per `\n`-terminated segment, plus a
+/// final unterminated segment only when it is non-empty. An empty file yields no
+/// lines at all.
+///
+/// `bytes.split(b'\n')` alone would add a spurious trailing empty line for the
+/// usual newline-terminated file and shift the 10000-line cap by one. The `\r`
+/// of a CRLF pair is left in place; the caller trims it.
 fn getline_split(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
     let trimmed = match bytes.last() {
         Some(b'\n') => &bytes[..bytes.len() - 1],
         _ => bytes,
     };
-    // An empty file yields no lines at all, matching getline's immediate EOF.
     let empty = trimmed.is_empty() && bytes.is_empty();
     trimmed.split(|&b| b == b'\n').skip(usize::from(empty))
 }
 
-/// Trim every leading and trailing byte contained in `set`. Mirror of the C++
-/// `find_first_not_of` / `find_last_not_of` trim pairs, which operate on bytes
-/// (not code points) and use an explicit character set rather than "ASCII
-/// whitespace" (`slice::trim_ascii` would also strip form feed).
+/// Trim every leading and trailing byte contained in `set`.
+///
+/// Works on bytes, not code points, and takes an explicit set. `slice::trim_ascii`
+/// is not a substitute: it would also strip form feed.
 fn trim_bytes<'a>(bytes: &'a [u8], set: &[u8]) -> &'a [u8] {
     let mut start = 0;
     while start < bytes.len() && set.contains(&bytes[start]) {
@@ -670,23 +793,33 @@ fn trim_bytes<'a>(bytes: &'a [u8], set: &[u8]) -> &'a [u8] {
     &bytes[start..end]
 }
 
-// ---------------------------------------------------------------------------
-// compute_overrides
-// ---------------------------------------------------------------------------
-
-/// Pre-compute conditional and step-visibility overrides for inference. Mirror of
-/// `FomodInferenceService::compute_overrides` (static/public in the C++, a free
-/// function here so the fixtures can drive it directly).
+/// Pre-compute conditional and step-visibility overrides for inference.
 ///
 /// - `conditional_active[ci]` becomes `ForceTrue` when some non-excluded,
-///   in-target dest is produced ONLY by conditional atoms and its
-///   conditional-index producer set is EXACTLY `{ci}`; otherwise `Unknown`.
+///   in-target dest is produced only by conditional atoms and its
+///   conditional-index producer set is exactly `{ci}`; otherwise `Unknown`.
 /// - `step_visible[si]` becomes `ForceTrue` when the step has a non-excluded,
-///   in-target dest reached by ITS OWN plugins' atoms that no other step reaches;
-///   otherwise `Unknown`. The flat per-plugin walk order must equal
-///   `expand_all_atoms`' per-plugin index order.
+///   in-target dest reached by its own plugins' atoms that no other step
+///   reaches; otherwise `Unknown`. The flat per-plugin walk here must stay in
+///   the same order as `expand_all_atoms`' per-plugin index.
 ///
-/// Only `ForceTrue` / `Unknown` are ever produced.
+/// Only `ForceTrue` and `Unknown` are ever produced, so no caller can observe a
+/// `ForceFalse` step or conditional.
+///
+/// # Panics
+///
+/// Panics if `atoms.per_conditional.len() > installer.conditional_patterns.len()`.
+/// The conditional pass iterates `atoms.per_conditional` but writes
+/// `overrides.conditional_active`, which is sized from
+/// `installer.conditional_patterns`, so `ci` must be valid in both.
+/// [`crate::fomod_inference_atoms::expand_all_atoms`] derives the two from the
+/// same IR, so the production path always satisfies this; only a caller that
+/// builds [`ExpandedAtoms`] and [`FomodInstaller`] independently, such as a test
+/// or a fixture, can trip it.
+///
+/// The per-plugin pass is deliberately more forgiving on the other axis: a
+/// `flat_idx` beyond `atoms.per_plugin` is skipped with an "IR/atom desync"
+/// warning instead of panicking.
 pub fn compute_overrides(
     installer: &FomodInstaller,
     atoms: &ExpandedAtoms,
@@ -702,8 +835,8 @@ pub fn compute_overrides(
         step_visible: vec![ExternalConditionOverride::Unknown; installer.steps.len()],
     };
 
-    // cond_only_dest_patterns[dest] = the conditional-index producer set for dests
-    // reached ONLY by conditional atoms.
+    // cond_only_dest_patterns[dest] = the conditional-index producer set for
+    // dests reached only by conditional atoms.
     let mut cond_only_dest_patterns: HashMap<String, HashSet<i32>> = HashMap::new();
     for (dest, atoms_for_dest) in atom_index {
         if excluded.contains(dest) || !target.contains_key(dest) {
@@ -715,7 +848,8 @@ pub fn compute_overrides(
         if !only_conditional {
             continue;
         }
-        // Create the entry (possibly empty) exactly like the C++ `operator[]`.
+        // Create the entry even when it stays empty; the loop below skips an
+        // empty producer set explicitly.
         let producers = cond_only_dest_patterns.entry(dest.clone()).or_default();
         for atom in atoms_for_dest {
             if atom.conditional_index >= 0 {
@@ -757,8 +891,9 @@ pub fn compute_overrides(
         "[infer] Step 7b conditional evidence: unique_forced={cond_unique_forced}, ambiguous_skipped={cond_ambiguous_skipped}"
     ));
 
-    // Step visibility via STEP-UNIQUE evidence: ForceTrue iff a step has at least
-    // one target-hit dest reached by its own plugins that no other step reaches.
+    // Step visibility via step-unique evidence: ForceTrue if and only if a step
+    // has at least one target-hit dest reached by its own plugins that no other
+    // step reaches.
     let mut step_dests: Vec<HashSet<String>> = vec![HashSet::new(); installer.steps.len()];
     let mut flat_idx: usize = 0;
     for (si, step) in installer.steps.iter().enumerate() {
@@ -773,7 +908,7 @@ pub fn compute_overrides(
                         }
                     }
                 } else {
-                    // IR/atom desync: skip, do NOT panic.
+                    // IR/atom desync: skip rather than panic.
                     Logger::instance().log_warning(&format!(
                         "[infer] compute_overrides: flat_idx {flat_idx} out of range ({}), possible IR/atom desync",
                         atoms.per_plugin.len()
@@ -823,22 +958,17 @@ pub fn compute_overrides(
     overrides
 }
 
-// ---------------------------------------------------------------------------
-// scan_installed_files
-// ---------------------------------------------------------------------------
-
-/// Recursively scan a mod directory into `dest -> size`. Mirror of
-/// `FomodInferenceService::scan_installed_files`.
+/// Recursively scan a mod directory into `dest -> size`.
 ///
 /// Tolerates permission errors, includes regular files only, keys by
-/// `normalize_path(relative(path, mod_root))` (lowercase, forward-slash), and
-/// records the file size (0 on a size error). No name is skipped here;
-/// `build_target_tree` later drops the top-level `meta.ini`.
+/// `normalize_path(relative(path, mod_root))` (lowercase, forward slashes), and
+/// records the file size, or 0 when the size cannot be read. No name is skipped
+/// here; `build_target_tree` later drops the top-level `meta.ini`.
 ///
-/// The C++ `recursive_directory_iterator` does not follow directory symlinks but
-/// `is_regular_file()` follows a file symlink; this walk descends real
-/// directories (`file_type().is_dir()`) and includes any entry that resolves to a
-/// regular file (`path.is_file()`), reproducing that behavior. See PARITY-NOTES.
+/// Symlinks are treated differently by kind, deliberately: the walk descends
+/// real directories only (`file_type().is_dir()`, so a directory symlink is not
+/// followed) but includes any entry that resolves to a regular file
+/// (`path.is_file()`, so a file symlink is followed). See `PARITY-NOTES.md`.
 pub fn scan_installed_files(mod_path: &Path) -> HashMap<String, u64> {
     let mut files: HashMap<String, u64> = HashMap::new();
     if !mod_path.exists() {
@@ -850,11 +980,9 @@ pub fn scan_installed_files(mod_path: &Path) -> HashMap<String, u64> {
         let read_dir = match fs::read_dir(&dir) {
             Ok(rd) => rd,
             Err(err) => {
-                // Tolerate permission-denied / transient errors; the C++ reports
-                // the same condition through its recursive iterator's
-                // `error_code` ("Error iterating"). It names the ROOT mod path
-                // because its single iterator spans the whole tree; this walk is
-                // per-directory, so it names the directory that actually failed.
+                // Tolerate permission-denied and transient errors. The walk is
+                // per-directory, so the warning names the directory that
+                // failed rather than the mod root.
                 Logger::instance()
                     .log_warning(&format!("[infer] Error iterating {}: {err}", dir.display()));
                 continue;
@@ -887,10 +1015,6 @@ pub fn scan_installed_files(mod_path: &Path) -> HashMap<String, u64> {
     files
 }
 
-// ---------------------------------------------------------------------------
-// Contested-file hashing helpers (C++ anonymous namespace)
-// ---------------------------------------------------------------------------
-
 /// Hashes/sizes for archive entries read during contested-file resolution.
 #[derive(Debug, Default)]
 struct HashResult {
@@ -898,10 +1022,9 @@ struct HashResult {
     source_sizes: HashMap<String, u64>,
 }
 
-/// Phase 1 of contested hashing: find dests where more than one DISTINCT
-/// size-compatible source can produce the same target path. Mirror of the C++
-/// file-scoped `find_contested_dests`. Returns `(contested_dests,
-/// entries_to_read)`.
+/// Phase 1 of contested hashing: find the dests that more than one distinct
+/// size-compatible source can produce. Returns `(contested_dests,
+/// entries_to_read)`, where `entries_to_read` holds their archive source paths.
 fn find_contested_dests(
     target: &TargetTree,
     atom_index: &AtomIndex,
@@ -937,15 +1060,14 @@ fn find_contested_dests(
     (contested_dests, entries_to_read)
 }
 
-/// Build the archive-signature prefix `<canonical_path>|<size>|<mtime>` for the
-/// cache key. Mirror of the C++ file-scoped `build_archive_signature`.
+/// Build the hash-cache key prefix `<canonical_path>|<size>|<mtime>` for one
+/// archive.
 ///
-/// The C++ uses `weakly_canonical` + `last_write_time().time_since_epoch()`
-/// (filesystem-clock ticks). The port uses `fs::canonicalize` (falling back to
-/// the raw path) and the modified time as nanoseconds since the Unix epoch. Only
-/// the self-invalidate-on-size-or-mtime property is required; the tick encoding
-/// differs from C++ and the signature never crosses into output (it is a
-/// per-instance cache key). See PARITY-NOTES "Task 12".
+/// `mtime` is nanoseconds since the Unix epoch, and the path falls back to the
+/// raw path when it cannot be canonicalized. The only property that matters is
+/// that the signature changes when the archive's size or mtime changes, so the
+/// cache invalidates itself. The exact encoding is free to change: the signature
+/// never leaves this process and never reaches the output document.
 fn build_archive_signature(archive_path: &str) -> String {
     let path = Path::new(archive_path);
     let normalized_path = match fs::canonicalize(path) {
@@ -962,10 +1084,38 @@ fn build_archive_signature(archive_path: &str) -> String {
     format!("{normalized_path}|{sz}|{mtime}")
 }
 
-/// Phase 3 of contested hashing: write the fetched hashes onto the atoms (both
-/// the index copies and the [`ExpandedAtoms`] copies), then hash the installed
-/// files at each contested dest into the target. Mirror of the C++ file-scoped
-/// `apply_entry_hashes`.
+/// Phase 3 of contested hashing: write the fetched hashes onto the atoms, then
+/// hash the installed file at each contested dest into the target.
+///
+/// The two atom writes use different filters, and the difference is observable:
+///
+/// - The [`AtomIndex`] copies are updated only for atoms filed under a dest in
+///   `contested_dests`. Every other dest bucket is skipped.
+/// - The [`ExpandedAtoms`] copies are updated for every atom in `required`,
+///   `per_plugin` and `per_conditional` whose `source_path` has a fetched hash.
+///   There is no dest filter: `ExpandedAtoms::for_each_mut` visits all of them.
+///
+/// The two structures hold independent `FomodAtom` copies, so after this call an
+/// atom whose own dest is not contested but whose `source_path` was fetched for
+/// some other contested dest carries the new `content_hash` and `file_size` in
+/// [`ExpandedAtoms`] and the old values in [`AtomIndex`]. The old `file_size` is
+/// usually 0, because the normalized size map is deliberately under-populated
+/// (see the note on it in [`FomodInferenceService::infer_selections`]), so the
+/// divergence is typically 0 against a real size.
+///
+/// That matters because the two views have different readers.
+/// [`crate::fomod_csp_precompute::compute_evidence`] reads `file_size` and
+/// `content_hash` out of [`AtomIndex`], while
+/// [`crate::fomod_forward_simulator::simulate`] reads [`ExpandedAtoms`]. The
+/// propagator is unaffected: it accepts `atom_index` and never reads it.
+///
+/// Do not tidy the two filters into symmetry on sight. Changing either one
+/// changes the evidence scores the solver ranks plugins with, and
+/// `PARITY-NOTES.md` has no entry for this asymmetry, so nothing on record says
+/// which side is the intended behavior. Establish that first.
+///
+/// An installed file above 256 MiB (`K_MAX_HASH_FILE_SIZE`) is left unhashed and
+/// logged; its target entry keeps its scanned size and a zero hash.
 fn apply_entry_hashes(
     atom_index: &mut AtomIndex,
     atoms: &mut ExpandedAtoms,
@@ -1015,10 +1165,8 @@ fn apply_entry_hashes(
             ));
             continue;
         }
-        // The C++ pairs this read with a `bad_alloc` handler that warns
-        // "Failed to allocate {} bytes for hashing: {}". Rust's allocator aborts
-        // rather than unwinding on OOM, so that handler has no counterpart and
-        // the line is unreachable here (recorded in PARITY-NOTES "Task 17").
+        // The whole file is read into memory to hash it, which is why the size
+        // cap above exists. A read error leaves the target entry untouched.
         let Ok(buf) = fs::read(&full_path) else {
             continue;
         };
@@ -1027,26 +1175,22 @@ fn apply_entry_hashes(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tier-1 cache validation + bespoke JSON emitter
-// ---------------------------------------------------------------------------
-
 /// Outcome of validating the Tier-1 fomod-plus candidate.
 #[derive(Debug)]
 pub enum Tier1Outcome {
-    /// The cached selection resolved AND exactly reproduced the target tree;
-    /// carries the bespoke schema-v2 document to return.
+    /// The cached selection resolved and reproduced the target tree exactly.
+    /// Carries the bespoke schema-v2 document to return.
     Hit(Box<Value>),
-    /// The candidate is unusable (stale names, or it does not reproduce the
-    /// tree). The caller falls through to propagate + solve.
+    /// The candidate is unusable: stale names, or it does not reproduce the
+    /// tree. The caller falls through to propagate and solve.
     Miss,
-    /// The cached blob is MALFORMED in a way the C++ does not tolerate: a step or
-    /// group that is not an object, or whose `name` key is present but not a
-    /// string. `nlohmann::basic_json::value(key, default)` throws there
-    /// (type_error 306 / 302 respectively) rather than substituting the default,
-    /// and that throw escapes to `infer_selections`' outer `catch`, so the WHOLE
-    /// call returns `""`. Coercing to `""` and falling through instead would
-    /// return a full inference document where the C++ returns nothing.
+    /// The cached blob is malformed: a step or group that is not an object, or
+    /// whose `name` key is present but not a string.
+    ///
+    /// This fails the whole inference call, which returns `""`. Do not soften it
+    /// into a [`Tier1Outcome::Miss`]: coercing the name to `""` and falling
+    /// through would emit a full inference document for a blob the contract says
+    /// to reject.
     Abort,
 }
 
@@ -1061,7 +1205,7 @@ impl Tier1Outcome {
         matches!(self, Tier1Outcome::Miss)
     }
 
-    /// Consume into the emitted schema-v2 document, or `None` unless this is a
+    /// Consume into the emitted schema-v2 document. `None` for anything but a
     /// [`Tier1Outcome::Hit`].
     pub fn hit(self) -> Option<Value> {
         match self {
@@ -1071,13 +1215,16 @@ impl Tier1Outcome {
     }
 }
 
-/// Read the `name` field the way C++ `src.value("name", "")` does, returning
-/// `None` where that call would THROW.
+/// Read a `name` field, keeping "absent" and "wrong type" apart.
 ///
-/// - not an object                -> `None` (type_error 306)
-/// - object, no `name`            -> `Some("")` (the default is used)
-/// - object, `name` is a string   -> `Some(s)`
-/// - object, `name` is not a string -> `None` (type_error 302 from `get<string>`)
+/// - not an object                  -> `None`
+/// - object, no `name`              -> `Some("")`
+/// - object, `name` is a string     -> `Some(s)`
+/// - object, `name` is not a string -> `None`
+///
+/// `None` is the malformed case and makes [`try_tier1_cache`] abort the whole
+/// inference call. `Some("")` is an ordinary miss, because no step or group in
+/// the IR is named `""`.
 fn name_field(src: &Value) -> Option<&str> {
     if !src.is_object() {
         return None;
@@ -1088,12 +1235,11 @@ fn name_field(src: &Value) -> Option<&str> {
     }
 }
 
-/// Extract a plugin NAME from a cached JSON entry (string, or object with a
-/// string `name`). Mirror of the C++ `plugin_name_of` lambda.
+/// Extract a plugin name from a cached JSON entry: the string itself, or the
+/// string `name` of an object. Every other shape yields `""`.
 ///
-/// Unlike [`name_field`] this is TOLERANT of every other shape (returning `""`),
-/// because the C++ lambda guards with explicit `is_string()` / `is_object()`
-/// checks instead of calling `value()`.
+/// Deliberately more tolerant than [`name_field`]: a plugin entry of the wrong
+/// shape is a stale-cache miss, never an abort.
 fn plugin_name_of(src: &Value) -> String {
     if let Some(s) = src.as_str() {
         return s.to_string();
@@ -1104,17 +1250,16 @@ fn plugin_name_of(src: &Value) -> String {
     String::new()
 }
 
-/// Validate the Tier-1 fomod-plus candidate and, on an EXACT reproduction, emit
-/// the bespoke schema-v2 selection. Mirror of the C++ Tier-1 block
-/// (`FomodInferenceService.cpp:984-1258`).
+/// Validate the Tier-1 fomod-plus candidate and, on an exact reproduction, emit
+/// the bespoke schema-v2 selection.
 ///
-/// Returns [`Tier1Outcome::Hit`] (a schema-v2 document, NOT `assemble_json`'s)
-/// only when the cached blob name-resolves against `installer` AND its forward
-/// simulation exactly reproduces `target`. Any name-resolution failure, or a
-/// non-exact reproduction, is a [`Tier1Outcome::Miss`] so the caller falls
-/// through to the normal solve; a malformed step/group `name` is a
-/// [`Tier1Outcome::Abort`] (see that variant). `total_ms` is the elapsed time to
-/// embed as `diagnostics.timings_ms.total`.
+/// Returns [`Tier1Outcome::Hit`] only when the cached blob name-resolves against
+/// `installer` and its forward simulation reproduces `target` exactly. The
+/// document it carries is built by [`build_tier1_json`], not by `assemble_json`.
+/// Any name-resolution failure, or a non-exact reproduction, is a
+/// [`Tier1Outcome::Miss`] and the caller falls through to the normal solve; a
+/// malformed step or group `name` is a [`Tier1Outcome::Abort`]. `total_ms` is
+/// the elapsed time to embed as `diagnostics.timings_ms.total`.
 pub fn try_tier1_cache(
     fomod_plus: &Value,
     installer: &FomodInstaller,
@@ -1124,7 +1269,7 @@ pub fn try_tier1_cache(
     overrides: &InferenceOverrides,
     total_ms: i64,
 ) -> Tier1Outcome {
-    // Build the [step][group][plugin] grid by NAME-matching the cached blob.
+    // Build the [step][group][plugin] grid by name-matching the cached blob.
     let mut grid: Vec<Vec<Vec<bool>>> = installer
         .steps
         .iter()
@@ -1140,9 +1285,9 @@ pub fn try_tier1_cache(
     // Names the first unresolvable entry, for the "cache stale" warning only.
     let mut stale_what = String::new();
     'steps: for src_step in fomod_plus.get("steps").into_iter().flat_map(array_iter) {
-        // The C++ evaluates `src_step.value("name", "")` FIRST, before the
-        // find_step lookup that may break the loop, so every step up to and
-        // including the first unresolvable one is name-checked.
+        // Read the name before the lookup that can break the loop, so every
+        // step up to and including the first unresolvable one is name-checked
+        // and can still abort the call.
         let Some(step_name) = name_field(src_step) else {
             return Tier1Outcome::Abort;
         };
@@ -1213,8 +1358,7 @@ pub fn try_tier1_cache(
         return Tier1Outcome::Miss;
     }
 
-    // `total_ms` was measured by the caller just before this call, which is the
-    // same instant the C++ `ms_since(t_total)` reads here.
+    // `total_ms` was measured by the caller immediately before this call.
     Logger::instance().log(&format!(
         "[infer] Tier 1 hit: cache reproduces target exactly, total: {total_ms}ms"
     ));
@@ -1229,8 +1373,12 @@ fn array_iter(value: &Value) -> std::slice::Iter<'_, Value> {
     }
 }
 
-/// Build the bespoke Tier-1 schema-v2 document from the cached blob + validation
-/// simulation. Mirror of the C++ Tier-1 emitter (`...:1144-1247`).
+/// Build the bespoke Tier-1 schema-v2 document from the cached blob and the
+/// validation simulation.
+///
+/// Only reached once [`try_tier1_cache`] has proved the blob name-resolves and
+/// reproduces the target exactly, so every confidence value it writes is 1.0 and
+/// every group is attributed to `cache.fomod_plus`.
 fn build_tier1_json(fomod_plus: &Value, sim: &SimulatedTree, total_ms: i64) -> Value {
     let cache_confidence = || {
         serialize_confidence(&ConfidenceScore {
@@ -1349,6 +1497,10 @@ fn build_tier1_json(fomod_plus: &Value, sim: &SimulatedTree, total_ms: i64) -> V
     out.insert("diagnostics", serialize_run_diagnostics(&run));
 
     add_output_tree(&mut out, sim);
+    // A hit means the cached selection reproduced the installed tree exactly,
+    // so there is nothing to mark. The key is still emitted, empty, so a
+    // consumer never has to special-case the cache path.
+    add_repro_detail(&mut out, &[]);
     out
 }
 
@@ -1457,7 +1609,7 @@ mod tests {
 
     #[test]
     fn compute_overrides_conditional_dest_shared_with_plugin_is_unknown() {
-        // "shared" is produced by a conditional AND a plugin -> not
+        // "shared" is produced by a conditional and a plugin -> not
         // conditional-only -> the conditional is never forced.
         let installer = FomodInstaller {
             conditional_patterns: vec![FomodConditionalPattern::default()],
@@ -1608,8 +1760,8 @@ mod tests {
 
     #[test]
     fn fomod_plus_first_matching_key_wins() {
-        // The first key matches but has no steps -> reject WITHOUT considering the
-        // second (valid) key.
+        // The first key matches but has no steps -> reject without considering
+        // the second, valid key.
         let out = run_meta_ini(
             "[Settings]\nfomod plus/fomod={\"foo\":1}\nfomod plus/fomod={\"steps\":[{\"name\":\"x\"}]}\n",
         );
@@ -1655,9 +1807,9 @@ mod tests {
 
     #[test]
     fn fomod_plus_ill_formed_utf8_value_is_rejected() {
-        // nlohmann rejects ill-formed UTF-8 with parse_error 316, which the C++
-        // catches -> Tier-1 miss. Decoding the file lossily would replace the bad
-        // byte with U+FFFD and ACCEPT the blob, flipping the miss into a hit.
+        // Ill-formed UTF-8 in the value is a parse failure, so a Tier-1 miss.
+        // Decoding the file lossily would replace the bad byte with U+FFFD and
+        // accept the blob, flipping the miss into a hit.
         let mut bytes = b"[Settings]\nfomod plus/fomod={\"steps\":[{\"name\":\"caf".to_vec();
         bytes.push(0xe9); // lone Latin-1 'e-acute', invalid UTF-8
         bytes.extend_from_slice(b"\"}]}\n");
@@ -1670,8 +1822,8 @@ mod tests {
 
     #[test]
     fn fomod_plus_blob_rejected_on_strict_json_grammar() {
-        // Each of these is a parse_error in nlohmann, so the C++ takes the
-        // Tier-1 miss path; the Rust parser must agree.
+        // The JSON grammar is strict: each of these must be rejected, taking
+        // the Tier-1 miss path.
         for bad in [
             // leading zero
             "[Settings]\nfomod plus/fomod={\"steps\":[{\"name\":\"x\"}],\"i\":01}\n",
@@ -1684,7 +1836,7 @@ mod tests {
 
     #[test]
     fn fomod_plus_deeply_nested_blob_is_rejected_not_a_stack_overflow() {
-        // Without the parser depth cap this input kills the HOST process: a
+        // Without the parser depth cap this input kills the host process: a
         // Windows stack overflow is an SEH exception, not a Rust panic, so
         // capi's catch_unwind cannot contain it.
         let deep = format!(
@@ -1742,10 +1894,9 @@ mod tests {
 
     #[test]
     fn tier1_non_string_step_name_aborts_the_whole_call() {
-        // C++ `src_step.value("name", "")` throws type_error 302 when the key is
-        // present but not a string; the throw escapes to infer_selections' outer
-        // catch, so the WHOLE call returns "". Substituting "" and falling
-        // through would emit a full inference document instead.
+        // A `name` key present but not a string is malformed, and malformed
+        // fails the whole call: infer_selections returns "". Substituting ""
+        // and falling through would emit a full inference document instead.
         let mut step = Value::object();
         step.insert("name", Value::Int(123));
         assert!(matches!(
@@ -1763,7 +1914,7 @@ mod tests {
 
     #[test]
     fn tier1_non_object_step_aborts_the_whole_call() {
-        // `value()` on a non-object throws type_error 306.
+        // A step that is not an object at all is malformed the same way.
         assert!(matches!(
             run_tier1(&blob_with_step(Value::string("S"))),
             Tier1Outcome::Abort
@@ -1776,8 +1927,8 @@ mod tests {
 
     #[test]
     fn tier1_non_string_group_name_aborts_the_whole_call() {
-        // Groups are read the same way, but only for a step that RESOLVED - the
-        // C++ evaluates the group name after find_step succeeds.
+        // Groups are read the same way, but only for a step that resolved: the
+        // group name is read after the step lookup succeeds.
         let mut group = Value::object();
         group.insert("name", Value::Bool(true));
         let mut groups = Value::array();
@@ -1793,8 +1944,8 @@ mod tests {
 
     #[test]
     fn tier1_missing_name_key_is_a_plain_miss_not_an_abort() {
-        // A missing key uses the "" default without throwing, so it is an
-        // ordinary stale-cache miss (no installer step is named "").
+        // A missing key is not malformed: it reads as "", which is an ordinary
+        // stale-cache miss because no installer step is named "".
         let mut step = Value::object();
         step.insert("groups", Value::array());
         assert!(run_tier1(&blob_with_step(step)).is_miss());
