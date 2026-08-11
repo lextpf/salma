@@ -1,26 +1,22 @@
-//! Content-root detection for NON-FOMOD archives.
+//! Content-root detection for archives that carry no FOMOD installer.
 //!
-//! Rust port of `src/ModStructureDetector.hpp`/`.cpp`. Used by
-//! [`crate::installation_service`] to find which subdirectory of an extracted
-//! archive holds the actual mod content, so a wrapper folder
-//! (`ModName-v1.2/meshes/...` instead of `meshes/...`) does not get installed
-//! one level too deep.
+//! [`crate::installation_service`] uses this to find which subdirectory of an
+//! extracted archive holds the mod content, so a wrapper folder
+//! (`ModName-v1.2/meshes/...` instead of `meshes/...`) is not installed one
+//! level too deep.
 //!
-//! Log call sites mirror the C++ tags and wording so MO2's log window reads
-//! the same. The one unavoidable difference is the error TEXT inside the
-//! "Cannot scan" warning: the C++ interpolates `filesystem_error::what()`, this
-//! interpolates `std::io::Error`.
+//! Detection is a name probe, not a content inspection: a directory counts as a
+//! mod root when it holds an entry named in [`MOD_FOLDERS`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::logger::Logger;
 
-/// The well-known game-data folder names that mark a directory as a mod root,
-/// in the C++ declaration order (`ModStructureDetector.cpp:14-26`).
+/// The game-data folder names that mark a directory as a mod root.
 ///
-/// Order is observable only through short-circuiting, which cannot change the
-/// boolean result, so it is preserved for faithfulness rather than behavior.
+/// Declaration order is observable only through short-circuiting in
+/// [`has_mod_structure`], which cannot change the boolean result.
 const MOD_FOLDERS: [&str; 11] = [
     "SKSE",
     "meshes",
@@ -35,49 +31,48 @@ const MOD_FOLDERS: [&str; 11] = [
     "materials",
 ];
 
-/// Whether `dir` looks like a mod root, i.e. contains any of [`MOD_FOLDERS`].
+/// Whether `dir` looks like a mod root, that is, holds any of [`MOD_FOLDERS`].
 ///
-/// Mirror of `ModStructureDetector::has_mod_structure`
-/// (`ModStructureDetector.cpp:10-33`). Two C++ behaviors are reproduced
-/// deliberately:
+/// Two properties of the probe are load-bearing:
 ///
-/// - Matching is CASE-INSENSITIVE because the C++ relies on `fs::exists` over
-///   NTFS rather than folding the name itself. Rust's [`Path::exists`] goes to
-///   the same Win32 call, so `meshes`, `Meshes`, and `MESHES` all match here
-///   too, with no explicit `to_lower`.
-/// - The probe is `exists`, not `is_dir`, so a plain FILE named `textures`
-///   makes the directory a "mod root". The C++ has the same hole; it is
-///   reproduced, not fixed.
+/// - Matching is case-insensitive, with no explicit `to_lower`, because
+///   [`Path::exists`] resolves the name through Win32 on NTFS. `meshes`,
+///   `Meshes` and `MESHES` all match. On a case-sensitive filesystem only the
+///   listed spellings would match.
+/// - The probe is `exists`, not `is_dir`, so a plain file named `textures`
+///   makes the directory a mod root. This is deliberate, not an oversight;
+///   tightening it changes which folder gets installed for archives that ship
+///   such a file. See PARITY-NOTES.md.
 ///
-/// Divergence (documented in PARITY-NOTES "Task 15"): the C++ calls the
-/// THROWING `fs::exists` overload, which propagates a `filesystem_error` for
-/// failures other than not-found and thereby aborts the enclosing scan.
-/// [`Path::exists`] instead reports `false` for every error, so a permission
-/// fault on one probe lets the scan continue. Unreachable in practice: the
-/// input is always a freshly-extracted temp tree owned by this process.
+/// Every probe error reads as `false`, so a permission fault on one candidate
+/// leaves the scan running. The input is always a freshly extracted temp tree
+/// owned by this process, so no probe is expected to fail.
 pub fn has_mod_structure(dir: &Path) -> bool {
     MOD_FOLDERS.iter().any(|folder| dir.join(folder).exists())
 }
 
 /// Every immediate subdirectory of `archive_root` that [`has_mod_structure`].
 ///
-/// Mirror of `ModStructureDetector::find_main_mod_folders`
-/// (`ModStructureDetector.cpp:35-61`). One level deep only: a nested wrapper
-/// such as `Outer/Inner/meshes/` is NOT found, matching the C++ limitation
-/// documented in `ModStructureDetector.hpp:31-33`.
+/// One level deep only:
 ///
-/// Returns an empty vector when `archive_root` cannot be iterated, mirroring
-/// the C++ `catch (const fs::filesystem_error&)` that logs a warning and
-/// returns whatever it had collected. The C++ keeps the partial results
-/// gathered before the fault; so does this, because the error can only surface
-/// from the iterator itself and the vector is built incrementally.
+/// ```text
+///   archive root/
+///     ModA/meshes/          -> candidate
+///     ModB/textures/        -> candidate
+///     Docs/readme/          -> not a candidate, no game-data folder
+///     Outer/Inner/meshes/   -> not a candidate, the marker is two levels down
+///     meshes/               -> not a candidate, only children are reported
+/// ```
 ///
-/// Result ORDER follows the directory iterator on both sides (Win32
-/// `FindFirstFileW`/`FindNextFileW` under both `fs::directory_iterator` and
-/// [`fs::read_dir`]) and is not further sorted. Order does not leak into
-/// install behavior: the caller uses index 0 only when the vector holds exactly
-/// one entry, and otherwise selects by name match, treating any count other
-/// than one as fatal.
+/// A read failure logs a warning and returns the candidates collected so far,
+/// so an unreadable `archive_root` yields an empty vector and a fault partway
+/// through yields a partial one.
+///
+/// Result order follows [`fs::read_dir`] (Win32
+/// `FindFirstFileW`/`FindNextFileW`) and is not sorted further. Order does not
+/// reach install behavior: the caller uses index 0 only when the vector holds
+/// exactly one entry, and otherwise selects by name match, treating any other
+/// count as fatal.
 pub fn find_main_mod_folders(archive_root: &Path) -> Vec<PathBuf> {
     let logger = Logger::instance();
     let mut results = Vec::new();
@@ -97,10 +92,8 @@ pub fn find_main_mod_folders(archive_root: &Path) -> Vec<PathBuf> {
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
-                // Mid-iteration fault. The C++ `filesystem_error` would escape
-                // the loop into the catch and stop the scan with partial
-                // results, so stop here too rather than skipping just this
-                // entry.
+                // A mid-iteration fault stops the scan and keeps the partial
+                // results, rather than skipping just this entry.
                 logger.log_warning(&format!(
                     "[install] Cannot scan \"{}\": {err}",
                     archive_root.display()
@@ -109,10 +102,14 @@ pub fn find_main_mod_folders(archive_root: &Path) -> Vec<PathBuf> {
             }
         };
         let path = entry.path();
-        // `is_directory()` in the C++; `file_type()` here follows symlinks the
-        // same way `directory_entry::is_directory` does (it uses `status`, not
-        // `symlink_status`), so a junction pointing at a mod folder counts on
-        // both sides.
+        // `Path::is_dir` resolves through `fs::metadata`, so it follows
+        // symlinks and Windows junctions: a junction pointing at a mod folder
+        // counts as a candidate.
+        //
+        // Do not swap in `entry.file_type()`. That call does not traverse a
+        // link, which is why `FileOperations::copy_folder` uses it to skip
+        // symlinked entries, so the switch would silently stop counting
+        // junctions and change which folder gets installed.
         if !path.is_dir() {
             continue;
         }
@@ -167,7 +164,7 @@ mod tests {
         stdfs::remove_dir_all(&root).ok();
     }
 
-    /// The C++ probes with `fs::exists`, which on Windows is case-insensitive.
+    /// `Path::exists` is case-insensitive on Windows.
     #[test]
     fn folder_match_is_case_insensitive() {
         let root = scratch("case");
@@ -176,8 +173,8 @@ mod tests {
         stdfs::remove_dir_all(&root).ok();
     }
 
-    /// `fs::exists` does not require a directory, so a FILE named after a mod
-    /// folder counts. Reproduced from the C++, not fixed.
+    /// The probe does not require a directory, so a file named after a mod
+    /// folder counts.
     #[test]
     fn a_file_named_like_a_mod_folder_also_counts() {
         let root = scratch("file");
@@ -203,7 +200,7 @@ mod tests {
         stdfs::remove_dir_all(&root).ok();
     }
 
-    /// One level deep only: `Outer/Inner/meshes` must NOT be detected.
+    /// One level deep only: `Outer/Inner/meshes` must not be detected.
     #[test]
     fn find_main_mod_folders_does_not_recurse() {
         let root = scratch("nested");
@@ -218,8 +215,9 @@ mod tests {
         assert!(find_main_mod_folders(&root).is_empty());
     }
 
-    /// A top-level `meshes/` makes the ROOT a mod root, but `find_main_mod_folders`
-    /// reports children only, so the caller falls through to the flat copy.
+    /// A top-level `meshes/` makes the root itself a mod root, but
+    /// `find_main_mod_folders` reports children only, so the caller falls
+    /// through to the flat copy.
     #[test]
     fn mod_folder_at_root_is_not_reported_as_a_child_candidate() {
         let root = scratch("flat");
