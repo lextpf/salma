@@ -1,29 +1,35 @@
-//! CSP solver precomputation - Rust port of `src/FomodCSPPrecompute.hpp` /
-//! `.cpp`.
+//! Builds [`Precompute`], the read-only data every CSP solver phase shares.
 //!
-//! Builds the read-only [`Precompute`] data structure the CSP solver phases
-//! (Task 9) consume: per-plugin evidence, the flag dependency graph,
-//! destination-to-group reverse indices, contested plugins, and the
-//! independent-component decomposition. All heavy scans happen here, once,
-//! before the solve begins.
+//! Everything expensive happens here, once, before the solve starts: per-plugin
+//! evidence, the flag dependency graph, the destination-to-group reverse
+//! indices, the contested-plugin set, and the decomposition into independent
+//! components. [`build_precompute`] is the entry point;
+//! [`crate::fomod_csp_solver`] calls it and then never recomputes.
 //!
-//! ## Hashing reuse
-//!
-//! [`hash_flag_subset`] folds a subset of the flag map into a `u64` cache key
-//! signature. It reuses [`crate::utils::fnv1a_hash`] and
-//! [`crate::utils::hash_combine`] with the exact C++ byte-fold (seed = FNV
-//! offset basis; for each key, fold `fnv1a(key)` then either `fnv1a(value)` or
-//! the `0xA5A5A5A5A5A5A5A5` absent-key sentinel). The resulting `u64` gates the
-//! option cache's equality, so byte-exactness is load-bearing.
+//! Two scans with different key sets feed those indices, and the difference is
+//! load-bearing. The group scan walks every plugin's atoms, so `group_dests` and
+//! `dest_to_groups` cover every non-excluded destination a plugin can produce.
+//! The target scan walks the installed file tree, so `dest_to_plugins`,
+//! `dest_to_size_match_groups`, `dest_to_hash_capable_groups`,
+//! `conditional_dests` and `contested_plugins` only ever see destinations that
+//! are present in the target and not excluded. See the "Index spaces" and
+//! "Keying asymmetry" sections on [`Precompute`].
 //!
 //! ## Determinism
 //!
-//! Every reverse-index vector is sort-unique'd (ascending). The component
-//! decomposition sorts each component ascending and orders components
-//! size-descending with a min-member-ascending tiebreak (a TOTAL order): the
-//! C++ uses an UNSTABLE `std::sort` by size only, so exact bit-parity with a
-//! specific C++ run is not guaranteed on equal-size ties - only run-to-run
-//! determinism. See `PARITY-NOTES.md` "Task 8".
+//! The same inputs must always produce the same `Precompute`, because the option
+//! cache and the memo table are keyed off values derived from it.
+//!
+//! - Every reverse-index vector is sorted ascending and deduplicated.
+//! - Each component is sorted ascending, and components are ordered
+//!   size-descending with a min-member-ascending tiebreak. The tiebreak makes
+//!   the order total, so two equal-size components cannot swap between runs.
+//!   See `PARITY-NOTES.md`.
+//! - [`hash_flag_subset`] folds part of the flag map into the `u64` signature
+//!   that gates option-cache and memo-key equality, reusing
+//!   [`crate::utils::fnv1a_hash`] and [`crate::utils::hash_combine`]. Its byte
+//!   layout is load-bearing: change the fold and every cached key changes with
+//!   it.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -33,12 +39,11 @@ use crate::fomod_ir::{FomodCondition, FomodConditionType, FomodInstaller};
 use crate::fomod_propagator::PropagationResult;
 use crate::utils::{fnv1a_hash, hash_combine};
 
-/// Recursively collect all flag names referenced by a condition tree. Mirror of
-/// the C++ `collect_condition_flags`.
+/// Collect every flag name a condition tree references, into `out`.
 ///
-/// A `Flag` node with a non-empty `flag_name` inserts the name (empty names are
-/// skipped); a `Composite` recurses into every child; every other leaf
-/// (File/Game/Plugin/Fomod/Fomm/Fose) contributes nothing.
+/// A `Flag` node inserts its `flag_name`, skipping an empty one. A `Composite`
+/// recurses into every child. Every other leaf (File, Game, Plugin, Fomod, Fomm,
+/// Fose) contributes nothing.
 pub fn collect_condition_flags(c: &FomodCondition, out: &mut HashSet<String>) {
     match c.r#type {
         FomodConditionType::Flag => {
@@ -55,13 +60,11 @@ pub fn collect_condition_flags(c: &FomodCondition, out: &mut HashSet<String>) {
     }
 }
 
-/// True iff any leaf in the condition tree is a File, Game, Plugin, Fomod,
-/// Fomm, or Fose condition (i.e. depends on external state). Mirror of the C++
-/// `condition_depends_on_external_state`.
+/// True when any leaf of the condition tree depends on state inference cannot
+/// observe: a File, Game, Plugin, Fomod, Fomm or Fose condition.
 ///
-/// `Flag` returns false; `Composite` is the OR of its children; every other
-/// (leaf) type returns true, matching the C++ switch plus its final `return
-/// true` fallthrough.
+/// `Flag` is false, a `Composite` is the disjunction of its children (so an
+/// empty one is false), and every other leaf type is true.
 pub fn condition_depends_on_external_state(c: &FomodCondition) -> bool {
     match c.r#type {
         FomodConditionType::Flag => false,
@@ -70,14 +73,15 @@ pub fn condition_depends_on_external_state(c: &FomodCondition) -> bool {
     }
 }
 
-/// Hash a subset of flag values for use as a cache-key signature. Mirror of the
-/// C++ `hash_flag_subset`.
+/// Fold a subset of the flag map into a `u64` cache-key signature.
 ///
-/// Only the flags named in `keys` are folded, in `keys` order (the caller
-/// passes `group_cache_flags[gidx]`, a byte-ascending sorted list). For each
-/// key the KEY NAME is folded first, then the value (present) or the
-/// `0xA5A5A5A5A5A5A5A5` sentinel (absent). Reuses [`fnv1a_hash`] +
-/// [`hash_combine`]; the fold order makes this key-order-sensitive by design.
+/// Only the flags named in `keys` are folded, in `keys` order. Two callers: the
+/// option enumerator passes `group_cache_flags[gidx]` and the backtracker passes
+/// `memo_flags`; both are sorted byte-ascending. Each key folds its name first,
+/// then either its value or the `0xA5A5A5A5A5A5A5A5` sentinel when the flag is
+/// absent, which keeps an absent flag distinct from one set to the empty string.
+/// The fold is key-order-sensitive by design, and its byte layout gates both
+/// option-cache and memo-key equality, so do not reorder or reseed it.
 pub fn hash_flag_subset(flags: &HashMap<String, String>, keys: &[String]) -> u64 {
     let mut h: u64 = 14695981039346656037;
     for k in keys {
@@ -90,24 +94,21 @@ pub fn hash_flag_subset(flags: &HashMap<String, String>, keys: &[String]) -> u64
     h
 }
 
-/// Sort ascending then dedup in place. Mirror of the C++ file-scoped
-/// `sort_unique`.
+/// Sort ascending, then deduplicate in place.
 fn sort_unique(v: &mut Vec<i32>) {
     v.sort_unstable();
     v.dedup();
 }
 
-/// Flag name -> list of `(flat_plugin_index, flag_value)` setters. Mirror of the
-/// C++ `FlagSetterMap`.
+/// Flag name -> the `(flat_plugin_index, flag_value)` pairs that set it.
 type FlagSetterMap = HashMap<String, Vec<(i32, String)>>;
 
 /// Propagate evidence from a flag-gated condition back to the plugins that set
-/// the required flag values. Mirror of the C++ file-scoped
-/// `collect_flag_evidence`.
+/// the flag values it expects.
 ///
 /// A `Flag` node adds `weight` to every setter of that flag whose set value
-/// equals the condition's expected value; a `Composite` recurses with the same
-/// weight; every other leaf contributes nothing.
+/// equals the condition's expected value. A `Composite` recurses with the same
+/// weight. Every other leaf contributes nothing.
 fn collect_flag_evidence(
     cond: &FomodCondition,
     flag_setters: &FlagSetterMap,
@@ -133,19 +134,46 @@ fn collect_flag_evidence(
     }
 }
 
-/// Compute per-plugin evidence scores based on file overlap with the target
-/// tree. Mirror of the C++ `compute_evidence`.
+/// Score every plugin on how well its files overlap the target tree.
 ///
-/// Direct file matches: a target dest with exactly one non-auto size-compatible
-/// Plugin producer scores that plugin `+3`; a contested dest scores each
-/// candidate `+2` (with a hash match) or `+1` (without). Indirect flag evidence:
-/// conditional patterns that produce target-matching files, and step-visibility
-/// conditions that do not depend on external state, propagate `+hits` to the
-/// plugins that set the activating flag values.
+/// Returns one entry per plugin in the whole installer, indexed by flat plugin
+/// index in document order. Higher means stronger evidence that the plugin was
+/// originally selected. Every entry starts at 0 and only grows; no rule
+/// subtracts.
 ///
-/// The result is a flat vector indexed by flat plugin index. The target tree is
-/// iterated in unspecified (hash-map) order, but every accumulation is a
-/// commutative `+=`, so the output is deterministic.
+/// Three rules contribute, each with its own filter set. "auto" below means an
+/// atom whose `always_install` or `install_if_usable` flag is set, and
+/// "size-compatible" means either side reports size 0 (unknown) or the two sizes
+/// are equal.
+///
+/// ```text
+/// direct (per non-excluded target dest, per matching atom;
+///         the atom must be Origin::Plugin, not auto, and size-compatible)
+///   exactly 1 matching atom .. +3 to that atom's plugin
+///   2+ matching atoms ........ per matching atom, +2 when that atom's plugin
+///                              owns any atom on this dest whose nonzero
+///                              content hash equals the target's nonzero
+///                              hash, otherwise +1
+///
+/// indirect (weight = hits, added to every plugin that sets the flag value a
+///           Flag leaf of the gating condition expects)
+///   conditional pattern ci:
+///     hits = atoms of per_conditional[ci] that are non-excluded, present in
+///            the target, size-compatible and hash-compatible. Auto atoms
+///            count here.
+///   step visibility (only when the condition has no external-state leaf):
+///     hits = atoms of that step's plugins that are non-excluded, present in
+///            the target and size-compatible. Auto atoms are skipped here,
+///            and hash is not tested.
+/// ```
+///
+/// The direct rule counts matching atoms, not distinct plugins. One plugin that
+/// supplies the same destination from two different sources contributes two
+/// matching atoms, so it misses the `+3` branch and is scored once per atom in
+/// the contested branch instead.
+///
+/// The target tree is iterated in unspecified (hash-map) order, but every
+/// accumulation is a commutative `+=`, so the result is deterministic.
 pub fn compute_evidence(
     installer: &FomodInstaller,
     atoms: &ExpandedAtoms,
@@ -302,8 +330,7 @@ pub fn compute_evidence(
     evidence
 }
 
-/// Add an undirected edge between two groups in the dependency graph. Mirror of
-/// the C++ file-scoped `link_groups` (symmetric set-insert; a no-op self-loop).
+/// Add an undirected edge between two groups. A self-edge is a no-op.
 fn link_groups(graph: &mut [HashSet<i32>], a: i32, b: i32) {
     if a == b {
         return;
@@ -312,21 +339,19 @@ fn link_groups(graph: &mut [HashSet<i32>], a: i32, b: i32) {
     graph[b as usize].insert(a);
 }
 
-/// Discover connected components among groups via BFS on an undirected graph.
-/// Mirror of the C++ `build_components`.
+/// Split the groups into connected components of the dependency graph, found by
+/// breadth-first search.
 ///
-/// Edges: groups sharing a destination path; a flag-setter group to every
-/// flag-reader group for the same flag; and all setter pairs of the same flag.
-/// All edge construction is commutative/idempotent, so the graph is identical
-/// regardless of the unordered-map iteration order of `dest_to_groups` /
-/// setters.
+/// Three kinds of edge: groups that share a destination path; a flag-setter
+/// group to every group that reads the same flag; and every pair of setters of
+/// the same flag. Edge construction is commutative and idempotent, so the graph
+/// does not depend on the iteration order of `dest_to_groups` or of the setter
+/// map.
 ///
-/// Each finished BFS component is sorted ascending (so membership and order are
-/// deterministic despite the unordered neighbor-visit order). Components are
-/// then ordered size-descending; the C++ uses an UNSTABLE `std::sort` by size
-/// only, so this port adds a min-member-ascending tiebreak to make the order a
-/// TOTAL, run-to-run deterministic order (exact C++ tie order is not
-/// reproduced; see the module doc and PARITY-NOTES).
+/// Each finished component is sorted ascending, which makes it deterministic
+/// despite the unordered neighbor-visit order. Components are then ordered
+/// size-descending with a min-member-ascending tiebreak, a total order, so
+/// equal-size components cannot swap between runs. See the module doc.
 fn build_components(pre: &Precompute) -> Vec<Vec<i32>> {
     let n = pre.groups.len();
     let mut graph: Vec<HashSet<i32>> = vec![HashSet::new(); n];
@@ -389,18 +414,26 @@ fn build_components(pre: &Precompute) -> Vec<Vec<i32>> {
         comps.push(comp);
     }
 
-    // Size DESC, then min-member ASC (comp[0] is the sorted minimum). Total,
-    // deterministic order; see the module doc.
+    // Size descending, then min-member ascending (comp[0] is the sorted
+    // minimum). A total, deterministic order; see the module doc.
     comps.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a[0].cmp(&b[0])));
     comps
 }
 
-/// Build the [`Precompute`] data structure. Mirror of the C++ `build_precompute`.
+/// Build the [`Precompute`] the solver phases share.
 ///
-/// The `groups`/`evidence` vectors are produced by the caller (the CSP solver
-/// entry point, Task 9) and moved in; the seven reference inputs are borrowed
-/// for the lifetime `'a`. Fields are populated in the same order as the C++, and
-/// every reverse-index vector is sort-unique'd ascending.
+/// `groups` and `evidence` come from the caller
+/// ([`crate::fomod_csp_solver::solve_fomod_csp`]) and are moved in; the seven
+/// reference inputs are borrowed for `'a`. Every reverse-index vector comes out
+/// sorted ascending and deduplicated.
+///
+/// `propagation` is stored, not consumed here. The option enumerator reads
+/// `propagation.narrowed_domains` to drop options that would select a pruned
+/// plugin; nothing in this function or in the solver skips work because
+/// propagation resolved a group.
+///
+/// Performs no I/O and logs nothing. It allocates one entry per installer plugin
+/// and per target destination, so cost is linear in `atoms` plus `target`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_precompute<'a>(
     installer: &'a FomodInstaller,
@@ -556,7 +589,10 @@ pub fn build_precompute<'a>(
         p.memo_flags = memo;
     }
 
-    // Contested / reverse-index loop over the target tree.
+    // Contested / reverse-index loop over the target tree. Everything written
+    // below this point is keyed by non-excluded destinations that exist in the
+    // target, unlike `dest_to_groups` and `group_dests` above, which are keyed
+    // by every destination a plugin can produce.
     let mut contested_plugins: HashSet<i32> = HashSet::new();
 
     for (dest, tf) in target {
@@ -614,6 +650,11 @@ pub fn build_precompute<'a>(
             }
 
             sources.insert(atom.source_path.clone());
+            // Unconditional: every plugin producing any surviving target dest
+            // becomes "contested", conflicted or not. Do not add a multiplicity
+            // test here. `contested_plugins` feeds `contested_signature`, which
+            // is a MemoKey field, so a narrower set changes every memo key and
+            // therefore which subtrees are pruned.
             contested_plugins.insert(atom.plugin_index);
         }
 
@@ -640,6 +681,10 @@ pub fn build_precompute<'a>(
             p.conditional_dests.insert(dest.clone());
         }
 
+        // Redundant in practice: every `candidate_plugins` member already went
+        // through the unconditional insert above. Removing it would assert a
+        // no-op that nothing here proves, and this set decides every memo key,
+        // so leave it in place.
         if sources.len() > 1 {
             for flat_plugin in &candidate_plugins {
                 contested_plugins.insert(*flat_plugin);
@@ -716,10 +761,9 @@ mod tests {
         items.iter().map(|s| s.to_string()).collect()
     }
 
-    /// Build GroupRefs in installer document order (flat_start assigned by the
-    /// running plugin count), mirroring the caller's initial construction (the
-    /// per-step priority sort is a Task 9 concern and orthogonal to these
-    /// precompute tests).
+    /// Build GroupRefs in installer document order, assigning `flat_start` from
+    /// the running plugin count, as the solver does before its per-step priority
+    /// sort. That sort is orthogonal to what these tests cover.
     fn doc_order_group_refs(installer: &FomodInstaller) -> Vec<GroupRef> {
         let mut groups = Vec::new();
         let mut flat = 0i32;
@@ -744,7 +788,7 @@ mod tests {
     fn hash_flag_subset_present_key_folds_key_then_value() {
         let flags: HashMap<String, String> =
             [("a".to_string(), "b".to_string())].into_iter().collect();
-        // Constant computed offline from the exact C++ fold.
+        // Golden constant: pins the byte layout of the fold.
         assert_eq!(
             hash_flag_subset(&flags, &["a".to_string()]),
             0x9874ce55450d2e52
@@ -1228,8 +1272,8 @@ mod tests {
             &installer, &atoms, &index, &target, &excluded, None, None, groups, evidence,
         );
 
-        // needed_flags = F (type pattern) + H (conditional). G is set-only, not
-        // read, so it is NOT needed.
+        // needed_flags = F (type pattern) + H (conditional). G is set-only,
+        // never read, so it is not needed.
         assert!(pre.needed_flags.contains("F"));
         assert!(pre.needed_flags.contains("H"));
         assert!(!pre.needed_flags.contains("G"));
@@ -1311,7 +1355,7 @@ mod tests {
     #[test]
     fn components_two_independent_ordered_by_size_desc() {
         // Group 0 and group 1 share dest "shared" (2-member component); group 2
-        // is alone (1-member). Component order: size DESC -> [ [0,1], [2] ].
+        // is alone (1-member). Component order: size descending -> [ [0,1], [2] ].
         let installer = independent_groups_installer(3);
         let a0 = plugin_atom("shared", "s0", 0);
         let a1 = plugin_atom("shared", "s1", 1);
