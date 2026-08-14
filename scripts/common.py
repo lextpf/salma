@@ -1,22 +1,22 @@
 """
-@brief provide DLL and file-tree helpers for test scripts.
-@author Alex (https://github.com/lextpf)
+@brief Provide DLL and file-tree helpers for test scripts.
+@author Alex (<https://github.com/lextpf>)
 
-### :material-cog-outline: configuration
+### :material-cog-outline: Configuration
 
-import exits 2 unless `SALMA_MODS_PATH` and `SALMA_DEPLOY_PATH` are set.
+Import exits 2 unless `SALMA_MODS_PATH` and `SALMA_DEPLOY_PATH` are set.
 `SALMA_DOWNLOADS_PATH` is optional; without it, only absolute archive paths resolve.
 
-### :material-filter-outline: comparison exclusions
+### :material-filter-outline: Comparison exclusions
 
-comparison ignores these basenames on both sides:
+Comparison ignores these basenames on both sides:
 
-| name                | reason                              |
+| Name                | Reason                              |
 |---------------------|-------------------------------------|
 | `meta.ini`          | MO2 writes install metadata.        |
 | `mo_salma.log`      | salma writes a per-mod log.         |
 | `salma-install.log` | salma install log.                  |
-| `mujointfix.log`    | a runtime plugin rewrites the file. |
+| `mujointfix.log`    | A runtime plugin rewrites the file. |
 """
 
 import configparser
@@ -72,16 +72,16 @@ class CompareResult:
 def find_dll() -> Path:
     """
     @fn find_dll() -> Path
-    @brief select the first harness DLL from the fixed search order.
-    @author Alex (https://github.com/lextpf)
+    @brief Select the first harness DLL from the fixed search order.
+    @author Alex (<https://github.com/lextpf>)
 
-    ### :material-format-list-numbered: lookup order
+    ### :material-format-list-numbered: Lookup order
 
-    search order is deployed DLL, CMake copy, then current-directory DLL.
+    Search order is deployed DLL, CMake copy, then current-directory DLL.
     manual runs do not verify that the deployed build is current.
     `run_harness.py` redirects `SALMA_DEPLOY_PATH` to a verified staged copy.
 
-    @return the absolute DLL path.
+    @return The absolute DLL path.
     """
     candidates = [
         DEPLOY_PATH / "salma" / DLL_NAME,
@@ -102,16 +102,16 @@ def find_dll() -> Path:
 def load_dll(dll_path: Path):
     """
     @fn load_dll(dll_path: Path)
-    @brief bind the C ABI and reject incompatible DLL versions.
-    @author Alex (https://github.com/lextpf)
+    @brief Bind the C ABI and reject incompatible DLL versions.
+    @author Alex (<https://github.com/lextpf>)
 
-    each call maps a new handle. owned strings use `c_void_p`; callers must use
+    Each call maps a new handle. Owned strings use `c_void_p`; callers must use
     `call_owned_string` or call `freeResult` on the original address.
     """
     lib = ctypes.CDLL(str(dll_path))
 
     lib.getApiVersion.argtypes = []
-    lib.getApiVersion.restype = ctypes.c_char_p  # static const char*, never freed
+    lib.getApiVersion.restype = ctypes.c_char_p  # Static const char*, never freed
 
     lib.freeResult.argtypes = [ctypes.c_void_p]
     lib.freeResult.restype = None
@@ -132,7 +132,7 @@ def load_dll(dll_path: Path):
     lib.inferFomodSelections.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
     lib.inferFomodSelections.restype = ctypes.c_void_p
 
-    # callers support DLLs that do not export `resolveModArchive`.
+    # Callers support DLLs that do not export `resolveModArchive`.
     if hasattr(lib, "resolveModArchive"):
         lib.resolveModArchive.argtypes = [
             ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
@@ -146,8 +146,8 @@ def load_dll(dll_path: Path):
 def _check_api_version(lib) -> None:
     """
     @fn _check_api_version(lib) -> None
-    @brief reject a missing, empty, or incompatible ABI version.
-    @author Alex (https://github.com/lextpf)
+    @brief Reject a missing, empty, or incompatible ABI version.
+    @author Alex (<https://github.com/lextpf>)
 
     """
     try:
@@ -171,11 +171,17 @@ def _check_api_version(lib) -> None:
 def call_owned_string(lib, fn, *args) -> str:
     """
     @fn call_owned_string(lib, fn, *args) -> str
-    @brief copy and release one DLL-owned UTF-8 string.
-    @author Alex (https://github.com/lextpf)
+    @brief Copy and release one DLL-owned UTF-8 string.
+    @author Alex (<https://github.com/lextpf>)
 
-    `freeResult` runs even when decoding fails.
-    @return the decoded value, or an empty string for a null pointer.
+    The function must return its original pointer with ctypes.c_void_p restype.
+    freeResult runs even if UTF-8 decoding raises. Do not use this helper for the
+    static getApiVersion result.
+
+    @param lib Loaded DLL that owns the allocation and provides freeResult.
+    @param fn Owned-string export configured to return a raw pointer.
+    @param args Arguments already converted for the export.
+    @return Copied text, or an empty string for a null pointer.
     """
     addr = fn(*args)
     if not addr:
@@ -199,6 +205,17 @@ def get_archive_path(mod_folder: Path) -> str:
 
 
 def resolve_archive(raw_path: str) -> Path | None:
+    """
+    @fn resolve_archive(raw_path: str) -> Path | None
+    @brief Resolve a metadata archive path for harness scripts.
+    @author Alex (<https://github.com/lextpf>)
+
+    Relative values are searched only under the configured downloads directory.
+    This helper does not use the engine's additional MO2-relative candidates.
+
+    @param raw_path Metadata value; an empty value has no candidate.
+    @return The existing path, or None when the candidate does not exist.
+    """
     if not raw_path:
         return None
     p = Path(raw_path)
@@ -214,8 +231,8 @@ def resolve_archive(raw_path: str) -> Path | None:
 def find_mod_folder(mod_name: str, mods_dir: Path) -> Path | None:
     """
     @fn find_mod_folder(mod_name: str, mods_dir: Path) -> Path | None
-    @brief use an exact folder name before a case-insensitive prefix match.
-    @author Alex (https://github.com/lextpf)
+    @brief Use an exact folder name before a case-insensitive prefix match.
+    @author Alex (<https://github.com/lextpf>)
 
     """
     exact = mods_dir / mod_name
@@ -231,11 +248,11 @@ def find_mod_folder(mod_name: str, mods_dir: Path) -> Path | None:
 def parse_separator_mods(separator: str) -> set[str]:
     """
     @fn parse_separator_mods(separator: str) -> set[str]
-    @brief collect the mods shown below one MO2 separator.
-    @author Alex (https://github.com/lextpf)
+    @brief Collect the mods shown below one MO2 separator.
+    @author Alex (<https://github.com/lextpf>)
 
-    the first sorted profile containing `modlist.txt` is used. MO2 stores highest
-    priority first, which reverses the UI order. collect entries above the target
+    The first sorted profile containing `modlist.txt` is used. MO2 stores highest
+    priority first, which reverses the UI order. Collect entries above the target
     and ignore intervening separators without resetting the result.
     """
     profiles_dir = MODS_PATH.parent / "profiles"
@@ -277,6 +294,17 @@ def parse_separator_mods(separator: str) -> set[str]:
 
 
 def list_files(root: Path) -> dict[str, int]:
+    """
+    @fn list_files(root: Path) -> dict[str, int]
+    @brief Index file sizes for case-insensitive tree comparison.
+    @author Alex (<https://github.com/lextpf>)
+
+    Ignored basenames are excluded at every depth. Paths that differ only in case
+    share one key, so the last enumerated file supplies its size.
+
+    @param root Directory to enumerate recursively.
+    @return Relative forward-slash paths in lowercase, mapped to sizes in bytes.
+    """
     files = {}
     for f in root.rglob("*"):
         if not f.is_file():
@@ -301,6 +329,18 @@ def files_equal(a: Path, b: Path) -> bool:
 
 
 def find_actual_file(root: Path, rel_lower: str) -> Path | None:
+    """
+    @fn find_actual_file(root: Path, rel_lower: str) -> Path | None
+    @brief Recover the on-disk spelling of a comparison path.
+    @author Alex (<https://github.com/lextpf>)
+
+    Each component is matched without case. Enumeration failures and missing
+    components return no result.
+
+    @param root Directory containing the comparison tree.
+    @param rel_lower Lowercase relative path with forward-slash separators.
+    @return The resolved regular file, or None when it cannot be found.
+    """
     parts = rel_lower.split("/")
     current = root
     for part in parts:
@@ -330,13 +370,13 @@ def _find_7z() -> str | None:
 def archive_entries_by_tail(archive_path: Path) -> dict[str, list[int]]:
     """
     @fn archive_entries_by_tail(archive_path: Path) -> dict[str, list[int]]
-    @brief index archive entry sizes under every relative path suffix.
-    @author Alex (https://github.com/lextpf)
+    @brief Index archive entry sizes under every relative path suffix.
+    @author Alex (<https://github.com/lextpf>)
 
-    duplicate sizes remain distinct so comparison can detect selectable variants.
-    zero-byte entries are excluded. listing blocks for at most 120 seconds.
+    Duplicate sizes remain distinct so comparison can detect selectable variants.
+    Zero-byte entries are excluded. Listing blocks for at most 120 seconds.
 
-    @return an empty map when 7-Zip is unavailable, cannot start, or times out.
+    @return An empty map when 7-Zip is unavailable, cannot start, or times out.
     """
     seven_zip = _find_7z()
     if not seven_zip:
@@ -365,7 +405,7 @@ def archive_entries_by_tail(archive_path: Path) -> dict[str, list[int]]:
         elif not line.strip():
             if cur_path and cur_size is not None and cur_size > 0:
                 norm = cur_path.replace("\\", "/").lower()
-                # index every suffix to ignore the FOMOD source-folder prefix.
+                # Index every suffix to ignore the FOMOD source-folder prefix.
                 parts = norm.split("/")
                 for i in range(len(parts)):
                     tail = "/".join(parts[i:])
@@ -377,14 +417,29 @@ def archive_entries_by_tail(archive_path: Path) -> dict[str, list[int]]:
 
 def compare_trees(expected: Path, actual: Path, full: bool,
                   archive_path: Path | None = None) -> CompareResult:
-    # paths are relative, slash-separated, and case-insensitive.
-    # archive exclusions require 7-Zip; a failed listing makes comparison strict.
-    # | difference         | exclusion rule                                  |
-    # |--------------------|-------------------------------------------------|
-    # | missing            | no archive entry has the path suffix.           |
-    # | size mismatch      | no entry at that suffix has the installed size. |
-    # | content mismatch   | at most one entry has that suffix and size.     |
-    # the missing rule can hide inference failures. omit `archive_path` for strict mode.
+    """
+    @fn compare_trees(expected, actual, full, archive_path)
+    @brief Compare installed and replayed files with optional archive exclusions.
+    @author Alex (<https://github.com/lextpf>)
+
+    Paths are relative, slash-separated, and case-insensitive. Ignored basenames
+    are excluded on both sides. Extra files are always reported.
+
+    With a nonempty archive listing, these rules exclude differences attributed to
+    local changes. They are heuristics and can hide inference failures.
+
+    | Difference       | Exclusion rule                                    |
+    |------------------|---------------------------------------------------|
+    | Missing          | No archive entry has the path suffix.             |
+    | Size mismatch    | Known suffix has no matching installed size.      |
+    | Content mismatch | Known suffix has at most one matching-size entry. |
+
+    @param expected Installed-mod tree used as the reference.
+    @param actual Replayed installation tree.
+    @param full Compare equal-size files byte for byte when true.
+    @param archive_path Optional archive for exclusions; None keeps comparison strict.
+    @return Sorted differences and the reference file count after basename exclusions.
+    """
     exp_files = list_files(expected)
     act_files = list_files(actual)
 
@@ -397,12 +452,30 @@ def compare_trees(expected: Path, actual: Path, full: bool,
             archive_path)
 
     def is_external_size(rel: str, exp_size: int) -> bool:
+        """
+        @fn is_external_size(rel: str, exp_size: int) -> bool
+        @brief Identify a size absent from the available archive variants.
+        @author Alex (<https://github.com/lextpf>)
+
+        @param rel Normalized comparison path.
+        @param exp_size Installed size, in bytes.
+        @return True only when the suffix exists and none of its sizes match.
+        """
         if not archive_entries:
             return False
         sizes = archive_entries.get(rel)
         return bool(sizes) and exp_size not in sizes
 
     def is_external_content(rel: str, exp_size: int) -> bool:
+        """
+        @fn is_external_content(rel: str, exp_size: int) -> bool
+        @brief Identify content differences with at most one possible source.
+        @author Alex (<https://github.com/lextpf>)
+
+        @param rel Normalized comparison path.
+        @param exp_size Installed size, in bytes.
+        @return True for a known suffix with zero or one matching-size source.
+        """
         if not archive_entries:
             return False
         sizes = archive_entries.get(rel)
@@ -412,6 +485,14 @@ def compare_trees(expected: Path, actual: Path, full: bool,
         return sum(1 for s in sizes if s == exp_size) <= 1
 
     def is_external_missing(rel: str) -> bool:
+        """
+        @fn is_external_missing(rel: str) -> bool
+        @brief Identify missing paths absent from a nonempty archive index.
+        @author Alex (<https://github.com/lextpf>)
+
+        @param rel Normalized comparison path.
+        @return True when the archive has no entry at this suffix.
+        """
         if not archive_entries:
             return False
         return rel not in archive_entries
