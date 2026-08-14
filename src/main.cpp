@@ -44,10 +44,25 @@
 
 namespace fs = std::filesystem;
 
-// route Crow output through the shared logger and suppress successful poll noise.
+/**
+ * @class SalmaLogHandler
+ * @brief Adapt Crow severity and polling records to the shared logger.
+ * @author Alex (<https://github.com/lextpf>)
+ */
 class SalmaLogHandler : public crow::ILogHandler
 {
 public:
+    /**
+     * @fn bool SalmaLogHandler::should_suppress_noise(const std::string& message)
+     * @brief Filter recognized log and status polling traffic.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * Request records for the fixed polling paths are suppressed. Response records are suppressed
+     * only when they contain a 200 status.
+     *
+     * @param message Formatted Crow log record.
+     * @return `true` when the record is recognized as polling noise.
+     */
     static bool should_suppress_noise(const std::string& message)
     {
         const bool is_request = message.starts_with("Request:");
@@ -68,7 +83,7 @@ public:
             return false;
         }
 
-        // retain failed polls and drop successful heartbeat traffic.
+        // Retain failed polls and drop successful heartbeat traffic.
         if (is_response)
         {
             return message.find(" 200 ") != std::string::npos;
@@ -76,6 +91,14 @@ public:
         return true;
     }
 
+    /**
+     * @fn void SalmaLogHandler::log(const std::string& message, crow::LogLevel level)
+     * @brief Route retained Crow records through the shared logger.
+     * @author Alex (<https://github.com/lextpf>)
+     *
+     * @param message Crow record before the local prefix is added.
+     * @param level Severity used to choose error, warning, or ordinary output.
+     */
     void log(const std::string& message, crow::LogLevel level) override
     {
         if (should_suppress_noise(message))
@@ -100,6 +123,16 @@ public:
     }
 };
 
+/**
+ * @fn int main()
+ * @brief Load server configuration and serve the dashboard on port 5000.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * The server binds to loopback unless SALMA_BIND_ADDR overrides it. Controllers and static assets
+ * outlive the blocking Crow run loop.
+ *
+ * @return Zero after the server run loop exits normally.
+ */
 int main()
 {
     auto& logger = mo2core::Logger::instance();
@@ -111,7 +144,7 @@ int main()
 
     mo2server::ConfigService::instance().load();
 
-    // initialize the CSRF token and origin allowlist before routes become visible.
+    // Initialize the CSRF token and origin allowlist before routes become visible.
     auto& security = mo2core::SecurityContext::instance();
     {
         std::string joined;
@@ -127,13 +160,13 @@ int main()
         logger.log(std::format("[server] Allowed origins: {}", joined));
     }
 
-    // apply the CORS and CSRF policy to every route.
+    // Apply the CORS and CSRF policy to every route.
     crow::App<mo2server::SecurityMiddleware> app;
 
     mo2server::InstallationController controller;
     mo2server::Mo2Controller mo2_controller;
 
-    // resolve release and development assets relative to the executable.
+    // Resolve release and development assets relative to the executable.
     auto exe_dir = mo2core::executable_directory();
     auto static_dir = (exe_dir / "web" / "dist").string();
     if (!fs::exists(static_dir))
@@ -148,7 +181,7 @@ int main()
     logger.log(std::format("[server] Static files directory: {}", static_dir));
     mo2server::StaticFileHandler static_handler(static_dir);
 
-    // the status segment is advisory; every value reports the single install job.
+    // The status segment is advisory; every value reports the single install job.
     CROW_ROUTE(app, "/api/installation/upload")
         .methods(crow::HTTPMethod::POST)([&controller](const crow::request& req)
                                          { return controller.handle_upload(req); });
@@ -161,7 +194,7 @@ int main()
         .methods(crow::HTTPMethod::GET)([&controller](const std::string& job_id)
                                         { return controller.handle_status(job_id); });
 
-    // only allowed origins can read the token required for state-changing requests.
+    // CORS permits browser reads from allowed origins; this route does not authenticate clients.
     CROW_ROUTE(app, "/api/csrf-token")
         .methods(crow::HTTPMethod::GET)(
             [&security]()
@@ -241,7 +274,7 @@ int main()
         .methods(crow::HTTPMethod::GET)([&mo2_controller]()
                                         { return mo2_controller.get_test_status(); });
 
-    // serve non-API paths with the client-side routing fallback.
+    // Serve non-API paths with the client-side routing fallback.
     CROW_ROUTE(app, "/")
     ([&static_handler]() { return static_handler.serve(""); });
 
@@ -256,11 +289,11 @@ int main()
             return static_handler.serve(path);
         });
 
-    // this threshold controls response streaming. Crow buffers request bodies
+    // This threshold controls response streaming. Crow buffers request bodies
     // before handlers run, so the 8 GiB upload check does not cap memory use.
     static constexpr size_t kStreamThreshold = 8ULL * 1024 * 1024 * 1024;
 
-    // default to loopback because routes write files and start child processes.
+    // Default to loopback because routes write files and start child processes.
     // SALMA_BIND_ADDR permits remote access and logs an explicit warning.
     std::string bind_addr = "127.0.0.1";
     if (const char* bind_env = std::getenv("SALMA_BIND_ADDR"); bind_env && *bind_env)
