@@ -1,9 +1,9 @@
 """
-@brief install one archive from recorded FOMOD selections.
-@author Alex (https://github.com/lextpf)
+@brief Install one archive from recorded FOMOD selections.
+@author Alex (<https://github.com/lextpf>)
 
-the command exits 0 even when the DLL reports failure. it does not call
-`installSucceeded()`. importing `scripts.common` requires `SALMA_MODS_PATH` and
+The command exits 0 even when the DLL reports failure. It does not call
+`installSucceeded()`. Importing `scripts.common` requires `SALMA_MODS_PATH` and
 `SALMA_DEPLOY_PATH`, including when `--dll` is set.
 """
 
@@ -19,8 +19,8 @@ def install_mod(archive: Path, output_dir: Path, json_path: Path,
                 dll=None) -> str:
     """
     @fn install_mod(archive: Path, output_dir: Path, json_path: Path, dll=None) -> str
-    @brief return the ambiguous install path or error text from the DLL.
-    @author Alex (https://github.com/lextpf)
+    @brief Return the ambiguous install path or error text from the DLL.
+    @author Alex (<https://github.com/lextpf>)
 
     install_mod does not call `installSucceeded()`. `call_owned_string` frees
     the DLL allocation after copying it.
