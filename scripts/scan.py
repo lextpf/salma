@@ -1,8 +1,8 @@
 """
-@brief infer FOMOD selections for one installed mod.
-@author Alex (https://github.com/lextpf)
+@brief Infer FOMOD selections for one installed mod.
+@author Alex (<https://github.com/lextpf>)
 
-an empty result represents every inference failure and exits 1. importing
+An empty result represents every inference failure and exits 1. Importing
 `scripts.common` requires `SALMA_MODS_PATH` and `SALMA_DEPLOY_PATH`, including
 when `--dll` is set.
 """
@@ -19,11 +19,11 @@ from scripts.common import call_owned_string, find_dll, load_dll
 def scan(archive: Path, mod_path: Path, dll=None) -> str:
     """
     @fn scan(archive: Path, mod_path: Path, dll=None) -> str
-    @brief preserve the DLL result lifetime while running inference.
-    @author Alex (https://github.com/lextpf)
+    @brief Preserve the DLL result lifetime while running inference.
+    @author Alex (<https://github.com/lextpf>)
 
     `call_owned_string` frees the DLL allocation after copying it.
-    @return the choices JSON, or an empty string for any failure.
+    @return The choices JSON, or an empty string for any failure.
     """
     if dll is None:
         dll = load_dll(find_dll())
