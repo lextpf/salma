@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-@brief verify the flat C ABI used by the MO2 plugin.
-@author Alex (https://github.com/lextpf)
+@brief Verify the flat C ABI used by the MO2 plugin.
+@author Alex (<https://github.com/lextpf>)
 
-keep ctypes declarations synchronized with `scripts/mo2-salma.py`. the command
-exits 0 on success, 1 on a failed check, and 2 on invalid usage. it does not
+Keep ctypes declarations synchronized with `scripts/mo2-salma.py`. The command
+exits 0 on success, 1 on a failed check, and 2 on invalid usage. It does not
 install a mod, but early calls can create `logs/salma.log` beside the DLL.
 """
 import ctypes
 import sys
 
-# keep the callback and export list synchronized with `scripts/mo2-salma.py`.
+# Keep the callback and export list synchronized with `scripts/mo2-salma.py`.
 CALLBACK_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p)
 
 EXPORTS = (
@@ -28,13 +28,13 @@ EXPORTS = (
 def _configure_dll(lib):
     """
     @fn _configure_dll(lib)
-    @brief match the production ctypes ownership declarations.
-    @author Alex (https://github.com/lextpf)
+    @brief Match the production ctypes ownership declarations.
+    @author Alex (<https://github.com/lextpf>)
 
-    owned strings use `c_void_p` so `freeResult` receives the original address.
+    Owned strings use `c_void_p` so `freeResult` receives the original address.
     """
     lib.getApiVersion.argtypes = []
-    lib.getApiVersion.restype = ctypes.c_char_p  # static const char*, never freed
+    lib.getApiVersion.restype = ctypes.c_char_p  # Static const char*, never freed
 
     lib.freeResult.argtypes = [ctypes.c_void_p]
     lib.freeResult.restype = None
@@ -61,10 +61,10 @@ def _configure_dll(lib):
 def _call_owned_string(lib, fn, *args) -> str:
     """
     @fn _call_owned_string(lib, fn, *args) -> str
-    @brief copy and release one DLL-owned string.
-    @author Alex (https://github.com/lextpf)
+    @brief Copy and release one DLL-owned string.
+    @author Alex (<https://github.com/lextpf>)
 
-    @return the decoded value, or an empty string for a null pointer.
+    @return The decoded value, or an empty string for a null pointer.
     """
     addr = fn(*args)
     if not addr:
@@ -104,7 +104,7 @@ def main(argv):
         f'(got "{infer_null}")',
         infer_null == "archivePath and modPath must not be null",
     )
-    # every inference failure becomes an empty string across the C ABI.
+    # Every inference failure becomes an empty string across the C ABI.
     infer_empty = _call_owned_string(lib, lib.inferFomodSelections, b"", b"")
     check(f'inferFomodSelections(b"", b"") == "" (got "{infer_empty}")', infer_empty == "")
 
