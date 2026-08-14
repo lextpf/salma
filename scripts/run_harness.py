@@ -1,19 +1,19 @@
 #!/usr/bin/env python
 """
-@brief run the round-trip harness against a verified staged DLL.
-@author Alex (https://github.com/lextpf)
+@brief Run the round-trip harness against a verified staged DLL.
+@author Alex (<https://github.com/lextpf>)
 
-### :material-cog-outline: child environment
+### :material-cog-outline: Child environment
 
-the child receives a staging-only `SALMA_DEPLOY_PATH`. the harness-reported path
-and SHA-256 verify the loaded file. other environment changes stay in the child.
-`SALMA_MODS_PATH` is required. relative archive paths also require
+The child receives a staging-only `SALMA_DEPLOY_PATH`. The harness-reported path
+and SHA-256 verify the loaded file. Other environment changes stay in the child.
+`SALMA_MODS_PATH` is required. Relative archive paths also require
 `SALMA_DOWNLOADS_PATH`.
 
-### :material-alert-circle-outline: scratch lifetime
+### :material-alert-circle-outline: Scratch lifetime
 
-the scratch directory is deleted before and after each run. never use a directory
-that contains data to keep. verification failures exit 1 even after a passing run.
+The scratch directory is deleted before and after each run. Never use a directory
+that contains data to keep. Verification failures exit 1 even after a passing run.
 """
 
 import argparse
@@ -29,12 +29,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 RUST_DLL = REPO / "target" / "release" / "mo2_salma_rs.dll"
-# this server copy is the same engine and cannot serve as a baseline.
+# This server copy is the same engine and cannot serve as a baseline.
 CPP_DLL = REPO / "build" / "bin" / "Release" / "mo2-salma.dll"
 STAGING = REPO / "target" / "harness"
 DLL_NAME = "mo2-salma.dll"
 
-# keep large extraction scratch on the mods drive when possible.
+# Keep large extraction scratch on the mods drive when possible.
 def _default_tmp_base() -> Path:
     mods = os.environ.get("SALMA_MODS_PATH", "")
     if mods:
@@ -64,10 +64,14 @@ def sha256(path: Path) -> str:
 def stage_dll(src: Path) -> Path:
     """
     @fn stage_dll(src: Path) -> Path
-    @brief stage the selected binary under the plugin DLL name.
-    @author Alex (https://github.com/lextpf)
+    @brief Stage the selected binary under the plugin DLL name.
+    @author Alex (<https://github.com/lextpf>)
 
-    @return the staged path.
+    The destination is shared by harness runs. This replaces any staged file;
+    concurrent runs can interfere and must use separate staging environments.
+
+    @param src Existing engine DLL to copy.
+    @return The staged path beneath target/harness/salma.
     """
     if not src.is_file():
         raise SystemExit(f"[harness] DLL not found: {src}")
@@ -83,11 +87,11 @@ def stage_dll(src: Path) -> Path:
 def fingerprint(dll_path: Path) -> dict:
     """
     @fn fingerprint(dll_path: Path) -> dict
-    @brief probe loading, callbacks, and owned-string release.
-    @author Alex (https://github.com/lextpf)
+    @brief Probe loading, callbacks, and owned-string release.
+    @author Alex (<https://github.com/lextpf>)
 
-    the API version and log count do not identify build bytes; SHA-256 does.
-    the callback is cleared before return, and the probe writes no log file.
+    The API version and log count do not identify build bytes; SHA-256 does.
+    The callback is cleared before return, and the probe writes no log file.
     """
     lib = ctypes.CDLL(str(dll_path))
     lib.getApiVersion.argtypes = []
@@ -103,11 +107,18 @@ def fingerprint(dll_path: Path) -> dict:
     seen = []
 
     def on_log(msg):
+        """
+        @fn on_log(msg)
+        @brief Retain probe messages until callback verification completes.
+        @author Alex (<https://github.com/lextpf>)
+
+        @param msg Bytes copied by ctypes from the callback's borrowed C string.
+        """
         seen.append(msg)
 
     cb = cb_type(on_log)
     lib.setLogCallback(cb)
-    # use a missing archive to reach the empty-result path without disk output.
+    # Use a missing archive to reach the empty-result path without disk output.
     addr = lib.inferFomodSelections(b"harness-probe-absent.7z", b"harness-probe-absent")
     if addr:
         lib.freeResult(addr)
@@ -122,10 +133,23 @@ def fingerprint(dll_path: Path) -> dict:
 
 
 def run_harness(cmd: list[str], env: dict, label: str) -> tuple[int, str]:
+    """
+    @fn run_harness(cmd: list[str], env: dict, label: str) -> tuple[int, str]
+    @brief Run a test command and preserve its output and log.
+    @author Alex (<https://github.com/lextpf>)
+
+    The child receives the supplied environment and runs from the repository root.
+    Execution has no timeout. An existing test.log is copied to the staging directory.
+
+    @param cmd Argument list executed without a shell.
+    @param env Complete child environment, including staging and scratch overrides.
+    @param label Suffix used for the preserved log filename.
+    @return Child exit code and stdout followed by stderr, without stream interleaving.
+    """
     print(f"\n[harness] running: {' '.join(cmd)}", flush=True)
     t0 = time.perf_counter()
     # cmd is an argument list and no shell parses it, so nothing is interpreted as
-    # syntax. its elements come from this process: sys.executable, a fixed script
+    # syntax. Its elements come from this process: sys.executable, a fixed script
     # name, and the argparse values of the developer who runs the harness.
     proc = subprocess.run(  # nosemgrep
         cmd, cwd=str(REPO), env=env, capture_output=True, text=True,
@@ -133,7 +157,7 @@ def run_harness(cmd: list[str], env: dict, label: str) -> tuple[int, str]:
     )
     elapsed = time.perf_counter() - t0
     out = (proc.stdout or "") + (proc.stderr or "")
-    # preserve the log before another run truncates it.
+    # Preserve the log before another run truncates it.
     src_log = REPO / "test.log"
     if src_log.is_file():
         shutil.copy2(src_log, STAGING / f"test-{label}.log")
@@ -143,8 +167,20 @@ def run_harness(cmd: list[str], env: dict, label: str) -> tuple[int, str]:
 
 def verify_loaded(out: str, expected_dll: Path, expected_hash: str,
                   *, expect_dll_line: bool) -> None:
-    # `test_all.py` reports its path. `test_one.py` relies on search precedence.
-    # both modes verify the staged content hash.
+    """
+    @fn verify_loaded(out, expected_dll, expected_hash, *, expect_dll_line) -> None
+    @brief Check the staged binary hash and any reported DLL path.
+    @author Alex (<https://github.com/lextpf>)
+
+    A hash mismatch or a conflicting reported path exits with an error. test_all.py
+    must report its loaded path. test_one.py provides no path, so verification in
+    that mode relies on DLL search precedence and checks only the staged bytes.
+
+    @param out Combined child stdout and stderr.
+    @param expected_dll Staged engine path selected for this run.
+    @param expected_hash SHA-256 recorded after staging.
+    @param expect_dll_line Require a reported DLL path when true.
+    """
     actual = sha256(expected_dll)
     if actual != expected_hash:
         raise SystemExit(
@@ -173,7 +209,7 @@ def verify_loaded(out: str, expected_dll: Path, expected_hash: str,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run the repo harness against a staged DLL")
-    ap.add_argument("--baseline", action="store_true",  # reject self-comparison explicitly
+    ap.add_argument("--baseline", action="store_true",  # Reject self-comparison explicitly
                     help="Requires --dll to supply an independent binary")
     ap.add_argument("--dll", type=Path, default=None,
                     help="Explicit DLL to stage (overrides --baseline)")
@@ -192,7 +228,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.baseline and not args.dll:
-        # both candidate paths contain the same engine.
+        # Both candidate paths contain the same engine.
         sys.exit(
             "--baseline requires an independent binary supplied with --dll.\n"
             "The CMake and release paths contain the same engine, so using them\n"
@@ -212,7 +248,7 @@ def main() -> int:
           f"log-callback-lines={fp['callback_lines']} -> {fp['looks_like']}")
 
     env = dict(os.environ)
-    # the child search order selects this staged copy first.
+    # The child search order selects this staged copy first.
     env["SALMA_DEPLOY_PATH"] = str(STAGING)
 
     tmp_base = Path(args.tmp_base).resolve() if args.tmp_base else _default_tmp_base()
