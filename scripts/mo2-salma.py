@@ -1,11 +1,11 @@
 """
-@brief provide MO2 install and FOMOD scan tools.
-@author Alex (https://github.com/lextpf)
+@brief Provide MO2 install and FOMOD scan tools.
+@author Alex (<https://github.com/lextpf>)
 
 InstallMods applies saved choices through the salma DLL and delegates other
 archives to MO2. ScanFomodChoices infers choices from installed files.
 
-the module imports `mobase` and PyQt6 at load time. the cached DLL remains
+The module imports `mobase` and PyQt6 at load time. The cached DLL remains
 loaded and locked until MO2 exits.
 """
 
@@ -30,24 +30,24 @@ from mobase import GuessedString
 class InstallError(RuntimeError):
     """
     @class InstallError
-    @brief report an install that the engine marks as failed.
-    @author Alex (https://github.com/lextpf)
+    @brief Report an install that the engine marks as failed.
+    @author Alex (<https://github.com/lextpf>)
 
-    the message is the text returned by the DLL.
+    The message is the text returned by the DLL.
     """
 
 from PyQt6.QtCore import QCoreApplication, Qt, qDebug
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
 
-# clear existing handlers to keep one copy of each line.
+# Clear existing handlers to keep one copy of each line.
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 if logger.hasHandlers():
     logger.handlers.clear()
 
-# use a plugin-relative log until InstallMods selects a mod-local log.
+# Use a plugin-relative log until InstallMods selects a mod-local log.
 default_log_file = Path(__file__).parent / "logs" / "mo_salma.log"
 default_log_file.parent.mkdir(parents=True, exist_ok=True)
 default_handler = logging.FileHandler(str(default_log_file))
@@ -57,10 +57,10 @@ logger.addHandler(default_handler)
 
 logger.debug("Logger configured successfully.")
 
-# the C ABI supplies one formatted UTF-8 line as void(const char*).
+# The C ABI supplies one formatted UTF-8 line as void(const char*).
 CALLBACK_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_char_p)
 
-# reject ABI-incompatible DLLs; optional exports do not change this major.
+# Reject ABI-incompatible DLLs; optional exports do not change this major.
 EXPECTED_API_MAJOR = "1"
 
 def _safe_path_exists(p: str) -> bool:
@@ -73,10 +73,10 @@ def _safe_path_exists(p: str) -> bool:
 def find_dll(dll_name="mo2-salma.dll"):
     """
     @fn find_dll(dll_name="mo2-salma.dll")
-    @brief select the first accessible plugin DLL.
-    @author Alex (https://github.com/lextpf)
+    @brief Select the first accessible plugin DLL.
+    @author Alex (<https://github.com/lextpf>)
 
-    ### :material-format-list-numbered: lookup order
+    ### :material-format-list-numbered: Lookup order
 
     | order | location                     |
     |-------|------------------------------|
@@ -86,8 +86,8 @@ def find_dll(dll_name="mo2-salma.dll"):
     | 4     | plugin directory             |
     | 5     | each PATH entry              |
 
-    the result is an absolute Path. inaccessible directories do not stop the
-    search. absence raises FileNotFoundError.
+    The result is an absolute Path. Inaccessible directories do not stop the
+    search. Absence raises FileNotFoundError.
     """
     search_paths = [
         Path(__file__).parent / "salma",
@@ -112,14 +112,14 @@ _dll_cache = {}
 def _configure_dll(lib):
     """
     @fn _configure_dll(lib)
-    @brief preserve ownership of strings allocated by the DLL.
-    @author Alex (https://github.com/lextpf)
+    @brief Preserve ownership of strings allocated by the DLL.
+    @author Alex (<https://github.com/lextpf>)
 
-    owned strings use `c_void_p` and must pass to `freeResult`. static version
+    Owned strings use `c_void_p` and must pass to `freeResult`. Static version
     text uses `c_char_p` and must not be freed. `resolveModArchive` is optional.
     """
     lib.getApiVersion.argtypes = []
-    lib.getApiVersion.restype = ctypes.c_char_p  # static const char*, never freed
+    lib.getApiVersion.restype = ctypes.c_char_p  # Static const char*, never freed
 
     lib.freeResult.argtypes = [ctypes.c_void_p]
     lib.freeResult.restype = None
@@ -149,10 +149,10 @@ def _configure_dll(lib):
 def _check_api_version(lib):
     """
     @fn _check_api_version(lib)
-    @brief reject missing, empty, or incompatible ABI versions.
-    @author Alex (https://github.com/lextpf)
+    @brief Reject missing, empty, or incompatible ABI versions.
+    @author Alex (<https://github.com/lextpf>)
 
-    only the leading major component is compared. failure is logged and raises
+    Only the leading major component is compared. Failure is logged and raises
     RuntimeError.
     """
     try:
@@ -179,12 +179,12 @@ def _check_api_version(lib):
 def load_dll(dll_name="mo2-salma.dll"):
     """
     @fn load_dll(dll_name="mo2-salma.dll")
-    @brief configure and cache one DLL handle per name.
-    @author Alex (https://github.com/lextpf)
+    @brief Configure and cache one DLL handle per name.
+    @author Alex (<https://github.com/lextpf>)
 
     ### :material-lock-outline: DLL lifetime
 
-    the cache lasts for the MO2 process. Windows keeps each loaded file locked,
+    The cache lasts for the MO2 process. Windows keeps each loaded file locked,
     so replacement requires MO2 to exit.
     """
     if dll_name not in _dll_cache:
@@ -200,11 +200,17 @@ def load_dll(dll_name="mo2-salma.dll"):
 def _call_owned_string(lib, fn, *args) -> str:
     """
     @fn _call_owned_string(lib, fn, *args) -> str
-    @brief copy and release an owned UTF-8 result from the DLL.
-    @author Alex (https://github.com/lextpf)
+    @brief Copy and release an owned UTF-8 result from the DLL.
+    @author Alex (<https://github.com/lextpf>)
 
-    `freeResult` runs even when decoding fails. a null pointer returns an empty
-    string.
+    The export must use ctypes.c_void_p restype to preserve the allocation address.
+    freeResult runs even when decoding raises. The static version string must
+    never pass through this helper.
+
+    @param lib Loaded DLL that owns the allocation.
+    @param fn Export configured to return a raw pointer.
+    @param args Arguments already converted for the export.
+    @return Copied text, or an empty string for a null pointer.
     """
     addr = fn(*args)
     if not addr:
@@ -227,11 +233,11 @@ def infer_fomod_selections(archive_path: str, mod_path: str) -> str:
 def resolve_mod_archive(installation_file: str, mod_folder: str, mods_dir: str) -> str:
     """
     @fn resolve_mod_archive(installation_file: str, mod_folder: str, mods_dir: str) -> str
-    @brief use the dashboard archive-resolution contract when available.
-    @author Alex (https://github.com/lextpf)
+    @brief Use the dashboard archive-resolution contract when available.
+    @author Alex (<https://github.com/lextpf>)
 
-    an existing absolute path bypasses the DLL. without `resolveModArchive`,
-    only `SALMA_DOWNLOADS_PATH` is searched. failure returns an empty string.
+    An existing absolute path bypasses the DLL. Without `resolveModArchive`,
+    only `SALMA_DOWNLOADS_PATH` is searched. Failure returns an empty string.
     """
     if not installation_file:
         return ""
@@ -249,7 +255,7 @@ def resolve_mod_archive(installation_file: str, mod_folder: str, mods_dir: str) 
             mod_folder.encode("utf-8"),
             mods_dir.encode("utf-8"))
 
-    # keep the fallback narrower than the C API to avoid speculative matches.
+    # Keep the fallback narrower than the C API to avoid speculative matches.
     downloads_dir = os.environ.get("SALMA_DOWNLOADS_PATH", "")
     if downloads_dir:
         candidate = Path(downloads_dir) / archive
@@ -279,10 +285,10 @@ _FOMOD_OUTPUT_MOD = "Salma FOMODs Output"
 def _get_fomod_output_dir(organizer) -> Path:
     """
     @fn _get_fomod_output_dir(organizer) -> Path
-    @brief ensure MO2 can list the central choices directory.
-    @author Alex (https://github.com/lextpf)
+    @brief Ensure MO2 can list the central choices directory.
+    @author Alex (<https://github.com/lextpf>)
 
-    a stub meta.ini makes the containing folder visible as an MO2 mod.
+    A stub meta.ini makes the containing folder visible as an MO2 mod.
     """
     mod_dir = Path(organizer.modsPath()) / _FOMOD_OUTPUT_MOD
     output_dir = mod_dir / "fomods"
@@ -310,10 +316,10 @@ def _read_json_metadata(path: Path) -> dict:
 def _inject_choice_metadata(parsed: dict, archive_path: str, module_name: str) -> None:
     """
     @fn _inject_choice_metadata(parsed: dict, archive_path: str, module_name: str) -> None
-    @brief attach stable archive identity to a choices document.
-    @author Alex (https://github.com/lextpf)
+    @brief Attach stable archive identity to a choices document.
+    @author Alex (<https://github.com/lextpf>)
 
-    the schema must match `inject_choice_metadata` in Mo2FomodController.cpp.
+    The schema must match `inject_choice_metadata` in Mo2FomodController.cpp.
     unreadable archives use zero size and mtime values and cannot match.
     """
     archive = Path(archive_path)
@@ -339,27 +345,27 @@ def _inject_choice_metadata(parsed: dict, archive_path: str, module_name: str) -
 def _find_fomod_json(organizer, mod_name: str, archive_path: str = "") -> str:
     """
     @fn _find_fomod_json(organizer, mod_name: str, archive_path: str = "") -> str
-    @brief select choices with the strongest available archive identity.
-    @author Alex (https://github.com/lextpf)
+    @brief Select choices with the strongest available archive identity.
+    @author Alex (<https://github.com/lextpf>)
 
-    ### :material-format-list-numbered: match priority
+    ### :material-format-list-numbered: Match priority
 
-    | priority | match                    |
+    | Priority | Match                    |
     |----------|--------------------------|
     | 1        | Nexus mod id and file id |
-    | 2        | archive size and mtime   |
+    | 2        | Archive size and mtime   |
     | 3        | exact JSON filename      |
     | 4        | longest fuzzy stem       |
 
-    size is exact in bytes. mtime uses whole POSIX seconds with a one-second
+    Size is exact in bytes. mtime uses whole POSIX seconds with a one-second
     tolerance. ScanFomodChoices output has no metadata and uses filename
-    matching. failure returns an empty string.
+    matching. Failure returns an empty string.
     """
     output_dir = _get_fomod_output_dir(organizer)
     candidates = sorted(output_dir.glob("*.json"),
                         key=lambda p: len(p.stem), reverse=True)
 
-    # prefer Nexus identifiers.
+    # Prefer Nexus identifiers.
     if archive_path:
         nexus = _parse_nexus_filename(Path(archive_path).stem)
         target_modid = nexus.get("modid", "")
@@ -371,7 +377,7 @@ def _find_fomod_json(organizer, mod_name: str, archive_path: str = "") -> str:
                         and meta.get("fileid") == target_fileid):
                     return str(candidate)
 
-    # use the archive fingerprint when identifiers are absent.
+    # Use the archive fingerprint when identifiers are absent.
     if archive_path:
         try:
             stat = Path(archive_path).stat()
@@ -386,12 +392,12 @@ def _find_fomod_json(organizer, mod_name: str, archive_path: str = "") -> str:
                         and abs(int(meta.get("archive_mtime", 0)) - target_mtime) <= 1):
                     return str(candidate)
 
-    # use the generated filename before fuzzy matching.
+    # Use the generated filename before fuzzy matching.
     exact = output_dir / f"{mod_name}.json"
     if exact.exists():
         return str(exact)
 
-    # keep fuzzy matching as the final fallback.
+    # Keep fuzzy matching as the final fallback.
     lower_name = mod_name.lower()
     for candidate in candidates:
         if lower_name.startswith(candidate.stem.lower()):
@@ -442,25 +448,25 @@ def _write_mod_meta_ini(mod_dir: Path, archive_path: str, mod_name: str):
 class InstallMods(mobase.IPluginTool):
     """
     @class InstallMods
-    @brief install selected archives through salma or MO2.
-    @author Alex (https://github.com/lextpf)
+    @brief Install selected archives through salma or MO2.
+    @author Alex (<https://github.com/lextpf>)
 
-    saved FOMOD choices select the salma engine. other archives use the MO2
-    installer. engine failures remove the partial mod directory.
+    Saved FOMOD choices select the salma engine. Other archives use the MO2
+    installer. Engine failures remove the partial mod directory.
     """
 
     def __init__(self):
         super(InstallMods, self).__init__()
         self._parentWidget = None
-        self._log_callback = None  # keep the callback alive while C code holds its pointer.
+        self._log_callback = None  # Keep the callback alive while C code holds its pointer.
 
     def init(self, organiser=mobase.IOrganizer, manager=mobase.IInstallationManager):
         """
         @fn init(self, organiser=mobase.IOrganizer, manager=mobase.IInstallationManager)
-        @brief initialize MO2 handles without failing plugin registration.
-        @author Alex (https://github.com/lextpf)
+        @brief Initialize MO2 handles without failing plugin registration.
+        @author Alex (<https://github.com/lextpf>)
 
-        callback registration failures are logged. the method still returns
+        Callback registration failures are logged. The method still returns
         True.
         """
         self.debug = True
@@ -486,10 +492,10 @@ class InstallMods(mobase.IPluginTool):
     def log_callback(message: bytes):
         """
         @fn log_callback(message: bytes)
-        @brief forward one engine line to the file and MO2 logs.
-        @author Alex (https://github.com/lextpf)
+        @brief Forward one engine line to the file and MO2 logs.
+        @author Alex (<https://github.com/lextpf>)
 
-        the engine invokes the callback synchronously on the calling thread.
+        The engine invokes the callback synchronously on the calling thread.
         qDebug receives ASCII replacement text.
         """
         text = message.decode("utf-8")
@@ -499,10 +505,10 @@ class InstallMods(mobase.IPluginTool):
     def setLog(self):
         """
         @fn setLog(self)
-        @brief keep a live callback while the DLL holds its pointer.
-        @author Alex (https://github.com/lextpf)
+        @brief Keep a live callback while the DLL holds its pointer.
+        @author Alex (<https://github.com/lextpf>)
 
-        failures are logged and do not prevent the tool menu from loading.
+        Failures are logged and do not prevent the tool menu from loading.
         """
         try:
             c_callback = CALLBACK_TYPE(InstallMods.log_callback)
@@ -514,6 +520,21 @@ class InstallMods(mobase.IPluginTool):
             logger.error("Failed to set log callback: " + str(e))
 
     def install(self, archive_path: str, install_path: str, json_path: str = "", dll_name="mo2-salma.dll") -> str:
+        """
+        @fn install(self, archive_path, install_path, json_path, dll_name)
+        @brief Install one queued archive and check the engine status.
+        @author Alex (<https://github.com/lextpf>)
+
+        The queue calls this synchronously. Keep the install and installSucceeded read
+        serialized against any other engine install because status is process-wide.
+        Failure raises InstallError and can leave partial destination content.
+
+        @param archive_path Existing source archive.
+        @param install_path Existing destination directory created by the queue.
+        @param json_path Explicit selection file; empty enables archive-side lookup.
+        @param dll_name DLL filename used by the shared loader.
+        @return The installed destination path after a successful status read.
+        """
         lib = load_dll(dll_name)
 
         archive_path = Path(archive_path)
@@ -526,7 +547,7 @@ class InstallMods(mobase.IPluginTool):
 
         archive_encoded = str(archive_path).encode("utf-8")
         install_encoded = str(install_path).encode("utf-8")
-        # empty selects an archive-side JSON or defaults; nonempty uses only that path.
+        # Empty selects an archive-side JSON or defaults; nonempty uses only that path.
         json_encoded = json_path.encode("utf-8") if json_path else b""
 
         text = _call_owned_string(
@@ -536,7 +557,7 @@ class InstallMods(mobase.IPluginTool):
             ctypes.c_char_p(install_encoded),
             ctypes.c_char_p(json_encoded))
 
-        # the return text is ambiguous; installSucceeded is the failure authority.
+        # The return text is ambiguous; installSucceeded is the failure authority.
         if not lib.installSucceeded():
             logger.error(f"[install] installWithConfig reported failure: {text}")
             qDebug(f"[install] installWithConfig reported failure: {text}")
@@ -602,10 +623,10 @@ class InstallMods(mobase.IPluginTool):
     def _configure_mod_logger(self, mod_dir: Path):
         """
         @fn _configure_mod_logger(self, mod_dir: Path)
-        @brief isolate engine logs in the current mod directory.
-        @author Alex (https://github.com/lextpf)
+        @brief Isolate engine logs in the current mod directory.
+        @author Alex (<https://github.com/lextpf>)
 
-        the file is opened for append and becomes the only handler.
+        The file is opened for append and becomes the only handler.
         `scripts.common.IGNORED_FILES` must exclude it from install comparisons.
         """
         mod_log_file = mod_dir / "mo_salma.log"
@@ -620,10 +641,10 @@ class InstallMods(mobase.IPluginTool):
     def _close_logger(self):
         """
         @fn _close_logger(self)
-        @brief release the mod-local log before the next install.
-        @author Alex (https://github.com/lextpf)
+        @brief Release the mod-local log before the next install.
+        @author Alex (<https://github.com/lextpf>)
 
-        every handler is flushed, closed, and detached.
+        Every handler is flushed, closed, and detached.
         """
         for handler in logger.handlers[:]:
             handler.flush()
@@ -634,11 +655,11 @@ class InstallMods(mobase.IPluginTool):
     def _try_save_fomod_choices(self, archive_path: str, mod_dir: str):
         """
         @fn _try_save_fomod_choices(self, archive_path: str, mod_dir: str)
-        @brief preserve stable choices after a successful install.
-        @author Alex (https://github.com/lextpf)
+        @brief Preserve stable choices after a successful install.
+        @author Alex (<https://github.com/lextpf>)
 
-        existing files are not overwritten. absent FOMOD data writes nothing.
-        inference failures warn but do not undo the install.
+        Existing files are not overwritten. Absent FOMOD data writes nothing.
+        Inference failures warn but do not undo the install.
         """
         mod_name = Path(mod_dir).name
         output_dir = _get_fomod_output_dir(self._organizer)
@@ -661,20 +682,20 @@ class InstallMods(mobase.IPluginTool):
     def _installQueue(self):
         """
         @fn _installQueue(self)
-        @brief keep sequential installs isolated and recoverable.
-        @author Alex (https://github.com/lextpf)
+        @brief Keep sequential installs isolated and recoverable.
+        @author Alex (<https://github.com/lextpf>)
 
-        saved choices use the salma DLL. other archives use the MO2 installer.
+        Saved choices use the salma DLL. Other archives use the MO2 installer.
 
-        ### :material-shield-check: failure isolation
+        ### :material-shield-check: Failure isolation
 
-        an engine failure removes the partial mod directory. each mod-local log
+        An engine failure removes the partial mod directory. Each mod-local log
         closes before the next archive.
 
-        ### :material-link-variant: mod names
+        ### :material-link-variant: Mod names
 
-        the mod name removes all suffixes and one leading numeric download
-        prefix. it is also the folder and choices lookup name.
+        The mod name removes all suffixes and one leading numeric download
+        prefix. It is also the folder and choices lookup name.
         """
         if not self.finished or not self._queue:
             return
@@ -743,10 +764,10 @@ class InstallMods(mobase.IPluginTool):
 class ScanFomodChoices(mobase.IPluginTool):
     """
     @class ScanFomodChoices
-    @brief recover installed FOMOD selections from source archives.
-    @author Alex (https://github.com/lextpf)
+    @brief Recover installed FOMOD selections from source archives.
+    @author Alex (<https://github.com/lextpf>)
 
-    results are stored in the central output mod.
+    Results are stored in the central output mod.
     """
 
     def __init__(self):
@@ -791,16 +812,16 @@ class ScanFomodChoices(mobase.IPluginTool):
     def display(self):
         """
         @fn display(self)
-        @brief write inferred choices without overwriting existing records.
-        @author Alex (https://github.com/lextpf)
+        @brief Write inferred choices without overwriting existing records.
+        @author Alex (<https://github.com/lextpf>)
 
-        results use `<mods>/Salma FOMODs Output/fomods/<mod_name>.json`.
-        missing archives and results without steps are skipped.
+        Results use `<mods>/Salma FOMODs Output/fomods/<mod_name>.json`.
+        Missing archives and results without steps are skipped.
         raw engine output has no metadata, so filename matching applies.
 
-        ### :material-timer-outline: cancellation
+        ### :material-timer-outline: Cancellation
 
-        inference runs on a worker thread so the progress dialog can repaint.
+        Inference runs on a worker thread so the progress dialog can repaint.
         cancellation waits for the active inference and keeps completed files.
         """
         mods_dir = self._organizer.modsPath()
@@ -953,8 +974,8 @@ class ScanFomodChoices(mobase.IPluginTool):
 def createPlugins():
     """
     @fn createPlugins()
-    @brief expose both tools through the MO2 plugin entry point.
-    @author Alex (https://github.com/lextpf)
+    @brief Expose both tools through the MO2 plugin entry point.
+    @author Alex (<https://github.com/lextpf>)
 
     """
     return [InstallMods(), ScanFomodChoices()]
