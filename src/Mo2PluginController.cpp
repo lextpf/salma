@@ -19,7 +19,7 @@ namespace mo2server
 {
 
 #ifdef _WIN32
-// use "error code N" when FormatMessageA has no message.
+// Use "error code N" when FormatMessageA has no message.
 static std::string format_win32_error(DWORD code)
 {
     char* buf = nullptr;
@@ -35,19 +35,19 @@ static std::string format_win32_error(DWORD code)
         return std::format("error code {}", code);
     std::string msg(buf, len);
     LocalFree(buf);
-    // strip the trailing newline before embedding the text in a log line.
+    // Strip the trailing newline before embedding the text in a log line.
     while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r' || msg.back() == ' '))
         msg.pop_back();
     return msg;
 }
 
-// block until the script exits or the 30-minute timeout terminates it.
-// return -1 when CreateProcessA fails and -2 on timeout.
+// Block until the script exits or the 30-minute timeout terminates it.
+// Return -1 when CreateProcessA fails and -2 on timeout.
 static int run_batch_script(const fs::path& script_path,
                             const fs::path& deploy_path,
                             const fs::path& mods_path)
 {
-    // omit variables that the child overrides below.
+    // Omit variables that the child overrides below.
     auto env_deleter = [](char* p)
     {
         if (p)
@@ -82,7 +82,7 @@ static int run_batch_script(const fs::path& script_path,
     }
     env_block.push_back('\0');
 
-    // only script_path reaches cmd.exe. it is an executable-directory path plus
+    // Only script_path reaches cmd.exe. It is an executable-directory path plus
     // the literal deploy.bat or purge.bat name; this assumes that directory has
     // no cmd.exe metacharacters.
     std::string cmd = std::format(R"(cmd.exe /c "call "{}"")", script_path.string());
@@ -103,7 +103,7 @@ static int run_batch_script(const fs::path& script_path,
                        &si,
                        &pi))
     {
-        // release the single plugin worker if the script hangs.
+        // Release the single plugin worker if the script hangs.
         constexpr DWORD kScriptTimeoutMs = 30 * 60 * 1000;
         DWORD wait = WaitForSingleObject(pi.hProcess, kScriptTimeoutMs);
         if (wait == WAIT_TIMEOUT)
@@ -133,7 +133,7 @@ static int run_batch_script(const fs::path& script_path,
 }
 #endif
 
-// screen paths that the batch script can interpolate into cmd.exe commands.
+// Screen paths that the batch script can interpolate into cmd.exe commands.
 static bool path_contains_shell_metachar(const std::string& s)
 {
     for (char c : s)
@@ -228,7 +228,7 @@ crow::response Mo2Controller::purge_plugin()
 
 crow::response Mo2Controller::get_plugin_action_status()
 {
-    // a poll can briefly pair running=true with a completed result. the next poll
+    // A poll can briefly pair running=true with a completed result. The next poll
     // corrects this advisory status.
     json result = {{"running", plugin_action_job_.is_running()}};
 
