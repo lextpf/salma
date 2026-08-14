@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """
-@brief build and stage the engine DLL under the MO2 plugin name.
-@author Alex (https://github.com/lextpf)
+@brief Build and stage the engine DLL under the MO2 plugin name.
+@author Alex (<https://github.com/lextpf>)
 
-the command writes only to the artifact directory and never deploys. the
+The command writes only to the artifact directory and never deploys. The
 `mo2-salma.dll` name confirms that the raw Cargo artifact passed through this
-step. use the printed SHA-256 to identify exact build bytes because
+step. Use the printed SHA-256 to identify exact build bytes because
 `getApiVersion` is identical across builds.
 
-the selected destination file is removed without backup before copy. Windows
+The selected destination file is removed without backup before copy. Windows
 cannot overwrite a DLL that another process has mapped.
 """
 
