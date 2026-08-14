@@ -20,7 +20,7 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
 #ifdef _WIN32
     std::unique_lock<std::mutex> lock(test_mutex_);
 
-    // reap a finished child that no status request observed.
+    // Reap a finished child that no status request observed.
     if (test_running_)
     {
         if (test_process_)
@@ -35,14 +35,14 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
                 mo2core::Logger::instance().log_warning(std::format(
                     "[server] WaitForSingleObject failed (error {}), cleaning up", GetLastError()));
             }
-            // release the handle after completion or a failed wait.
+            // Release the handle after completion or a failed wait.
             CloseHandle(test_process_);
             test_process_ = nullptr;
             test_running_ = false;
         }
     }
 
-    // invalid optional JSON falls back to an argument-free run.
+    // Invalid optional JSON falls back to an argument-free run.
     std::string args;
     if (!req.body.empty())
     {
@@ -63,7 +63,7 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
         }
     }
 
-    // allowlist interpolated arguments so they cannot add syntax or paths.
+    // Allowlist interpolated arguments so they cannot add syntax or paths.
     static const std::regex kAllowedArgs(R"(^[a-zA-Z0-9 _\-\.]*$)");
     if (!std::regex_match(args, kAllowedArgs))
     {
@@ -144,7 +144,7 @@ crow::response Mo2Controller::get_test_status()
                              {{"running", false}, {"error", "Failed to query process status"}});
     }
 
-    // completion makes exit code 259 unambiguous.
+    // Completion makes exit code 259 unambiguous.
     DWORD exit_code = 0;
     GetExitCodeProcess(test_process_, &exit_code);
     CloseHandle(test_process_);
