@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """
-@brief verify a packaged DLL through the MO2 plugin loader.
-@author Alex (https://github.com/lextpf)
+@brief Verify a packaged DLL through the MO2 plugin loader.
+@author Alex (<https://github.com/lextpf>)
 
-the command stages copies under `target/plugin-smoke` and does not access the
-live MO2 installation. it supplies the host-only import classes.
+The command stages copies under `target/plugin-smoke` and does not access the
+live MO2 installation. It supplies the host-only import classes.
 """
 
 import argparse
@@ -30,8 +30,8 @@ def check(label, ok, detail=""):
 def install_stubs():
     """
     @fn install_stubs()
-    @brief provide host-only classes needed to import the plugin.
-    @author Alex (https://github.com/lextpf)
+    @brief Provide host-only classes needed to import the plugin.
+    @author Alex (<https://github.com/lextpf>)
 
     `__getattr__` creates empty classes for MO2 interface bases.
     """
@@ -69,7 +69,7 @@ def main() -> int:
 
     install_stubs()
 
-    # the hyphenated file name requires path-based import.
+    # The hyphenated file name requires path-based import.
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("salma_plugin_under_test", staged_plugin)
@@ -118,7 +118,7 @@ def main() -> int:
     if log.is_file():
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
         first = lines[0] if lines else ""
-        # inference runs first, so validate the record shape rather than its tag.
+        # Inference runs first, so validate the record shape rather than its tag.
         shape = re.match(
             r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} (INFO|WARNING|ERROR) \[\w[\w-]*\] ",
             first)
