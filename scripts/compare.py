@@ -1,9 +1,9 @@
 """
-@brief compare two directory trees without archive-based exclusions.
-@author Alex (https://github.com/lextpf)
+@brief Compare two directory trees without archive-based exclusions.
+@author Alex (<https://github.com/lextpf>)
 
-the command exits 0 for a match and 1 for differences. it prints at most 20
-paths per difference class. importing `scripts.common` requires
+The command exits 0 for a match and 1 for differences. It prints at most 20
+paths per difference class. Importing `scripts.common` requires
 `SALMA_MODS_PATH` and `SALMA_DEPLOY_PATH`.
 """
 
