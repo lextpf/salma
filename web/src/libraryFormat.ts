@@ -1,11 +1,11 @@
 /**
  * @fn formatSize(bytes?: number): string
- * @brief produce compact binary-unit text for table cells.
- * @author Alex (https://github.com/lextpf)
+ * @brief Produce compact binary-unit text for table cells.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * values below 1024 use bytes. scaled values use at most one decimal place.
- * @param bytes a non-negative byte count, or undefined.
- * @return the formatted count, or `n/a` for invalid input.
+ * Values below 1024 use bytes. Scaled values use at most one decimal place.
+ * @param bytes A non-negative byte count, or undefined.
+ * @return The formatted count, or `n/a` for invalid input.
  */
 export function formatSize(bytes?: number): string {
   if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) {
