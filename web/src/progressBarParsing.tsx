@@ -1,9 +1,9 @@
 /**
- * @brief recover progress state from bounded application log windows.
- * @author Alex (https://github.com/lextpf)
+ * @brief Recover progress state from bounded application log windows.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * solver searches 300 lines. scan and test search 500. caller-owned refs retain
- * state after records leave those windows. parse new lines outside render.
+ * Solver searches 300 lines. Scan and test search 500. Caller-owned refs retain
+ * state after records leave those windows. Parse new lines outside render.
  */
 import React from 'react'
 import { highlightLog } from './logHighlight'
@@ -12,11 +12,11 @@ const PROGRESS_BAR_RE = /\d+%\|[=>.]+\|/
 
 /**
  * @fn isProgressLine(line: string): boolean
- * @brief exclude ordinary log records when recognizing tqdm output.
- * @author Alex (https://github.com/lextpf)
+ * @brief Exclude ordinary log records when recognizing tqdm output.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * @param line a raw log line.
- * @return true when the line contains a tqdm bar.
+ * @param line A raw log line.
+ * @return True when the line contains a tqdm bar.
  */
 export function isProgressLine(line: string): boolean {
   return PROGRESS_BAR_RE.test(line)
@@ -29,19 +29,19 @@ export interface TqdmBar {
   total?: number
   detail?: string
   /**
-   * @brief elapsed time in seconds.
+   * @brief Elapsed time in seconds.
    */
   elapsedS?: number
 }
 
 /**
  * @fn parseLineTimestamp(line: string): number | null
- * @brief parse a log time as seconds since midnight.
- * @author Alex (https://github.com/lextpf)
+ * @brief Parse a log time as seconds since midnight.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * date information is discarded. elapsed time can be negative across midnight.
- * @param line a raw log line.
- * @return seconds since midnight, or null when no timestamp exists.
+ * Date information is discarded. Elapsed time can be negative across midnight.
+ * @param line A raw log line.
+ * @return Seconds since midnight, or null when no timestamp exists.
  */
 export function parseLineTimestamp(line: string): number | null {
   const m = line.match(/(?:\d{4}-\d{2}-\d{2}[\sT])?(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/)
@@ -66,7 +66,7 @@ export function fmtRate(n: number): string {
 }
 
 export function renderTqdmBar(current: number, total: number, detail?: string, elapsedS?: number, width = 20) {
-  // `width` is a character count. non-positive totals produce no bar.
+  // `width` is a character count. Non-positive totals produce no bar.
   if (total <= 0) return null
   const ratio = Math.min(1, current / total)
   const filled = Math.floor(ratio * width)
@@ -105,7 +105,7 @@ export function renderTqdmBar(current: number, total: number, detail?: string, e
 }
 
 export function highlightRawBar(raw: string) {
-  // use generic log highlighting if the producer changes the tqdm shape.
+  // Use generic log highlighting if the producer changes the tqdm shape.
   const m = raw.match(/^(\s*\d+%)\|([^|]*)\|\s*(\S+)\/(\S+?)(?:\s+(\w+))?\s*\[([^<]*)<([^,]*),\s*([^/]*)\/s\](.*)$/)
   if (!m) {
     const parts = highlightLog(raw)
@@ -192,7 +192,7 @@ export function parseProgressBars(lines: string[], source: LogSource, cachedScan
       }
     }
 
-    // preserve elapsed time after the first record leaves the window.
+    // Preserve elapsed time after the first record leaves the window.
     if (scanStartTs != null && cachedStartTsRef) {
       cachedStartTsRef.current = scanStartTs
     } else if (scanStartTs == null && cachedStartTsRef?.current != null) {
@@ -204,7 +204,7 @@ export function parseProgressBars(lines: string[], source: LogSource, cachedScan
       if (cachedScanBar) cachedScanBar.current = scanBar
       bars.push(scanBar)
     } else if (!scanBar && !scanDone && cachedScanBar?.current) {
-      // keep the last active scan visible after its record leaves the window.
+      // Keep the last active scan visible after its record leaves the window.
       bars.push(cachedScanBar.current)
     } else if (scanDone && cachedScanBar) {
       cachedScanBar.current = null
@@ -237,7 +237,7 @@ export function parseProgressBars(lines: string[], source: LogSource, cachedScan
       if (testBar && startTs != null) break
     }
 
-    // recover the start record outside the backward window.
+    // Recover the start record outside the backward window.
     if (testBar && !testDone && startTs == null) {
       for (let j = 0; j < lines.length && j < 200; j++) {
         if (/\[1\/\d+\]/.test(lines[j])) {
@@ -247,7 +247,7 @@ export function parseProgressBars(lines: string[], source: LogSource, cachedScan
       }
     }
 
-    // preserve elapsed time after the first record leaves the window.
+    // Preserve elapsed time after the first record leaves the window.
     if (startTs != null && cachedStartTsRef) {
       cachedStartTsRef.current = startTs
     } else if (startTs == null && cachedStartTsRef?.current != null) {
