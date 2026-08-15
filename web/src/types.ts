@@ -1,9 +1,9 @@
 /**
  * @interface InstallationJob
- * @brief represent browser-owned state for one sequential install.
- * @author Alex (https://github.com/lextpf)
+ * @brief Represent browser-owned state for one sequential install.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ### :material-transit-connection-variant: state transitions
+ * ### :material-transit-connection-variant: State transitions
  *
  * @verbatim
  * pending -> uploading -> processing -> completed
@@ -11,13 +11,14 @@
  *    +----------+--------------+----------> error
  * @endverbatim
  *
- * jobs run sequentially. cancellation uses the terminal `error` state.
+ * Jobs from one browser batch run sequentially. The browser ID is not a server job ID.
  *
- * ### :material-shield-check: state invariants
+ * ### :material-shield-check: State invariants
  *
- * `modName` is present after upload. `modPath` is present after completion.
- * `error` is present only in the error state. `processingStatus` is display-only.
- * upload progress is in [0, 100]. browser timestamps are Unix epoch milliseconds.
+ * Upload and completion responses can supply modName and modPath; both remain optional.
+ * Cancellation uses the error state even if server-side installation continues.
+ * Upload progress is in [0, 100]. Browser timestamps are Unix epoch milliseconds.
+ * Processing status is display text and does not define the job state.
  */
 export interface InstallationJob {
   id: string
@@ -51,11 +52,11 @@ export interface Mo2Status {
 
 /**
  * @interface FomodEntry
- * @brief expose cache-file metadata before detail loading.
- * @author Alex (https://github.com/lextpf)
+ * @brief Expose cache-file metadata before detail loading.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `size` and `modified` describe the cached JSON file, not the mod.
- * the server can return undeclared `parseError`. do not trust parsed fields without handling it.
+ * The server can return undeclared `parseError`. Do not trust parsed fields without handling it.
  * `size` is in bytes. `modified` is Unix epoch milliseconds.
  * `confidence` is in [0, 1] and is absent when diagnostics are unavailable.
  */
@@ -138,19 +139,19 @@ export interface InstallStatus {
 }
 
 /**
- * @brief represent serialized confidence bands from the engine.
- * @author Alex (https://github.com/lextpf)
+ * @brief Represent serialized confidence bands from the engine.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * dashboard tiers use separate thresholds in `confidence.ts`.
+ * Dashboard tiers use separate thresholds in `confidence.ts`.
  */
 export type ConfidenceBand = 'high' | 'medium' | 'low'
 
 /**
  * @interface ConfidenceComponents
- * @brief hold normalized inputs to the weighted confidence score.
- * @author Alex (https://github.com/lextpf)
+ * @brief Hold normalized inputs to the weighted confidence score.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * values are in [0, 1]. they are not percentages. some components are grades.
+ * Values are in [0, 1]. They are not percentages. Some components are grades.
  */
 export interface ConfidenceComponents {
   evidence: number
@@ -161,10 +162,10 @@ export interface ConfidenceComponents {
 
 /**
  * @interface ConfidenceScore
- * @brief report the weighted confidence result and engine band.
- * @author Alex (https://github.com/lextpf)
+ * @brief Report the weighted confidence result and engine band.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * `composite` is a clamped value in [0, 1]. it is not an unweighted
+ * `composite` is a clamped value in [0, 1]. It is not an unweighted
  * component average.
  */
 export interface ConfidenceScore {
@@ -222,8 +223,8 @@ export interface RunDiagnostics {
 
 /**
  * @interface FomodFileEntry
- * @brief describe one normalized simulated output file.
- * @author Alex (https://github.com/lextpf)
+ * @brief Describe one normalized simulated output file.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `path` is lowercase and slash-separated. `size` is in bytes.
  */
@@ -244,12 +245,12 @@ export const FAULT_RANK: Record<FaultKind, number> = {
 
 /**
  * @interface ReproDetail
- * @brief report bounded differences between simulated and installed output.
- * @author Alex (https://github.com/lextpf)
+ * @brief Report bounded differences between simulated and installed output.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `missing` paths have no output-tree entry. `truncated` and `total` appear
  * together after a cap.
- * truncated lists contain a stable path-sorted prefix, not a sample.
+ * Truncated lists contain a stable path-sorted prefix, not a sample.
  */
 export interface ReproDetail {
   missing: string[]
