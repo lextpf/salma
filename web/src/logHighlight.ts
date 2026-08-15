@@ -5,10 +5,10 @@ export interface HighlightSegment {
 
 /**
  * @fn extractQuoted(text: string): HighlightSegment[]
- * @brief protect quoted spans before other log tokenization.
- * @author Alex (https://github.com/lextpf)
+ * @brief Protect quoted spans before other log tokenization.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * an alphanumeric character after a quote makes it an apostrophe.
+ * An alphanumeric character after a quote makes it an apostrophe.
  */
 export function extractQuoted(text: string): HighlightSegment[] {
   const out: HighlightSegment[] = []
@@ -73,7 +73,7 @@ const TOKEN_REGEX = new RegExp([
 ].map(r => r.source).join('|'), 'g')
 
 export function highlightTokens(text: string, parts: HighlightSegment[], depth = 0) {
-  // keep timestamp and level recognition synchronized with `logParse.ts`.
+  // Keep timestamp and level recognition synchronized with `logParse.ts`.
   if (depth > 3) { parts.push({ text, cls: '' }); return }
   const regex = new RegExp(TOKEN_REGEX.source, TOKEN_REGEX.flags)
   let lastIndex = 0
@@ -86,7 +86,7 @@ export function highlightTokens(text: string, parts: HighlightSegment[], depth =
     if (tag) parts.push({ text: full, cls: 'log-tag' })
     else if (url) parts.push({ text: full, cls: 'log-url' })
     else if (path) {
-      // exclude trailing metadata after a file extension.
+      // Exclude trailing metadata after a file extension.
       const cleaned = full.replace(/(\.\w{1,10})\s(?!.*[\\/]).*$/, '$1')
       if (cleaned.length < full.length) {
         parts.push({ text: cleaned, cls: 'log-path' })
@@ -130,14 +130,14 @@ export function highlightLog(line: string): HighlightSegment[] {
   const parts: HighlightSegment[] = []
   let remaining = line
 
-  // parse the long timestamp forms written by the application log.
+  // Parse the long timestamp forms written by the application log.
   const tsMatch = remaining.match(/^(\[?(?:\d{4}-\d{2}-\d{2}|\d{1,2}-\d{2})[\sT]\d{2}:\d{2}:\d{2}(?:\.\d+)?\]?\s*)/)
   if (tsMatch) {
     parts.push({ text: tsMatch[1], cls: 'log-timestamp' })
     remaining = remaining.slice(tsMatch[1].length)
   }
 
-  // parse the time-only form written by `test.log`.
+  // Parse the time-only form written by `test.log`.
   if (!tsMatch) {
     const shortTsMatch = remaining.match(/^(\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+)/)
     if (shortTsMatch) {
@@ -157,7 +157,7 @@ export function highlightLog(line: string): HighlightSegment[] {
     remaining = remaining.slice(levelMatch[0].length)
   }
 
-  // protect quoted strings from further tokenization.
+  // Protect quoted strings from further tokenization.
   if (remaining) {
     for (const seg of extractQuoted(remaining)) {
       if (seg.cls) parts.push(seg)
