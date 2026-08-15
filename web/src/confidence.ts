@@ -1,10 +1,10 @@
 import type { ConfidenceScore, FomodEntry, RunDiagnostics } from './types'
 
 /**
- * @brief classify confidence for dashboard display.
- * @author Alex (https://github.com/lextpf)
+ * @brief Classify confidence for dashboard display.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * thresholds differ from serialized engine bands. missing data uses `LOW`
+ * Thresholds differ from serialized engine bands. Missing data uses `LOW`
  * metadata with `hasData` false.
  */
 export type Tier = 'EXACT' | 'HIGH' | 'PARTIAL' | 'LOW'
