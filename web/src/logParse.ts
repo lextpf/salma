@@ -2,26 +2,26 @@ export type LogLevel = 'INFO' | 'DEBUG' | 'WARN' | 'ERROR' | ''
 
 export interface LogRecord {
   /**
-   * @brief time of day without a date.
+   * @brief Time of day without a date.
    */
   ts?: string
   level: LogLevel
   /**
-   * @brief first valid subsystem tag without brackets.
+   * @brief First valid subsystem tag without brackets.
    */
   subsystem: string
   message: string
   raw: string
 }
 
-// keep timestamp and level recognition synchronized with `logHighlight.ts`.
+// Keep timestamp and level recognition synchronized with `logHighlight.ts`.
 const TS_FULL_RE =
   /^(\[?(?:\d{4}-\d{2}-\d{2}|\d{1,2}-\d{2})[\sT]\d{2}:\d{2}:\d{2}(?:\.\d+)?\]?\s*)/
 const TS_SHORT_RE = /^(\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+)/
 const LEVEL_RE =
   /^(?:-\s*)?(ERROR|WARNING|WARN|INFO|DEBUG|TRACE|CRITICAL|FATAL)\b(?:\s*-(?!-)\s*)?/i
 const TAG_RE = /\[([^\]]+)\]/
-// reject progress counters and interleaved records that resemble subsystem tags.
+// Reject progress counters and interleaved records that resemble subsystem tags.
 const SUBSYSTEM_RE = /^[A-Za-z][\w.-]{0,23}$/
 const TOD_RE = /(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d+))?/
 
@@ -75,11 +75,11 @@ export function parseLogLine(line: string): LogRecord {
 
 /**
  * @fn parseTimeMs(ts?: string): number | null
- * @brief locate a log record within one day.
- * @author Alex (https://github.com/lextpf)
+ * @brief Locate a log record within one day.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * dates are discarded.
- * @return milliseconds since midnight, or null without a recognized time.
+ * Dates are discarded.
+ * @return Milliseconds since midnight, or null without a recognized time.
  */
 export function parseTimeMs(ts?: string): number | null {
   if (!ts) {
@@ -104,10 +104,10 @@ export interface HistogramBucket {
 
 /**
  * @fn buildHistogram(records: LogRecord[], buckets = 12): HistogramBucket[]
- * @brief distribute log records by time with an order-based fallback.
- * @author Alex (https://github.com/lextpf)
+ * @brief Distribute log records by time with an order-based fallback.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * record order is used when timestamps cannot define a positive span. time-only
+ * Record order is used when timestamps cannot define a positive span. Time-only
  * values can order a run across midnight incorrectly.
  */
 export function buildHistogram(records: LogRecord[], buckets = 12): HistogramBucket[] {
