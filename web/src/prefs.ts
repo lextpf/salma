@@ -1,8 +1,8 @@
 /**
- * @brief store browser-local dashboard preferences.
- * @author Alex (https://github.com/lextpf)
+ * @brief Store browser-local dashboard preferences.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * these values do not persist to `salma.json`. storage access can throw in restricted profiles.
+ * These values do not persist to `salma.json`. Storage access can throw in restricted profiles.
  */
 
 const TAIL_KEY = 'salma_tail_logs'
@@ -27,10 +27,10 @@ export function setTailLogs(on: boolean): void {
 
 /**
  * @fn getTestArgs(): string
- * @brief retrieve untrusted browser-local harness arguments.
- * @author Alex (https://github.com/lextpf)
+ * @brief Retrieve untrusted browser-local harness arguments.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * server-side validation remains the security boundary.
+ * Server-side validation remains the security boundary.
  */
 export function getTestArgs(): string {
   return localStorage.getItem(TEST_ARGS_KEY) || ''
