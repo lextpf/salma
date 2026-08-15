@@ -12,13 +12,29 @@ export interface TreeNode {
   absent?: boolean
 }
 
+/**
+ * @fn worseFault(a?: FaultKind, b?: FaultKind): FaultKind | undefined
+ * @brief Keep the more severe fault when combining descendants.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param a First fault, if any.
+ * @param b Second fault, if any.
+ * @return The fault with the lower FAULT_RANK, or undefined when neither exists.
+ */
 function worseFault(a?: FaultKind, b?: FaultKind): FaultKind | undefined {
   if (!a) return b
   if (!b) return a
   return FAULT_RANK[a] <= FAULT_RANK[b] ? a : b
 }
 
-// propagate the worst descendant fault to each directory.
+/**
+ * @fn rollUpFaults(nodes: TreeNode[]): FaultKind | undefined
+ * @brief Store the most severe descendant fault on each directory.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param nodes Subtree whose directory summaries are updated in place.
+ * @return The most severe fault in the subtree, or undefined for a fault-free subtree.
+ */
 function rollUpFaults(nodes: TreeNode[]): FaultKind | undefined {
   let worst: FaultKind | undefined
   for (const node of nodes) {
@@ -32,6 +48,13 @@ function rollUpFaults(nodes: TreeNode[]): FaultKind | undefined {
   return worst
 }
 
+/**
+ * @fn sortNodes(nodes: TreeNode[]): void
+ * @brief Sort each directory in place for stable browsing.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param nodes Subtree to sort, with directories before files and locale-based name order.
+ */
 function sortNodes(nodes: TreeNode[]): void {
   nodes.sort((a, b) => {
     if (a.isDir !== b.isDir) {
@@ -48,11 +71,17 @@ function sortNodes(nodes: TreeNode[]): void {
 
 /**
  * @fn filesToTree(entries?: FomodFileEntry[], faults?: ReadonlyMap<string, FaultKind>): TreeNode[]
- * @brief include installed-only faults in the simulated output hierarchy.
- * @author Alex (https://github.com/lextpf)
+ * @brief Include installed-only faults in the simulated output hierarchy.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * missing installed paths become absent leaves. directories retain their worst
- * descendant fault for collapsed display.
+ * Fault paths marked missing become absent leaves when they have no output entry.
+ * Directories retain their worst descendant fault for collapsed display.
+ * Paths must already share the engine's lowercase, slash-separated format; this function
+ * does not normalize case or backslashes. Duplicate output entries remain separate leaves.
+ *
+ * @param entries Simulated output entries; an omitted list is empty.
+ * @param faults Optional faults keyed by the same normalized path.
+ * @return A new tree, sorted with directories first. Source entries are not modified.
  */
 export function filesToTree(
   entries?: FomodFileEntry[],
@@ -62,7 +91,14 @@ export function filesToTree(
   const dirIndex = new Map<string, TreeNode>()
   const seen = new Set<string>()
 
-  // return the leaf container, or null for an unusable path.
+  /**
+   * @fn descend(path: string): { siblings: TreeNode[]; leaf: string } | null
+   * @brief Reuse parent directories while locating the destination for a leaf.
+   * @author Alex (<https://github.com/lextpf>)
+   *
+   * @param path Slash-separated path; empty components are ignored.
+   * @return The leaf container and name, or null when the path has no components.
+   */
   const descend = (path: string): { siblings: TreeNode[]; leaf: string } | null => {
     const parts = path.split('/').filter(Boolean)
     if (parts.length === 0) {
@@ -131,6 +167,16 @@ export interface FlatNode {
   depth: number
 }
 
+/**
+ * @fn flattenTree(nodes: TreeNode[], collapsed: ReadonlySet<string>, depth = 0): FlatNode[]
+ * @brief Produce visible rows while retaining collapsed directory rows.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param nodes Tree in display order.
+ * @param collapsed Directory paths whose children are hidden.
+ * @param depth Initial nesting depth, normally zero.
+ * @return Depth-first rows that reference the original nodes.
+ */
 export function flattenTree(nodes: TreeNode[], collapsed: ReadonlySet<string>, depth = 0): FlatNode[] {
   const out: FlatNode[] = []
   for (const node of nodes) {
