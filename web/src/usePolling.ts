@@ -2,13 +2,15 @@ import { useEffect, useRef } from 'react';
 
 /**
  * @fn usePolling(fetcher: () => Promise<void>, intervalMs: number, enabled: boolean): void
- * @brief run a non-overlapping poll while enabled.
- * @author Alex (https://github.com/lextpf)
+ * @brief Run a non-overlapping poll while enabled.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * the first call is immediate. slow calls drop ticks. rejected calls are logged and not rethrown.
- * @param fetcher the asynchronous poll operation.
- * @param intervalMs interval in milliseconds.
- * @param enabled true while polling is active.
+ * The first call is immediate. Slow calls drop ticks. Rejected calls are logged and not rethrown.
+ * Cleanup stops future ticks; it does not cancel an in-flight request. The fetcher must guard
+ * state updates after unmount or a change of request identity.
+ * @param fetcher The asynchronous poll operation.
+ * @param intervalMs Interval in milliseconds.
+ * @param enabled True while polling is active.
  */
 export function usePolling(
   fetcher: () => Promise<void>,
@@ -22,6 +24,11 @@ export function usePolling(
   useEffect(() => {
     if (!enabled) return;
 
+    /**
+     * @fn poll(): Promise<void>
+     * @brief Skip overlapping ticks and release the shared guard after each attempt.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     const poll = async () => {
       if (inFlightRef.current) return;
       inFlightRef.current = true;
