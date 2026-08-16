@@ -9,9 +9,9 @@ export interface LibraryRollup {
   total: number
   partial: number
   /**
-   * @brief mean composite confidence.
+   * @brief Mean composite confidence.
    *
-   * values are in [0, 1], or null when no records have confidence data.
+   * Values are in [0, 1], or null when no records have confidence data.
    */
   meanConfidence: number | null
 }
@@ -31,10 +31,14 @@ export interface ChromeStatus {
 
 /**
  * @fn useChromeStatus(): ChromeStatus
- * @brief poll shared chrome state without coupling endpoint failures.
- * @author Alex (https://github.com/lextpf)
+ * @brief Poll shared chrome state without coupling endpoint failures.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * polls every 8 seconds. the clock updates every second.
+ * Poll every eight seconds without overlap. The clock updates every second.
+ * MO2 status determines backend availability. Failed job-status requests appear idle;
+ * failed configuration and library requests retain their last successful values.
+ *
+ * @return Display status and library totals; DLL availability is inferred from plugin presence.
  */
 export function useChromeStatus(): ChromeStatus {
   const [status, setStatus] = useState<Mo2Status | null>(null)
@@ -48,6 +52,11 @@ export function useChromeStatus(): ChromeStatus {
   const inFlightRef = useRef(false)
 
   useEffect(() => {
+    /**
+     * @fn check(): void
+     * @brief Refresh independent status inputs while preventing overlapping batches.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     const check = () => {
       if (inFlightRef.current) {
         return
@@ -129,6 +138,14 @@ export function useChromeStatus(): ChromeStatus {
   }
 }
 
+/**
+ * @fn deriveProfile(modsPath?: string): string
+ * @brief Derive a display label from the configured mod directory.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param modsPath Optional path with either slash style and optional trailing separators.
+ * @return The parent of a final mods component, the final component, or No instance when absent.
+ */
 export function deriveProfile(modsPath?: string): string {
   if (!modsPath) {
     return 'No instance'
