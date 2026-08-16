@@ -10,6 +10,18 @@ export interface ScanJobState {
   handleScanFomods: () => Promise<void>
 }
 
+/**
+ * @fn useScanJob(pluginInstalled: boolean, onComplete: (success: boolean) => void): ScanJobState
+ * @brief Resume observation of a shared scan and allow a new scan to start.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Initial status retrieval retries every two seconds on any failure.
+ * A running scan is polled every three seconds. Poll failures keep observation active.
+ *
+ * @param pluginInstalled Whether the start handler may submit a scan.
+ * @param onComplete Called when polling sees a stopped scan, or a start completes successfully.
+ * @return Scan activity, the last reported error, and a start handler.
+ */
 export function useScanJob(
   pluginInstalled: boolean,
   onComplete: (success: boolean) => void,
@@ -18,8 +30,12 @@ export function useScanJob(
   const [scanError, setScanError] = useState<string | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // retry the initial status check until the backend responds.
   useEffect(() => {
+    /**
+     * @fn loadScanStatus(): void
+     * @brief Retry initial status retrieval until the backend responds.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     const loadScanStatus = () => {
       getFomodScanStatus()
         .then(s => {
@@ -45,6 +61,11 @@ export function useScanJob(
     }
   }, [])
 
+  /**
+   * @fn scanPoller(): Promise<void>
+   * @brief Report completion when the shared scan stops.
+   * @author Alex (<https://github.com/lextpf>)
+   */
   const scanPoller = useCallback(async () => {
     try {
       const s = await getFomodScanStatus()
@@ -61,6 +82,13 @@ export function useScanJob(
   }, [onComplete])
   usePolling(scanPoller, 3000, scanRunning)
 
+  /**
+   * @fn handleScanFomods(): Promise<void>
+   * @brief Start a scan when the plugin is available.
+   * @author Alex (<https://github.com/lextpf>)
+   *
+   * Availability failures clear local activity without setting the displayed error.
+   */
   const handleScanFomods = useCallback(async () => {
     if (!pluginInstalled) return
     setScanError(null)
