@@ -10,13 +10,28 @@ export interface TestRunnerState {
   handleRunTests: () => Promise<void>
 }
 
+/**
+ * @fn useTestRunner(pluginInstalled: boolean): TestRunnerState
+ * @brief Observe the shared harness process and expose its start action.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Initial status retrieval retries every two seconds. Running tests are polled every three.
+ * The hook reports start errors; process exit diagnostics remain in the test log.
+ *
+ * @param pluginInstalled Whether the start handler may launch the harness.
+ * @return Process activity, start errors, and a handler that reads saved harness arguments.
+ */
 export function useTestRunner(pluginInstalled: boolean): TestRunnerState {
   const [testRunning, setTestRunning] = useState(false)
   const [testError, setTestError] = useState<string | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // retry the initial status check until the backend responds.
   useEffect(() => {
+    /**
+     * @fn loadTestStatus(): void
+     * @brief Retry initial process status retrieval until the backend responds.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     const loadTestStatus = () => {
       getTestStatus()
         .then(s => {
@@ -42,6 +57,11 @@ export function useTestRunner(pluginInstalled: boolean): TestRunnerState {
     }
   }, [])
 
+  /**
+   * @fn testPoller(): Promise<void>
+   * @brief Clear local activity when the harness process stops.
+   * @author Alex (<https://github.com/lextpf>)
+   */
   const testPoller = useCallback(async () => {
     try {
       const s = await getTestStatus()
@@ -52,6 +72,13 @@ export function useTestRunner(pluginInstalled: boolean): TestRunnerState {
   }, [])
   usePolling(testPoller, 3000, testRunning)
 
+  /**
+   * @fn handleRunTests(): Promise<void>
+   * @brief Launch the harness with the saved raw argument string.
+   * @author Alex (<https://github.com/lextpf>)
+   *
+   * The plugin must be available. Availability failures do not set the displayed error.
+   */
   const handleRunTests = useCallback(async () => {
     if (!pluginInstalled) return
     setTestError(null)
