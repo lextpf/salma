@@ -9,12 +9,28 @@ export interface PluginActionState {
   handlePurgePlugin: () => Promise<void>
 }
 
+/**
+ * @fn usePluginAction(onComplete: (success: boolean) => void): PluginActionState
+ * @brief Track plugin deployment or removal initiated by this hook.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * Poll every 1.5 seconds after an accepted start. An availability failure stops local
+ * observation without cancelling the server action. Other poll failures leave polling active.
+ *
+ * @param onComplete Called with true after a successful observed action.
+ * @return Local action state, displayed errors, and deploy and purge handlers.
+ */
 export function usePluginAction(onComplete: (success: boolean) => void): PluginActionState {
   const [pluginActionRunning, setPluginActionRunning] = useState<null | 'deploy' | 'purge'>(null)
   const [pluginActionError, setPluginActionError] = useState<string | null>(null)
   const [polling, setPolling] = useState(false)
   const actionRef = useRef<null | 'deploy' | 'purge'>(null)
 
+  /**
+   * @fn pluginActionPoller(): Promise<void>
+   * @brief Settle local action state when shared status reports completion.
+   * @author Alex (<https://github.com/lextpf>)
+   */
   const pluginActionPoller = useCallback(async () => {
     try {
       const status = await getPluginActionStatus()
@@ -41,6 +57,11 @@ export function usePluginAction(onComplete: (success: boolean) => void): PluginA
 
   usePolling(pluginActionPoller, 1500, polling)
 
+  /**
+   * @fn handleDeployPlugin(): Promise<void>
+   * @brief Submit deployment and begin observing its status.
+   * @author Alex (<https://github.com/lextpf>)
+   */
   const handleDeployPlugin = useCallback(async () => {
     setPluginActionError(null)
     actionRef.current = 'deploy'
@@ -59,6 +80,11 @@ export function usePluginAction(onComplete: (success: boolean) => void): PluginA
     }
   }, [])
 
+  /**
+   * @fn handlePurgePlugin(): Promise<void>
+   * @brief Submit plugin removal and begin observing its status.
+   * @author Alex (<https://github.com/lextpf>)
+   */
   const handlePurgePlugin = useCallback(async () => {
     setPluginActionError(null)
     actionRef.current = 'purge'
