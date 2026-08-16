@@ -13,17 +13,21 @@ export interface RecordDetailState {
 
 /**
  * @fn useRecordDetail(name: string | null): RecordDetailState
- * @brief retry record loading while preventing stale state updates.
- * @author Alex (https://github.com/lextpf)
+ * @brief Ignore superseded record names while retrying detail loading.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ### :material-refresh: retries
+ * ### :material-refresh: Retries
  *
- * all failure types use the same limit of three attempts with a two-second delay between attempts.
- * manual retry resets the attempt count.
+ * All failure types use the same limit of three attempts with a two-second delay between attempts.
+ * Manual retry resets the attempt count.
  *
- * ### :material-timer-outline: cancellation
+ * ### :material-timer-outline: Cancellation
  *
- * cleanup clears the retry timer and ignores stale results. it cannot cancel `getFomod`.
+ * Cleanup clears the retry timer and ignores results for a previous name. It cannot cancel
+ * getFomod requests already in flight. Manual retry does not cancel an earlier attempt.
+ *
+ * @param name Unencoded record stem, or null to clear the selected detail.
+ * @return The loaded detail, terminal error, and a manual retry callback.
  */
 export function useRecordDetail(name: string | null): RecordDetailState {
   const [detail, setDetail] = useState<FomodDetail | null>(null)
@@ -33,6 +37,11 @@ export function useRecordDetail(name: string | null): RecordDetailState {
   const loadRef = useRef<() => void>(() => {})
 
   useEffect(() => {
+    /**
+     * @fn clearRetryTimer(): void
+     * @brief Remove the pending retry before cleanup or successful completion.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     const clearRetryTimer = () => {
       if (retryTimerRef.current) {
         clearTimeout(retryTimerRef.current)
@@ -40,7 +49,11 @@ export function useRecordDetail(name: string | null): RecordDetailState {
       }
     }
 
-    // clear the old record before a new name can resolve.
+    /**
+     * @fn reset(): void
+     * @brief Clear the displayed record when the selected name changes.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     const reset = () => {
       setDetail(null)
       setError(null)
@@ -55,6 +68,11 @@ export function useRecordDetail(name: string | null): RecordDetailState {
 
     const abortController = new AbortController()
 
+    /**
+     * @fn load(): void
+     * @brief Load the selected record and schedule a retry within the attempt limit.
+     * @author Alex (<https://github.com/lextpf>)
+     */
     const load = () => {
       setError(null)
       getFomod(name)
@@ -95,6 +113,11 @@ export function useRecordDetail(name: string | null): RecordDetailState {
     }
   }, [name])
 
+  /**
+   * @fn retry(): void
+   * @brief Reset the attempt count and request the selected record again.
+   * @author Alex (<https://github.com/lextpf>)
+   */
   const retry = useCallback(() => {
     retryCountRef.current = 0
     setError(null)
