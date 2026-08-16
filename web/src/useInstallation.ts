@@ -1,18 +1,31 @@
 /**
- * @brief upload archives sequentially and poll each install to completion.
- * @author Alex (https://github.com/lextpf)
+ * @brief Upload archives sequentially and poll each install to completion.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * matching JSON files become multipart metadata. unmatched JSON files are ignored.
+ * Matching JSON files become multipart metadata. Unmatched JSON files are ignored.
  *
- * ### :material-timer-outline: polling and cancellation
+ * ### :material-timer-outline: Polling and cancellation
  *
- * polling waits 1.5 seconds before each attempt and stops after 200 attempts.
- * cancellation stops local upload and polling only. server-side work can continue.
+ * Polling waits 1.5 seconds before each attempt and allows 200 status requests.
+ * Request duration adds to this delay, so the limit is not a five-minute deadline.
+ * Cancellation aborts an active upload and clears local polling timers.
+ * Server-side work can continue.
  */
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { getCsrfToken, getInstallStatus } from './api'
 import type { InstallationJob } from './types'
 
+/**
+ * @fn useInstallation(pluginInstalled: boolean): {
+ *   jobs: InstallationJob[]; isInstalling: boolean;
+ *   handleFileSelect: (files: FileList) => Promise<void>; cancel: () => void
+ * }
+ * @brief Manage sequential archive uploads and installation polling.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param pluginInstalled Whether new file selections may start installation.
+ * @return Job history, local activity state, file-selection handler, and cancellation callback.
+ */
 export function useInstallation(pluginInstalled: boolean): {
   jobs: InstallationJob[]
   isInstalling: boolean
@@ -24,9 +37,15 @@ export function useInstallation(pluginInstalled: boolean): {
   const cancelledRef = useRef(false)
   const xhrRef = useRef<XMLHttpRequest | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // settle the polling promise when cancellation clears its timer.
+  // Settle the polling promise when cancellation clears its timer.
   const pollResolveRef = useRef<(() => void) | null>(null)
-  // read through a call because TypeScript would otherwise narrow the ref across awaits.
+  /**
+   * @fn isCancelled(): boolean
+   * @brief Read the current cancellation flag across asynchronous boundaries.
+   * @author Alex (<https://github.com/lextpf>)
+   *
+   * @return True after local cancellation or unmount.
+   */
   const isCancelled = () => cancelledRef.current
 
   useEffect(() => {
@@ -47,6 +66,18 @@ export function useInstallation(pluginInstalled: boolean): {
     }
   }, [])
 
+  /**
+   * @fn processJob(job: InstallationJob, file: File, jsonFile?: File): Promise<void>
+   * @brief Upload one archive and record its observed installation result.
+   * @author Alex (<https://github.com/lextpf>)
+   *
+   * Upload and polling failures update the job instead of rejecting the queue.
+   * Completion comes from the server-wide status endpoint, which has no browser job ID.
+   *
+   * @param job Browser job whose state is updated by ID.
+   * @param file Archive sent in multipart form data.
+   * @param jsonFile Optional matching selection JSON, read as text.
+   */
   const processJob = async (job: InstallationJob, file: File, jsonFile?: File) => {
     setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: 'uploading', uploadProgress: 0 } : j))
 
@@ -62,8 +93,8 @@ export function useInstallation(pluginInstalled: boolean): {
 
       if (isCancelled()) return
 
-      // XHR provides upload progress. it has no timeout or CSRF retry.
-      // do not retry a large request body without an idempotency contract.
+      // XHR provides upload progress. It has no timeout or CSRF retry.
+      // Do not retry a large request body without an idempotency contract.
       const csrfToken = await getCsrfToken()
 
       const result = await new Promise<Record<string, string>>((resolve, reject) => {
@@ -123,12 +154,17 @@ export function useInstallation(pluginInstalled: boolean): {
 
       if (isCancelled()) return
 
-      // chain timers so status requests do not overlap.
+      // Chain timers so status requests do not overlap.
       await new Promise<void>((resolve) => {
         pollResolveRef.current = resolve
         const MAX_RETRIES = 200
         let retries = 0
 
+        /**
+         * @fn poll(): Promise<void>
+         * @brief Read install status and schedule the next attempt after it settles.
+         * @author Alex (<https://github.com/lextpf>)
+         */
         const poll = async () => {
           pollTimerRef.current = null
           if (isCancelled()) { resolve(); return }
@@ -193,9 +229,19 @@ export function useInstallation(pluginInstalled: boolean): {
     }
   }
 
+  /**
+   * @fn handleFileSelect(files: FileList): Promise<void>
+   * @brief Append a file selection and process its archives in order.
+   * @author Alex (<https://github.com/lextpf>)
+   *
+   * Match JSON by archive stem without case sensitivity. Ignore unmatched JSON files.
+   * Return without queuing when the plugin is unavailable or a batch is already active.
+   *
+   * @param files Archives and optional JSON files from one picker or drop event.
+   */
   const handleFileSelect = async (files: FileList) => {
     if (!pluginInstalled || isInstalling) return
-    // re-arm after a prior cancellation.
+    // Re-arm after a prior cancellation.
     cancelledRef.current = false
     setIsInstalling(true)
 
@@ -238,7 +284,13 @@ export function useInstallation(pluginInstalled: boolean): {
     }
   }
 
-  // cancellation does not stop server-side installation work.
+  /**
+   * @fn cancel(): void
+   * @brief Stop local uploads and polling and mark unfinished jobs as cancelled.
+   * @author Alex (<https://github.com/lextpf>)
+   *
+   * This callback does not request cancellation of server-side installation work.
+   */
   const cancel = useCallback(() => {
     cancelledRef.current = true
     if (xhrRef.current) {
