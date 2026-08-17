@@ -11,6 +11,17 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
+// Mo2Controller - the class's lifetime and GET /api/mo2/status.
+//
+// One class, several translation units. Its handlers are split by concern:
+// Mo2ConfigController.cpp, Mo2FomodController.cpp, Mo2LogController.cpp,
+// Mo2PluginController.cpp and Mo2TestController.cpp. This file owns only the
+// constructor, the destructor and the status read; shared helpers live in
+// Mo2Helpers.
+//
+// get_status reports a snapshot the dashboard polls on a timer, so it answers
+// from a 5-second cache. The scan job invalidates that cache when it finishes.
+
 namespace mo2server
 {
 
@@ -22,16 +33,14 @@ Mo2Controller::Mo2Controller() = default;
 
 Mo2Controller::~Mo2Controller()
 {
-    // Tear down background work BEFORE other members destruct. The header's
-    // member-declaration order is no longer load-bearing because:
-    //   (a) BackgroundJob's worker captures shared_ptr<State> by value, so the
-    //       state outlives `*this` even if we detach a hung worker, and
-    //   (b) we explicitly shut the jobs down here, so the join (or detach)
-    //       happens at a known point in the controller's lifetime instead of
-    //       relying on reverse-order destruction to do it implicitly.
-    // The current workers don't reference Mo2Controller members anyway, but
-    // pinning the teardown order in code (not in a comment) prevents a future
-    // member-reorder or capture change from silently introducing UB.
+    // Shut the jobs down here, at a known point in the controller's lifetime,
+    // rather than leaving it to reverse-order member destruction. The header's
+    // member order is therefore not load-bearing, and neither is the fact that
+    // BackgroundJob's worker captures shared_ptr<State> by value, which already
+    // lets the state outlive `*this` when a hung worker is detached. Today's
+    // workers touch no Mo2Controller member; pinning the teardown order in code
+    // keeps a future member reorder or capture change from reintroducing the
+    // hazard.
     scan_job_.shutdown();
     plugin_action_job_.shutdown();
 
@@ -39,9 +48,9 @@ Mo2Controller::~Mo2Controller()
     std::lock_guard<std::mutex> lock(test_mutex_);
     if (test_process_)
     {
-        // If a test child process is still running at shutdown, terminate it
-        // rather than orphaning it with a closed handle. Best-effort: log,
-        // ask Windows to terminate, wait briefly, then close the handle.
+        // A test child still running at shutdown would be orphaned once its
+        // handle closes, so terminate it first. Best effort: log, terminate,
+        // wait briefly, close.
         DWORD wait = WaitForSingleObject(test_process_, 0);
         if (wait == WAIT_TIMEOUT)
         {
@@ -90,7 +99,8 @@ crow::response Mo2Controller::get_status()
         }
     }
 
-    // Count mod folders under the mods path (top-level directories)
+    // MO2 keeps one directory per mod directly under the mods path, so only the
+    // top level is counted.
     if (!mods_path.empty() && fs::is_directory(mods_path))
     {
         for (auto& entry : fs::directory_iterator(mods_path))
