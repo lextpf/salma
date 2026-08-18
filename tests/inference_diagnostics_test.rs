@@ -1,9 +1,35 @@
-//! Rust port of `tests/inference_diagnostics_test.cpp` (the 9 GoogleTest cases),
-//! plus confidence-math micro-tests for the worked examples in the task spec.
+//! Integration tests for the schema-v2 diagnostics wire format.
 //!
-//! Each ported case keeps the C++ test's structure and asserts; the schema-v2
-//! structural asserts navigate the owned [`Value`] via its introspection
-//! accessors (the C++ used `nlohmann::json`).
+//! Every case here drives the crate from outside, so it sees only what a
+//! consumer of the emitted document sees. The structural asserts walk the owned
+//! `Value` through its introspection accessors.
+//!
+//! What the nine cases pin:
+//!
+//! - `assemble_json_emits_schema_v2` - the document shape `assemble_json`
+//!   produces: `schema_version`, the step/group/plugin skeleton, the per-plugin
+//!   `selected` flag and reason chain, and the `diagnostics` object with its
+//!   `timings_ms`, `repro` and `cache` children.
+//! - `reason_code_names` - the `ReasonCode` to wire-name round trip.
+//! - `confidence_band_thresholds` - the run band: high for a forced exact
+//!   match, below high on the global-fallback path.
+//! - `cache_hit_all_plugins_cache_reason` - the Tier-1 cache path, which puts a
+//!   `FOMOD_PLUS_CACHE` reason on every plugin, selected and deselected alike.
+//! - `propagator_records_forced_required` - the propagator records
+//!   `FORCED_REQUIRED` for a Required plugin.
+//! - `backward_compat_plugin_reader` - the schema-tolerant string-or-object
+//!   plugin-entry reader.
+//! - `repro_component_collapses_on_massive_misses`,
+//!   `repro_component_size_mismatch_gets_half_credit` and
+//!   `repro_component_flat_without_target_count` - the three repro-component
+//!   cases.
+//!
+//! The confidence-formula micro-tests are not here. They need the private
+//! helpers, so they live in the unit-test module of
+//! `mo2_salma_rs::inference_diagnostics`: the boundary tables, the worked
+//! group-composite example, the all-forced short-circuit, the run penalties,
+//! the `reproduced` backfill branches and the `serialize_*` key-order tests.
+//! Put a new formula test there and a new wire-shape test here.
 
 use mo2_salma_rs::fomod_atom::{
     AtomIndex, ExpandedAtoms, FomodAtom, Origin, TargetFile, TargetTree,
@@ -20,8 +46,9 @@ use mo2_salma_rs::json::Value;
 
 use std::collections::HashSet;
 
-/// Parse an inline `<config>` document into the IR, mirror of the C++
-/// `parse_xml` test helper (`FomodIRParser::parse(doc, "")`).
+/// Parse an inline `<config>` document into the IR. The empty archive prefix
+/// leaves source paths exactly as the XML spells them, so a test can assert on
+/// the literal strings it wrote.
 fn parse_xml(xml: &str) -> FomodInstaller {
     let doc = load_document(xml).expect("load inline config xml");
     parse(&doc, "")
@@ -395,8 +422,12 @@ fn propagator_records_forced_required() {
 // Backward-compat plugin reader (string and object forms)
 // ---------------------------------------------------------------------------
 
-/// Reproduces `FomodService::read_plugin_name`'s tolerance of string-or-object
-/// plugin entries, exercised through the owned [`Value`] accessors.
+/// Copy of `fomod_service::read_plugin_name`, which accepts either a bare
+/// string or an object with a string `name` and yields an empty string for
+/// anything else.
+///
+/// The original is private to its module, so this test carries its own copy.
+/// Nothing keeps the two in step: change one and change the other.
 fn read_plugin_name_local(entry: &Value) -> String {
     if entry.is_string() {
         return entry.as_str().unwrap().to_string();
