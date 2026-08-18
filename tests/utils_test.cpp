@@ -4,6 +4,28 @@
 
 #include "Utils.hpp"
 
+// Unit tests for mo2core's shared helpers in src/Utils.cpp.
+//
+// Three of these functions are the server's path-safety layer, which is why
+// they are tested here rather than through a controller: is_safe_mod_name
+// screens the modName that becomes a directory under the MO2 mods tree,
+// is_inside is the containment check the upload and FOMOD controllers apply to
+// every joined path, and normalize_path is where "." and ".." segments are
+// removed before any comparison. Weakening one of them has to fail here first.
+//
+// Sections, in file order: to_lower, normalize_path, random_hex_string,
+// parse_plugin_type_string, is_safe_mod_name, and one containment integration
+// case for is_inside.
+//
+// Two gaps, stated so nobody reads this file as full coverage:
+//   - is_safe_destination is untested. Its result on an absolute POSIX path is
+//     surprising: normalize_path strips the leading '/', so the path is
+//     re-anchored under the mod root and the function returns true.
+//     src/Utils.cpp explains why; no test pins it.
+//   - normalize_path's "." and ".." removal, the security-relevant half of the
+//     function, is not exercised. The cases below cover separators, prefixes,
+//     suffixes and slash collapsing only.
+
 // --- to_lower ---
 
 TEST(ToLower, LowercasesUpperCase)
@@ -114,7 +136,8 @@ TEST(RandomHexString, OnlyHexChars)
 
 TEST(RandomHexString, TwoCallsProduceDifferentResults)
 {
-    // Statistically near-impossible to collide at length 32
+    // 16^32 possible values, so a collision here means the generator is broken,
+    // not unlucky.
     auto a = mo2core::random_hex_string(32);
     auto b = mo2core::random_hex_string(32);
     EXPECT_NE(a, b);
@@ -264,10 +287,9 @@ TEST(IsSafeModName, AcceptsHyphensAndUnderscores)
     EXPECT_TRUE(mo2core::is_safe_mod_name("My_Cool-Mod"));
 }
 
-// Containment invariant: even if a hostile name slipped past
-// is_safe_mod_name, the defense-in-depth is_inside check on the joined
-// path catches it. This exercises the integration the upload controller
-// relies on.
+// The second line of defense: a hostile name that slipped past
+// is_safe_mod_name is still caught by is_inside on the joined path. This is the
+// pairing the upload controller relies on.
 TEST(IsInsideRejectsModNameTraversal, GeneratedPathStaysInsideModsDir)
 {
     namespace fs = std::filesystem;
