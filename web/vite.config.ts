@@ -1,13 +1,10 @@
 import { defineConfig } from 'vite'
-import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  // .env / .env.example live at the repo root (one level up from web/).
-  envDir: fileURLToPath(new URL('..', import.meta.url)),
   server: {
     port: 3000,
     proxy: {
