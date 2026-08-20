@@ -1,327 +1,544 @@
 @import "tailwindcss";
 
-/* Register Font Awesome duotone CSS vars as typed @property values so
-   transitions on them actually animate (without this, color/opacity
-   transitions are an instant snap because CSS can't interpolate
-   untyped custom properties). */
-@property --fa-primary-color {
-  syntax: '<color>';
-  inherits: true;
-  initial-value: #5b6373;
-}
-@property --fa-secondary-color {
-  syntax: '<color>';
-  inherits: true;
-  initial-value: #2b8e9c;
-}
-@property --fa-secondary-opacity {
-  syntax: '<number>';
-  inherits: true;
-  initial-value: 0.8;
-}
-
-/* Material Symbols support (UI quality pass). MIcon.tsx applies
-   .material-symbols-outlined + .m-icon; color rides currentColor so the
-   existing ink/paper plumbing and parent hover colors apply untouched. */
-.m-icon {
-  display: inline-block;
-  line-height: 1;
-  vertical-align: -0.125em;
-  user-select: none;
-  flex-shrink: 0;
-  transition: color 200ms cubic-bezier(0.21, 0.9, 0.3, 1);
-}
-
-.m-spin {
-  animation: m-spin 1s linear infinite;
-}
-
-@keyframes m-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ================================================================
-   ATELIER - editorial paper aesthetic for salma's web UI.
+   salma design tokens, resets and global styles.
 
-   Light is the default; [data-theme="dark"] flips to ash. Single
-   peacock-teal accent; oxblood is retained as `--danger` for error
-   and destructive states only. Typography: EB Garamond (display,
-   italic), Inter Tight (body), JetBrains Mono (labels, numbers,
-   timestamps).
+   Two themes, one system. Neutral-grey dark and neutral-grey light
+   are mirror images of one structure, not a plain theme and a
+   decorated one.
 
-   The @theme block defines Atelier tokens at the top, then aliases
-   the legacy `--color-*` token names so existing Tailwind utilities
-   (`bg-success/10`, `text-primary`, etc.) continue to resolve to
-   sensible Atelier values during the migration. The aliases can be
-   pruned once every component is rewritten.
+   Five rules the whole system rests on:
+
+     1. --signal means exactly one thing: live, selected or primary.
+        Budget four to six occurrences per screen. Never decorative.
+     2. One plane. Chrome, panes, cards and content are all the same
+        colour. No region carries a fill of its own and no region
+        carries an edge; space and type are what separate things.
+        There are no cards.
+     3. A border belongs only to something you can click, something
+        you can type into, or something reporting state. Never to an
+        area. To say "this bit is separate", use a gap and a label.
+     4. Every ink level that carries text clears 4.5:1 on every
+        surface it sits on, in both themes. By rule 2 that is one
+        surface per theme (--paper-3 is the only other one and it
+        carries no text). Exactly one level, --ink-ghost, is below
+        4.5:1, and it never carries text.
+     5. Empty space is filled with information or left empty, never
+        with a bloom and never with a texture field. The #root rule
+        below says what that costs.
+
+   The greys are neutral, and their exact values are load-bearing:
+   the contrast figures written into the ink block below are computed
+   against them. Hue belongs only to things that mean something: the
+   signal, the severity levels, the format tiles.
+
+   salma reads as a companion instrument to Mod Organizer 2, so it
+   borrows MO2's *conventions* rather than its look: a priority
+   column, user-style separator bands in the mod list, "instance"
+   vocabulary, and install destinations written as mods/<name>.
+
+   Component styling lives in inline style objects in the TSX. This
+   file owns tokens, resets, and the interaction states inline styles
+   cannot express (:hover, :focus-visible, animations).
+
+   Shadow-shaped tokens resolve to a zero-size transparent shadow
+   rather than `none`, so a composed `box-shadow: var(--a), var(--b)`
+   list stays valid wherever one survives.
    ================================================================ */
 
 @theme {
-  /* ---------- Field-manual palette (warm paper, light default) ---
-     The v5 "field-manual" direction: ink on warm paper, hairline
-     rules, ochre for warnings/partial and a brick red for errors/low.
-     There is no chromatic brand accent (emphasis is carried by weight
-     and the ink/paper contrast), so --accent is neutralised to ink and
-     the legacy --teal* / --accent-* families track it. */
-  --paper:        #f5f3ef;  /* warm app background */
-  --paper-2:      #efede8;
-  --paper-3:      #e7e5df;
-  --sheet:        #ffffff;  /* white content area / cards */
-  --card:         #fbfbfa;  /* raised panel fill (spec-rail, headers) */
-  --card-2:       #f4f3f1;  /* selected row / zebra */
-  --hover:        #fafaf9;  /* row hover wash */
+  /* ---------- Surface (light default: neutral paper) ------------
+     One plane. Six of the seven surface tokens hold the same value in
+     each theme, so the top bar, the rail, the status bar, every pane
+     and the content between them are one continuous field:
 
-  --ink:          #18181b;  /* primary text / EXACT tier */
-  --ink-2:        #3b3a3f;  /* strong body */
-  --ink-3:        #5b5a60;  /* secondary */
-  --ink-4:        #8e8d93;  /* muted labels */
-  --ink-5:        #a9a8ad;  /* faint */
-  --ink-6:        #b6b5ba;  /* glyphs / dim */
-  --ink-faint:    #c2c1c5;  /* timestamps / disabled */
+       | token     | light   | dark    | where it is still used       |
+       |-----------|---------|---------|------------------------------|
+       | --void    | #f2f2f2 | #191919 | body, Layout root, log foot  |
+       | --paper   | #f2f2f2 | #191919 | module plane                 |
+       | --paper-2 | #f2f2f2 | #191919 | no call sites left           |
+       | --sheet   | #f2f2f2 | #191919 | no call sites left           |
+       | --card    | #f2f2f2 | #191919 | dial hub, feed cap           |
+       | --card-2  | #f2f2f2 | #191919 | no call sites left           |
+       | --paper-3 | #ffffff | #232323 | toggle knob, the exception   |
 
-  --rule:         #dcdbd7;  /* default hairline */
-  --rule-soft:    #eae9e6;  /* softer hairline */
-  --rule-faint:   #f0efec;  /* row divider */
-  --rule-strong:  #c9c8c3;  /* hover border */
+     That table is the invariant. If a change makes two rows of the
+     first six differ, rule 2 is broken, not extended.
 
-  --ochre:        #9a6b1e;  /* warn / PARTIAL */
-  --danger:       #b83a2a;  /* error / LOW */
-  --moss:         #6f7d52;  /* quiet olive, retained for log/json "ok" */
-  --ink-blue:     var(--ink-2);  /* legacy slot, tracked to ink */
+     The unused names are kept because they say what a call site
+     means, and because a second plane, if one is ever needed, is then
+     one edit here instead of thirty in the components.
 
-  /* Operational color is intentionally more chromatic than the surrounding
-     field-manual UI: streams and archive formats need to scan at a glance. */
-  --log-info:     #2f6f9f;
-  --log-debug:    #7460a9;
-  --log-warn:     #a4640e;
-  --log-error:    #bd3528;
-  --format-7z:    #7860aa;
-  --format-zip:   #2f719b;
-  --format-rar:   #b45d35;
-  --format-fomod: #637e3f;
-  --format-json:  #9a6b1e;
-  --format-tar:   #69717f;
+     --paper-3 is not a plane: an affordance you operate has to read
+     as raised, and that is a control, not a region. It carries no
+     text, which is why rule 4 does not apply to it. Text inputs take
+     --input below, for the same reason. */
+  --void:    #f2f2f2;
+  --paper:   #f2f2f2;
+  --paper-2: #f2f2f2;
+  --paper-3: #ffffff;
+  --sheet:   #f2f2f2;
+  --card:    #f2f2f2;
+  --card-2:  #f2f2f2;
+  --hover:   rgba(26, 26, 26, 0.069);
 
-  /* Neutralised accent: no teal in the field-manual palette. Leftover
-     references to --accent / --teal* / --accent-* render as ink so the
-     surviving Atelier classes read as intentional, not branded. */
-  --accent:       var(--ink);
-  --accent-2:     var(--ink-2);
-  --accent-soft:  var(--card-2);
-  --accent-ink:   var(--ink);
-  --teal:         var(--ink-3);
-  --teal-2:       var(--ink-3);
-  --teal-soft:    var(--card-2);
-  --teal-ink:     var(--ink);
+  /* A well is a region with a fill, which rule 2 forbids, so both
+     resolve to transparent. Kept as tokens so call sites still parse
+     and still read as intent. */
+  --well:    transparent;
+  --well-2:  transparent;
+  --input:   #ffffff;                 /* text inputs */
+  --seg-bg:  rgba(26, 26, 26, 0.06);  /* segmented-control shell */
+  /* Thin bars follow the hairline reasoning above: a 3px track on
+     paper needs more ink than its dark mirror to read as a bar. */
+  --track:   rgba(26, 26, 26, 0.24);  /* progress track */
+  --track-2: rgba(26, 26, 26, 0.24);
+  --tick:    rgba(26, 26, 26, 0.44);  /* lit meter bar, quarter ticks */
+  --btn-bg:  #fcfcfc;                 /* ghost button fill */
+  --chip-bg: rgba(26, 26, 26, 0.069);
+  --chip-quiet: #fafafa;              /* instance chip, quiet raised surfaces */
+  --sep-bg:  rgba(26, 26, 26, 0.069); /* mod-list separator band */
+  --tog-off: rgba(26, 26, 26, 0.30);
+  --ghost-c: rgba(26, 26, 26, 0.068);  /* the 210px watermark numeral */
+  --crop-c:  rgba(12, 107, 117, 0.55);/* feed corner ticks */
 
-  --danger-2:     #c8543f;
-  --danger-soft:  #fbedea;
-  --danger-ink:   #7a2418;
+  /* ---------- Ink -----------------------------------------------
+     One ratio per level. --void and --paper are the same colour, so a
+     level cannot read differently on the two and one column of
+     figures covers both: WCAG 2.x contrast ratios against #f2f2f2,
+     rounded to two decimals.
 
-  /* Confidence meter unfilled segment */
-  --meter-empty:  #e4e3e0;
+     ink through ink-faint all clear 4.5:1, which is rule 4.
+     --ink-ghost is the single sub-AA level, for marks and rules only.
 
-  /* ---------- Confidence tiers (theme-aware) -----------------
-     Consumed via confidence.ts so dark mode auto-flips. EXACT is a
-     filled ink chip, HIGH an ink outline, PARTIAL ochre, LOW red. */
-  --tier-exact:      #18181b;
-  --tier-exact-fg:   #ffffff;
-  --tier-exact-bg:   #18181b;
-  --tier-exact-bd:   #18181b;
-  --tier-high:       #18181b;
-  --tier-high-fg:    #18181b;
-  --tier-high-bg:    var(--sheet);
-  --tier-high-bd:    #18181b;
-  --tier-partial:    #9a6b1e;
-  --tier-partial-fg: #8a5e16;
-  --tier-partial-bg: #fbf3e6;
-  --tier-partial-bd: #e4c98c;
-  --tier-low:        #b83a2a;
-  --tier-low-fg:     #a8331f;
-  --tier-low-bg:     #fbedea;
-  --tier-low-bd:     #e6b6ac;
+     ink-faint sits close to ink-6 on purpose. Holding it at AA costs
+     the visible gap between the bottom two steps, and legibility of
+     section labels is worth more than hierarchy at the bottom of the
+     ramp. Lightening it to restore that gap puts it below AA.
 
-  /* ---------- Typography ------------------------------------- */
+     Recompute these figures if a surface token moves. They are the
+     only place the contrast claim is written down, and a stale one is
+     how a level drops below AA unnoticed. */
+  --ink:       #121212;  /* 16.73 */
+  --ink-2:     #242424;  /* 13.87 */
+  --ink-3:     #373737;  /* 10.63 */
+  --ink-4:     #4a4a4a;  /*  7.92 */
+  --ink-5:     #5d5d5d;  /*  5.88 */
+  --ink-6:     #656565;  /*  5.21 */
+  --ink-faint: #676767;  /*  5.05 - section labels */
+  --ink-ghost: #7e7e7e;  /*  3.63 - marks and rules only */
+
+  /* ---------- Signal: the one accent ---------------------------
+     Darkened on paper so it can carry text and still read as the
+     accent. Accent *text* darkens further rather than lightening,
+     the opposite of the dark theme's direction. */
+  --signal:      #0c6b75;
+  --signal-2:    #0b5f68;
+  --signal-3:    #084b53;
+  --signal-deep: #0b5f68;
+  --signal-ink:  #ffffff;
+
+  --signal-wash-idle:  rgba(12, 107, 117, 0.075);
+  --signal-wash-chip:  rgba(12, 107, 117, 0.141);
+  --signal-wash-sel:   rgba(12, 107, 117, 0.141);
+  --signal-wash-stage: rgba(12, 107, 117, 0.12);
+  --signal-bd:         rgba(12, 107, 117, 0.553);
+  --signal-bd-strong:  rgba(12, 107, 117, 0.9);
+  --signal-bd-dash:    rgba(12, 107, 117, 0.654);
+  --signal-bd-soft:    rgba(12, 107, 117, 0.32);
+
+  /* Selection: one flat treatment everywhere. A 2px solid edge, a
+     flat wash, and an ink shift. No fading gradient, no glow. */
+  --sel-bg:   rgba(12, 107, 117, 0.141);
+  --sel-edge: #0c6b75;
+
+  /* ---------- Semantic - deepened for AA on paper --------------- */
+  --brass:     #8a5c1c;
+  --ochre:     var(--brass);   /* alias for --brass; no call sites left */
+  --warn-text: #6f4a15;
+  --danger:    #a83a28;
+  --danger-2:  #862c1d;
+  --moss:      #4f6129;
+  --danger-wash: rgba(168, 58, 40, 0.103);
+  --danger-bd:   rgba(168, 58, 40, 0.42);
+  --ok-bg:       rgba(79, 97, 41, 0.167);
+  --ok-bd:       rgba(79, 97, 41, 0.40);
+
+  /* ---------- Hairlines ----------------------------------------
+     Depth is drawn with these, so they have to be visible.
+
+     They are deliberately heavier than the dark ramp's mirror image.
+     Matching the two by contrast ratio or by CIE L* delta is the
+     wrong target: a 1px line is a high-frequency feature and the two
+     planes are not symmetric for those. 12% white on #191919 is a
+     +260% luminance jump, while 17% black on #f2f2f2 is a -31% dip,
+     so equal L* still reads as a much fainter line on paper, and the
+     bright surround adds veiling glare on top. These values were set
+     by eye at 1px on a bright screen. Do not "correct" them down to
+     numeric parity with the dark ramp. */
+  --rule-faint:  rgba(26, 26, 26, 0.14);
+  --rule-soft:   rgba(26, 26, 26, 0.20);
+  --rule:        rgba(26, 26, 26, 0.26);
+  --rule-ctrl:   rgba(26, 26, 26, 0.32);
+  --rule-strong: rgba(26, 26, 26, 0.40);
+  --rule-hover:  rgba(26, 26, 26, 0.55);
+
+  /* ---------- Elevation ----------------------------------------
+     There is no elevation. Surfaces separate with a hairline and one
+     fill step, so every token here is a zero-size transparent shadow.
+     The names are kept because they read as intent at the call site. */
+  --elev-raised: 0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-chrome: 0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-header: 0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-card:   0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-live:   0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-plate:  0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-inset:  0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-track:  0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-rail:   0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-dock:   0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-foot:   0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-dial:   0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-tog-on: 0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-seg-on: 0 0 0 0 rgba(0, 0, 0, 0);
+  --elev-engine: 0 0 0 0 rgba(0, 0, 0, 0);
+  --fill-lip:    0 0 0 0 rgba(0, 0, 0, 0);
+  --btn-lip:     0 0 0 0 rgba(0, 0, 0, 0);
+
+  /* ---------- Operational colour -------------------------------- */
+  --log-info:  #1c6690;
+  --log-debug: #615d53;
+  --log-warn:  #8a5c1c;
+  --log-error: #a83a28;
+
+  --lvl-info-bg:  rgba(28, 102, 144, 0.147);
+  --lvl-info-bd:  rgba(28, 102, 144, 0.495);
+  --lvl-debug-bg: rgba(26, 26, 26, 0.082);
+  --lvl-debug-bd: rgba(26, 26, 26, 0.213);
+  --lvl-warn-bg:  rgba(138, 92, 28, 0.097);
+  --lvl-warn-bd:  rgba(138, 92, 28, 0.551);
+  --lvl-error-bg: rgba(168, 58, 40, 0.149);
+  --lvl-error-bd: rgba(168, 58, 40, 0.476);
+
+  --warn-wash: rgba(138, 92, 28, 0.097);
+  --err-wash:  rgba(168, 58, 40, 0.103);
+
+  --hist-bar:  #0c6b75;
+  --hist-idle: rgba(12, 107, 117, 0.34);
+
+  --format-7z:    #6a4aa8;
+  --format-zip:   #1f6f9e;
+  --format-rar:   #9c4d1e;
+  --format-fomod: #4f6129;
+  --format-json:  #8a5c1c;
+  /* Anything the accepted list does not name. The engine still tries it
+     (format_of falls through to the zip backend), so it gets a tile. */
+  --format-other: #4a5665;
+
+  /* ---------- Stage / segment meter -----------------------------
+     The install progress instrument. A segment is done, live or
+     pending; nothing about it is lit. */
+  --stage-done:    #0b5f68;  /* history reads deeper than the present */
+  --stage-live:    #0c6b75;
+  --stage-todo:    rgba(26, 26, 26, 0.10);
+  --stage-todo-bd: rgba(26, 26, 26, 0.20);
+  --stage-pend:     rgba(26, 26, 26, 0.05);
+  --stage-pend-bd:  rgba(26, 26, 26, 0.20);
+  --stage-rail-on:  rgba(12, 107, 117, 0.55);
+  --stage-rail-off: rgba(26, 26, 26, 0.14);
+
+  /* ---------- Confidence tiers ---------------------------------
+     The tier colour is also the pill's text colour: these are
+     outline pills over a wash, not filled chips. --tier-*-on is the
+     text for the one place a tier is used as a solid fill. */
+  --tier-exact:      #0c6b75;
+  --tier-exact-bg:   rgba(12, 107, 117, 0.141);
+  --tier-exact-bd:   rgba(12, 107, 117, 0.553);
+  --tier-exact-on:   #ffffff;
+  --tier-high:       #256e78;
+  --tier-high-bg:    rgba(37, 110, 120, 0.106);
+  --tier-high-bd:    rgba(37, 110, 120, 0.556);
+  --tier-partial:    #8a5c1c;
+  --tier-partial-bg: rgba(138, 92, 28, 0.097);
+  --tier-partial-bd: rgba(138, 92, 28, 0.551);
+  --tier-low:        #a83a28;
+  --tier-low-bg:     rgba(168, 58, 40, 0.149);
+  --tier-low-bd:     rgba(168, 58, 40, 0.476);
+
+  /* ---------- Reproduction faults (virtual output tree) ---------
+     A highlighter, not a tint. These are far stronger than the *-wash
+     and level-chip fills, and they can be: those sit under text of
+     their own hue, which caps how dark they can go. A faulted tree
+     row keeps its normal ink and tones only the glyph, so the fill is
+     free to read as a marked row. */
+  --fault-bg-danger: rgba(168, 58, 40, 0.30);
+  --fault-bg-warn:   rgba(138, 92, 28, 0.34);
+
+  --meter-empty: rgba(26, 26, 26, 0.22);
+  --meter-bar:   rgba(26, 26, 26, 0.42);
+  --mini-track:  rgba(26, 26, 26, 0.20);
+
+  /* ---------- Typography ---------------------------------------
+     Families are fixed: Hanken Grotesk for UI, JetBrains Mono for
+     data, labels and numerals. */
   --font-display: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
   --font-body:    'Hanken Grotesk', system-ui, -apple-system, sans-serif;
   --font-mono:    'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
-
-  /* Tailwind 4 picks up font-* vars automatically: text-display, etc. */
   --font-sans:    'Hanken Grotesk', system-ui, -apple-system, sans-serif;
   --font-serif:   'Hanken Grotesk', system-ui, -apple-system, sans-serif;
 
-  /* ---------- Shape ------------------------------------------ */
-  --radius-xs:   2px;
-  --radius-sm:   4px;
-  --radius-md:   6px;
-  --radius-lg:   8px;
-  --radius-xl:   12px;
-  --radius-full: 9999px;
-
-  /* ---------- Elevation (subtle paper lifts) ----------------- */
-  --shadow-elevation-1: 0 1px 2px 0 rgba(24, 28, 37, 0.06);
-  --shadow-elevation-2: 0 4px 12px -4px rgba(24, 28, 37, 0.10), 0 0 0 1px rgba(24, 28, 37, 0.03);
-  --shadow-elevation-3: 0 12px 24px -8px rgba(24, 28, 37, 0.14), 0 0 0 1px rgba(24, 28, 37, 0.04);
-
-  /* ---------- Type scale (UI quality pass) -----------------------
+  /* ---------- Type scale ---------------------------------------
      The only sanctioned font sizes for rendered text. Inline styles
-     reference these as fontSize: 'var(--fs-body)' etc.; raw numeric
-     fontSize values are banned outside MIcon's icon box. */
-  --fs-micro: 10.5px;  /* uppercase kickers, fine print - always tracked */
-  --fs-label: 11.5px;  /* labels, meta rows, mono tags */
-  --fs-body:  12.5px;  /* data rows, body copy, inputs */
-  --fs-title: 14px;    /* card/section titles */
-  --fs-head:  18px;    /* page headers */
-  --fs-display: 26px; /* hero numerals, display headings - the scale's cap */
-  --lh-tight: 1.45;
-  --lh-body:  1.6;
+     reference these as fontSize: 'var(--fs-body)'; raw numeric
+     fontSize values are banned outside MIcon's icon box. Sizes below
+     10px are reserved for tracked uppercase mono. */
+  --fs-nano:    9px;    /* dial sub-label only */
+  --fs-micro:   10px;   /* kickers, mono labels, LED text, tallies */
+  --fs-meta:    10.5px; /* status bar, ribbon meta */
+  --fs-label:   11px;   /* mono chips, facet counts, tabs */
+  --fs-mono:    11.5px; /* console lines, log rows, tree rows, inputs */
+  --fs-sm:      12px;   /* setting descriptions, kicker numerals, Cancel */
+  --fs-body:    12.5px; /* data rows, mod names, buttons */
+  --fs-title:   13px;   /* card titles, settings labels */
+  --fs-head:    14.5px; /* active job filename */
+  --fs-lg:      17px;   /* the dial's degraded chip numeral */
+  --fs-lede:    20px;   /* salma wordmark */
+  --fs-h1:      25px;   /* inspector record title */
+  --fs-empty:   24px;   /* empty-state headline */
+  --fs-hero-sm: 30px;   /* dial numeral, logs record count */
+  --fs-hero:    40px;   /* install percent, rail inferred count */
+  --fs-ghost:   210px;  /* watermark module numeral */
+  --fs-display: 26px;   /* alias; no call sites left */
+  --lh-body:    1.6;
 
-  /* ---------- Layout ----------------------------------------- */
-  --spacing-sidebar: 236px;
+  /* Tracking - most of the crafted feeling lives here. */
+  --tr-lockup: 0.24em;
+  --tr-kicker: 0.18em;
+  --tr-chip:   0.12em;
+  --tr-stage:  0.12em;
+  --tr-tight:  -0.035em;
+  --tr-hero:   -0.04em;
 
-  /* ============================================================
-     ALIAS BRIDGE - map legacy `--color-*` token names to Atelier
-     values. Tailwind utilities like `bg-primary`, `text-success`,
-     `border-outline-variant`, `from-primary via-secondary` keep
-     resolving while components are rewritten. After Phase 5 sweep
-     these can be deleted.
-     ============================================================ */
+  /* ---------- Shape --------------------------------------------
+     Small and consistent. A 12px radius reads as a consumer app and
+     4px reads as an instrument panel; nothing is fully square, which
+     would read as an unstyled document. */
+  --radius-chip:  2px;
+  --radius-seg:   3px;
+  --radius-ctrl:  4px;
+  --radius-input: 4px;
+  --radius-row:   3px;
+  --radius-panel: 4px;
+  --radius-group: 4px;
+  --radius-card:  4px;
+  --radius-plate: 6px;
+  --radius-full:  999px;
+  /* Generic scale. No call sites left; kept so a --radius-md still resolves. */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
 
-  --color-primary:                var(--accent);
-  --color-primary-light:          var(--accent-2);
-  --color-primary-dark:           var(--accent-ink);
-  --color-on-primary:             var(--paper);
-  --color-primary-container:      var(--accent-soft);
-  --color-on-primary-container:   var(--accent-ink);
+  /* ---------- Chrome metrics ------------------------------------
+     Reference only. No component reads any of these: component sizing
+     lives in inline style objects in the TSX, and the two virtualised
+     lists need plain numbers for their scroll arithmetic, which a
+     custom property cannot supply. Several have already drifted from
+     what the components use (ModuleHeader is 52px, not --h-header's
+     46px; the list rows are 26/34/24, not --h-logrow/--h-record/
+     --h-sep). The TSX and useVirtualScroll.ts are authoritative. Do
+     not "sync" a component to a value here. */
+  --h-topbar:    52px;
+  --h-header:    46px;
+  --h-status:    30px;
+  --h-ribbon:    44px;
+  --h-control:   28px;
+  --h-logrow:    24px;
+  --h-record:    32px;
+  --h-sep:       22px;
+  --h-treerow:   23px;
+  --w-rail:      216px;
+  --w-rail-icon: 62px;
 
-  --color-secondary:              var(--ink-blue);
-  --color-secondary-light:        #5a6a8a;
-  --color-secondary-dark:         #1a2540;
-  --color-secondary-container:    #d4dae3;
+  /* ---------- Motion -------------------------------------------- */
+  --ease: cubic-bezier(0.21, 0.9, 0.3, 1);
 
-  --color-tertiary:               var(--ink-2);
-  --color-tertiary-light:         var(--ink-3);
-  --color-tertiary-dark:          var(--ink);
-
-  --color-surface:                var(--paper);
-  --color-surface-ink:            var(--paper-2);
-  --color-surface-dim:            var(--paper-2);
-  --color-surface-container:      var(--card);
-  --color-surface-container-high: var(--card-2);
-  --color-surface-container-highest: var(--paper-3);
-
-  --color-on-surface:             var(--ink);
-  --color-on-surface-variant:     var(--ink-3);
-  --color-outline:                var(--rule-strong);
-  --color-outline-variant:        var(--rule);
-
-  --color-copper:                 var(--accent);
-  --color-copper-light:           var(--accent-2);
-  --color-bone:                   var(--ink);
-
-  --color-success:                var(--moss);
-  --color-success-light:          #5a9a5a;
-  --color-warning:                var(--ochre);
-  --color-warning-light:          #c49848;
-  --color-error:                  var(--danger);
-  --color-error-light:            var(--danger-2);
-  --color-info:                   var(--teal);
-  --color-info-light:             var(--teal-2);
-
-  /* Legacy aurora accent slots - neutralized to ink/accent so
-     anything still grabbing them looks intentional, not rainbow. */
-  --accent-frost:      var(--ink-blue);
-  --accent-frost-deep: var(--ink-2);
-  --accent-mint:       var(--moss);
-  --accent-mint-deep:  #2a5a2a;
-  --accent-blue:       var(--ink-blue);
-  --accent-violet:     var(--ink-2);
-  --accent-amber:      var(--ochre);
-  --accent-amber-deep: #6e4411;
-  --accent-rose:       var(--danger);
-  --accent-rose-deep:  var(--danger-ink);
-  --accent-steel:      var(--ink-3);
-  --accent-slate:      var(--ink-4);
-
-  /* Glow tokens - neutralised; box-shadow utilities still resolve
-     but render as quiet ink-tinted shadows. */
-  --glow-success: rgba(61, 122, 61, 0.20);
-  --glow-warning: rgba(138, 112, 50, 0.20);
-  --glow-error:   rgba(138, 42, 31, 0.20);
-  --glow-info:    rgba(31, 110, 122, 0.20);
-  --glow-primary-soft:   rgba(31, 110, 122, 0.14);
-  --glow-secondary-soft: rgba(42, 58, 90, 0.12);
-  --glow-tertiary-soft:  rgba(54, 60, 72, 0.10);
-  --glow-copper-soft:    rgba(31, 110, 122, 0.16);
-
-  /* Readiness ring tokens (single-tone) */
-  --readiness-ring-track:    rgba(125, 133, 147, 0.30);
-  --readiness-ring-tertiary: rgba(31, 110, 122, 0.86);
-
-  /* ---------- Animations ------------------------------------- */
-  --animate-fade-in:  fade-in 0.3s ease-out;
-  --animate-slide-up: slide-up 0.35s cubic-bezier(0.21, 0.9, 0.3, 1);
-
-  @keyframes fade-in {
-    from { opacity: 0; }
-    to   { opacity: 1; }
+  @keyframes m-spin {
+    to { transform: rotate(360deg); }
   }
-  @keyframes slide-up {
-    from { opacity: 0; transform: translateY(8px); }
+  @keyframes sigBlink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+  }
+  @keyframes caretBlink {
+    0%, 48%   { opacity: 1; }
+    49%, 100% { opacity: 0; }
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(5px); }
     to   { opacity: 1; transform: translateY(0); }
   }
-  @keyframes pulse {
-    0%, 100% { opacity: 0.55; }
-    50%      { opacity: 1; }
-  }
-  @keyframes sweep {
-    0%   { transform: translateX(-100%); }
-    100% { transform: translateX(100%); }
-  }
-  @keyframes ring-pulse-once {
-    0%   { transform: scale(1);     filter: brightness(1); }
-    45%  { transform: scale(1.055); filter: brightness(1.06); }
-    100% { transform: scale(1);     filter: brightness(1); }
-  }
-  @keyframes heart-beat-once {
-    0%   { transform: scale(1);    filter: brightness(1); }
-    18%  { transform: scale(1.14); filter: brightness(1.08); }
-    36%  { transform: scale(0.97); filter: brightness(1.02); }
-    56%  { transform: scale(1.08); filter: brightness(1.06); }
-    100% { transform: scale(1);    filter: brightness(1); }
+  @keyframes salma-stripe {
+    from { background-position: 0 0; }
+    to   { background-position: 24px 0; }
   }
   @keyframes skeleton-shimmer {
     0%   { background-position: 200% 0; }
     100% { background-position: -200% 0; }
   }
-  @keyframes atelier-reveal {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes breathe {
-    0%, 100% { opacity: 0.86; transform: scale(1); }
-    50%      { opacity: 1;    transform: scale(1.012); }
-  }
-
-  /* Field-manual motion: a live LED blink, the striped progress sweep,
-     and a spin for indeterminate work. */
-  @keyframes salma-blink {
+  /* The segment meter's live cell: a flat opacity breath, no bloom. */
+  @keyframes segLive {
     0%, 100% { opacity: 1; }
-    50%      { opacity: 0.35; }
-  }
-  @keyframes salma-stripe {
-    from { background-position: 0 0; }
-    to   { background-position: 30px 0; }
-  }
-  @keyframes salma-spin {
-    to { transform: rotate(360deg); }
+    50%      { opacity: 0.55; }
   }
 }
 
 /* ================================================================
-   BASE - body, typography, focus, selection, scrollbar
+   Dark theme: the same structure, inverted. Neutral near-blacks, a
+   cool signal cyan, and an ink ramp whose contrast ratios match
+   light's step for step. Only token values change here; every rule
+   at the top of this file still holds.
+   ================================================================ */
+
+[data-theme="dark"] {
+  --void:    #191919;
+  --paper:   #191919;
+  --paper-2: #191919;
+  --paper-3: #232323;
+  --sheet:   #191919;
+  --card:    #191919;
+  --card-2:  #191919;
+  --hover:   rgba(255, 255, 255, 0.055);
+
+  --well:    transparent;
+  --well-2:  transparent;
+  --input:   rgba(0, 0, 0, 0.26);
+  --seg-bg:  rgba(0, 0, 0, 0.30);
+  --track:   rgba(255, 255, 255, 0.10);
+  --track-2: rgba(255, 255, 255, 0.12);
+  --tick:    rgba(255, 255, 255, 0.20);
+  --btn-bg:  rgba(255, 255, 255, 0.035);
+  --chip-bg: rgba(255, 255, 255, 0.07);
+  --chip-quiet: rgba(255, 255, 255, 0.035);
+  --sep-bg:  rgba(255, 255, 255, 0.05);
+  --tog-off: rgba(255, 255, 255, 0.16);
+  --ghost-c: rgba(255, 255, 255, 0.045);
+  --crop-c:  rgba(92, 210, 222, 0.55);
+
+  /* Ratios against #191919, the one dark plane. Every step lands
+     within 0.7 of the light ramp's matching step, which is what keeps
+     the two themes one system rather than two designs. Recompute
+     these if --void or --paper moves in this block. */
+  --ink:       #f5f5f5;  /* 16.13 */
+  --ink-2:     #e4e4e4;  /* 13.83 */
+  --ink-3:     #c7c7c7;  /* 10.40 */
+  --ink-4:     #a6a6a6;  /*  7.22 */
+  --ink-5:     #8f8f8f;  /*  5.44 */
+  --ink-6:     #868686;  /*  4.83 */
+  --ink-faint: #818181;  /*  4.51 - section labels, the tightest pass */
+  --ink-ghost: #6c6c6c;  /*  3.35 - marks and rules only */
+
+  --signal:      #5cd2de;
+  --signal-2:    #9ae2ea;
+  --signal-3:    #c8f0f4;
+  --signal-deep: #2f8f99;
+  --signal-ink:  #06201f;
+
+  --signal-wash-idle:  rgba(92, 210, 222, 0.05);
+  --signal-wash-chip:  rgba(92, 210, 222, 0.10);
+  --signal-wash-sel:   rgba(92, 210, 222, 0.12);
+  --signal-wash-stage: rgba(92, 210, 222, 0.13);
+  --signal-bd:         rgba(92, 210, 222, 0.40);
+  --signal-bd-strong:  rgba(92, 210, 222, 0.68);
+  --signal-bd-dash:    rgba(92, 210, 222, 0.48);
+  --signal-bd-soft:    rgba(92, 210, 222, 0.30);
+
+  --sel-bg:   rgba(92, 210, 222, 0.11);
+  --sel-edge: #5cd2de;
+
+  --brass:     #dfae67;
+  --warn-text: #e6c99c;
+  --danger:    #ec8571;
+  --danger-2:  #f4b6a8;
+  --moss:      #a8bb76;
+  --danger-wash: rgba(236, 133, 113, 0.09);
+  --danger-bd:   rgba(236, 133, 113, 0.40);
+  --ok-bg:       rgba(168, 187, 118, 0.12);
+  --ok-bd:       rgba(168, 187, 118, 0.38);
+
+  --rule-faint:  rgba(255, 255, 255, 0.06);
+  --rule-soft:   rgba(255, 255, 255, 0.09);
+  --rule:        rgba(255, 255, 255, 0.12);
+  --rule-ctrl:   rgba(255, 255, 255, 0.17);
+  --rule-strong: rgba(255, 255, 255, 0.24);
+  --rule-hover:  rgba(255, 255, 255, 0.40);
+
+  /* Elevation stays zero here too. Both themes separate surfaces the
+     same way, with a hairline and one fill step. */
+
+  --log-info:  #7cc6ec;
+  --log-debug: #948f85;
+  --log-warn:  #dfae67;
+  --log-error: #ec8571;
+
+  --lvl-info-bg:  rgba(124, 198, 236, 0.11);
+  --lvl-info-bd:  rgba(124, 198, 236, 0.36);
+  --lvl-debug-bg: rgba(255, 255, 255, 0.055);
+  --lvl-debug-bd: rgba(255, 255, 255, 0.15);
+  --lvl-warn-bg:  rgba(223, 174, 103, 0.13);
+  --lvl-warn-bd:  rgba(223, 174, 103, 0.40);
+  --lvl-error-bg: rgba(236, 133, 113, 0.15);
+  --lvl-error-bd: rgba(236, 133, 113, 0.44);
+
+  --warn-wash: rgba(223, 174, 103, 0.07);
+  --err-wash:  rgba(236, 133, 113, 0.09);
+
+  --hist-bar:  #5cd2de;
+  --hist-idle: rgba(92, 210, 222, 0.34);
+
+  --format-7z:    #bfa8ea;
+  --format-zip:   #7cc6ec;
+  --format-rar:   #e8a077;
+  --format-fomod: #a8bb76;
+  --format-json:  #dfae67;
+  --format-other: #a3adba;
+
+  --stage-done:    #2f8f99;  /* history reads deeper than the present */
+  --stage-live:    #5cd2de;
+  --stage-todo:    rgba(255, 255, 255, 0.09);
+  --stage-todo-bd: rgba(255, 255, 255, 0.19);
+  --stage-pend:     rgba(255, 255, 255, 0.045);
+  --stage-pend-bd:  rgba(255, 255, 255, 0.19);
+  --stage-rail-on:  rgba(92, 210, 222, 0.55);
+  --stage-rail-off: rgba(255, 255, 255, 0.13);
+
+  --tier-exact:      #5cd2de;
+  --tier-exact-bg:   rgba(92, 210, 222, 0.12);
+  --tier-exact-bd:   rgba(92, 210, 222, 0.40);
+  --tier-exact-on:   #06201f;
+  --tier-high:       #9ae2ea;
+  --tier-high-bg:    rgba(154, 226, 234, 0.10);
+  --tier-high-bd:    rgba(154, 226, 234, 0.34);
+  --tier-partial:    #dfae67;
+  --tier-partial-bg: rgba(223, 174, 103, 0.12);
+  --tier-partial-bd: rgba(223, 174, 103, 0.40);
+  --tier-low:        #ec8571;
+  --tier-low-bg:     rgba(236, 133, 113, 0.15);
+  --tier-low-bd:     rgba(236, 133, 113, 0.44);
+
+  /* Lower alpha than the light theme: on a near-black plane a tinted
+     overlay lifts luminance fast, and the ink sitting on it is light. */
+  --fault-bg-danger: rgba(236, 133, 113, 0.22);
+  --fault-bg-warn:   rgba(223, 174, 103, 0.22);
+
+  --meter-empty: rgba(255, 255, 255, 0.10);
+  --meter-bar:   rgba(255, 255, 255, 0.34);
+  --mini-track:  rgba(255, 255, 255, 0.08);
+}
+
+/* ================================================================
+   Base
    ================================================================ */
 
 @layer base {
@@ -329,9 +546,12 @@
 
   html, body { margin: 0; padding: 0; }
 
+  :root { color-scheme: light; }
+  [data-theme="dark"] { color-scheme: dark; }
+
   body {
     font-family: var(--font-body);
-    background: var(--paper);
+    background: var(--void);
     color: var(--ink);
     font-size: 16px;
     line-height: 1.5;
@@ -342,19 +562,10 @@
     min-height: 100vh;
   }
 
-  /* Paper grain - fine fractal noise overlay; static, single paint */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 0;
-    background-image:
-      radial-gradient(circle at 20% 30%, rgba(125, 133, 147, 0.04) 0, transparent 50%),
-      radial-gradient(circle at 80% 70%, rgba(31, 110, 122, 0.025) 0, transparent 60%),
-      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.094 0 0 0 0 0.110 0 0 0 0 0.145 0 0 0 0.04 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
-  }
-
+  /* Nothing is painted over the app: no grain sheet, no vignette, no
+     dot or grid field, per-pane or full-screen. Each of those costs
+     contrast on every surface underneath in order to decorate the few
+     panes that are empty. An empty pane gets content or nothing. */
   #root {
     position: relative;
     z-index: 1;
@@ -373,1432 +584,223 @@
   button:disabled,
   [role="button"][aria-disabled="true"] { cursor: not-allowed; }
 
+  input::placeholder { color: var(--ink-faint); }
+
   ::selection {
-    background: var(--accent);
-    color: var(--paper);
+    background: color-mix(in srgb, var(--signal) 28%, transparent);
+    color: var(--ink);
   }
 
+  /* Two solid pixels, not a glow. Visible on every plane in both
+     themes without depending on a shadow. */
   :focus-visible {
-    outline: 1px solid var(--accent);
-    outline-offset: 2px;
-    box-shadow: none;
+    outline: 2px solid var(--signal);
+    outline-offset: 1px;
+    border-radius: var(--radius-chip);
   }
 
   /* ============================================================
-     FONT AWESOME DUOTONE - teal-led, ink-3 silhouette.
-     Primary draws a confident cool-gray outline in --ink-3
-     (matched to body-text weight); secondary fills decorative
-     shapes in --teal-2 (= --accent-2, teal) at ~80% opacity. The
-     teal does the chromatic work; the ink-3 stroke gives the icon
-     enough luminance contrast to clear WCAG 3:1 on the paper
-     surfaces. Lifts to ~90% / 100% opacity on active nav and
-     hover. Inverted on accent backgrounds (paper-on-accent) and
-     overridden by .icon-error to --danger (oxblood) for error
-     states. Dark mode bumps primary to --ink-2 for parity against
-     near-black paper.
+     Icons
      ============================================================ */
-  .fa-duotone {
-    --fa-primary-color: var(--ink-3);
-    --fa-secondary-color: var(--teal-2);
-    --fa-primary-opacity: 1;
-    --fa-secondary-opacity: 0.8;
-    transition:
-      --fa-primary-color 200ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      --fa-secondary-color 200ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      --fa-secondary-opacity 200ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      transform 200ms cubic-bezier(0.21, 0.9, 0.3, 1);
-    transform-origin: center;
+
+  .m-icon {
+    display: inline-block;
+    line-height: 1;
+    vertical-align: -0.125em;
+    user-select: none;
+    flex-shrink: 0;
+    transition: color 160ms var(--ease);
   }
 
-  .tool-btn-primary .fa-duotone,
-  .tool-btn-ink .fa-duotone {
-    --fa-primary-color: var(--paper);
-    --fa-secondary-color: var(--paper);
-    --fa-secondary-opacity: 0.6;
-  }
+  .m-spin { animation: m-spin 1s linear infinite; }
 
-  .nav-rail-item-active .fa-duotone {
-    --fa-primary-color: var(--ink-2);
-    --fa-secondary-color: var(--teal-2);
-    --fa-secondary-opacity: 0.9;
-  }
-
-  /* Module rail (fm-rail-item): ink-forward icons, darker than the ambient
-     ink-3 duotone so the navigation reads as primary chrome rather than
-     decoration. The active module goes full ink. */
-  .fm-rail-item .fa-duotone {
-    --fa-primary-color: var(--ink-2);
-    --fa-secondary-color: var(--ink-2);
-    --fa-secondary-opacity: 0.55;
-  }
-
-  .fm-rail-item[aria-current="page"] .fa-duotone {
-    --fa-primary-color: var(--ink);
-    --fa-secondary-color: var(--ink);
-    --fa-secondary-opacity: 0.7;
-  }
-
-  /* Coordinated duotone hover: primary darkens, secondary becomes fully
-     opaque, icon scales 1.06. Triggered by the parent control's hover
-     state so every duotone in a button/link/row reacts together. */
-  .tool-btn:hover .fa-duotone,
-  .nav-rail-item:hover .fa-duotone,
-  .fomod-list-item:hover .fa-duotone,
-  .card-lift:hover .fa-duotone,
-  .queue-ledger:hover .fa-duotone,
-  .serif-link-arrow:hover .fa-duotone,
-  .upload-dropzone:not([data-disabled="true"]):hover .fa-duotone,
-  a:hover .fa-duotone,
-  button:hover .fa-duotone {
-    --fa-primary-color: var(--ink-2);
-    --fa-secondary-opacity: 1;
-    transform: scale(1.06);
-  }
-  /* Dragging state: icon shifts to deep-accent family to harmonise
-     with the accent-soft (pale teal) fill behind it. */
-  .upload-dropzone[data-dragging="true"] .fa-duotone {
-    --fa-primary-color: var(--accent-ink);
-    --fa-secondary-color: var(--accent);
-    --fa-secondary-opacity: 0.85;
-  }
-  /* Inverted-bg buttons: primary stays paper-on-accent, but lift secondary
-     opacity so the hover still reads. */
-  .tool-btn-primary:hover .fa-duotone,
-  .tool-btn-ink:hover .fa-duotone {
-    --fa-primary-color: var(--paper);
-    --fa-secondary-opacity: 0.9;
-    transform: scale(1.06);
-  }
-  /* Press state - icon snaps slightly inward */
-  .tool-btn:active .fa-duotone,
-  .nav-rail-item:active .fa-duotone,
-  .queue-ledger:active .fa-duotone,
-  button:active .fa-duotone,
-  a:active .fa-duotone {
-    transform: scale(0.97);
-    transition-duration: 80ms;
-  }
-
-  /* Status-tinted modifier classes (opt-in) */
-  .fa-duotone.icon-success {
-    --fa-primary-color: var(--moss);
-    --fa-secondary-color: var(--moss);
-  }
-  .fa-duotone.icon-warning {
-    --fa-primary-color: var(--ochre);
-    --fa-secondary-color: var(--ochre);
-  }
-  .fa-duotone.icon-error {
-    --fa-primary-color: var(--danger);
-    --fa-secondary-color: var(--danger);
-  }
+  /* ============================================================
+     Scrollbars
+     ============================================================ */
 
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-corner { background: transparent; }
   ::-webkit-scrollbar-thumb {
-    background: var(--rule);
-    border: 3px solid var(--paper);
-    border-radius: 999px;
+    background: rgba(26, 26, 26, 0.26);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: var(--radius-seg);
   }
-  ::-webkit-scrollbar-thumb:hover { background: var(--rule-strong); }
-
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
-      animation: none !important;
-      transition-duration: 0.01ms !important;
-      scroll-behavior: auto !important;
-    }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(26, 26, 26, 0.42);
+    background-clip: padding-box;
   }
-
-  /* ============================================================
-     LOG VIEWER (mono, tabular)
-     ============================================================ */
-  .log-viewer {
-    font-family: var(--font-mono);
-    font-size: 0.8125rem;
-    line-height: 1.7;
-    letter-spacing: 0;
-    font-variant-ligatures: none;
+  [data-theme="dark"] ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.17);
+    background-clip: padding-box;
+  }
+  [data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.30);
+    background-clip: padding-box;
   }
 
-  /* ============================================================
-     TYPOGRAPHY - DISPLAY, CHAPTERS, TIMESTAMPS, RULES
-     ============================================================ */
-
-  .display-serif {
-    font-family: var(--font-display);
-    font-weight: 400;
-    line-height: 0.95;
-    letter-spacing: -0.035em;
-  }
-  .display-serif-tight {
-    font-family: var(--font-display);
-    font-weight: 500;
-    letter-spacing: -0.02em;
-    line-height: 1.05;
-  }
-  .display-serif-italic {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-weight: 500;
-    letter-spacing: -0.015em;
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule-hover) transparent;
   }
 
-  /* Teal period at the end of big titles */
-  .display-period {
-    color: var(--accent);
-    font-style: italic;
-  }
-
-  /* Chapter marker - translucent serif numeral floated behind content
-     (legacy decoration; pages should use Section corner numeral instead) */
-  .chapter-marker {
-    position: absolute;
-    top: 0.4rem;
-    right: 1rem;
-    font-family: var(--font-display);
-    font-weight: 400;
-    font-size: 7rem;
-    line-height: 1;
-    color: var(--rule-soft);
-    pointer-events: none;
-    user-select: none;
-    opacity: 0.6;
-    z-index: 0;
-  }
-  .chapter-marker-sm {
-    font-size: 4.5rem;
-    top: 0.5rem;
-    right: 1rem;
-  }
-
-  /* Inline chapter label: "01 - Section" small-cap pattern */
-  .chapter-label {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 0.55rem;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.18em;
-    color: var(--ink-3);
-  }
-  .chapter-label .chapter-num {
-    font-family: var(--font-display);
-    font-style: italic;
-    font-weight: 500;
-    font-size: 0.95rem;
-    letter-spacing: -0.01em;
-    color: var(--accent);
-    text-transform: none;
-    line-height: 1;
-  }
-
-  /* Mono micro-text for build-log style metadata */
-  .timestamp-print {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    letter-spacing: 0.02em;
-    color: var(--ink-4);
-    font-weight: 400;
-    line-height: 1.4;
-  }
-  .timestamp-print-dim {
-    color: var(--ink-5);
-  }
-
-  /* Hairline rule - 1px line with small peacock-teal dot caps at each end */
-  .hairline-rule {
-    position: relative;
-    height: 1px;
-    background: var(--rule);
-  }
-  .hairline-rule::before,
-  .hairline-rule::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    width: 5px;
-    height: 5px;
-    background: var(--teal);
-    transform: translateY(-50%);
-    border-radius: 50%;
-  }
-  .hairline-rule::before { left: 0; }
-  .hairline-rule::after  { right: 0; }
-
-  /* Mono micro caption family */
-  .ui-label {
-    font-family: var(--font-mono);
-    font-size: 0.7rem;
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.18em;
-    color: var(--ink-3);
-  }
-  .ui-micro {
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    color: var(--ink-4);
-  }
-  .ui-xs { font-size: 0.75rem; }
-
-  /* Page header dressing (kept for backward-compatibility; no decorative
-     line on Atelier pages - use Section primitives instead) */
-  .page-header { position: relative; padding-bottom: 0.7rem; }
-  .page-title  { line-height: 1.1; }
-  .page-subtitle {
-    max-width: 56ch;
-    color: var(--ink-3);
-    font-family: var(--font-display);
-    font-style: italic;
-    line-height: 1.55;
-  }
+  .scroll-pane { overscroll-behavior: contain; }
 
   /* ============================================================
-     ATELIER SECTION - primitive shell used across pages.
-     Header bar with mono numeral + section label + serif title + meta
-     slot, big faded corner numeral, body wrapper.
+     Interaction states: the parts inline styles cannot express.
+     Resting appearance is set inline on the element and wins on
+     specificity; these rules paint hover, focus and motion only.
+
+     Every interactive state here is a fill or a border change. None
+     of them depend on a shadow, so they survive the flat pass and
+     read at the same strength in both themes.
      ============================================================ */
 
-  .atelier-section {
-    position: relative;
-    background: var(--card);
-    border: 1px solid var(--rule);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-    animation: atelier-reveal 540ms cubic-bezier(0.21, 0.9, 0.3, 1) both;
-  }
-  .atelier-section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 22px 7px;
-    border-bottom: 1px solid var(--rule-soft);
-    background: var(--card-2);
-    position: relative;
-    gap: 14px;
-    flex-wrap: wrap;
-  }
-  .atelier-section-header-lead {
-    display: flex;
-    align-items: baseline;
-    gap: 14px;
-    flex-wrap: wrap;
-    min-width: 0;
-  }
-  .atelier-section-num {
-    font-family: var(--font-mono);
-    font-style: italic;
-    font-size: 0.85rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--accent);
-  }
-  .atelier-section-dash {
-    width: 18px;
-    height: 1px;
-    background: var(--rule-strong);
-    opacity: 0.55;
-    transform: translateY(-4px);
-    flex-shrink: 0;
-  }
-  .atelier-section-title {
-    font-family: var(--font-display);
-    font-size: 1.0625rem;
-    font-weight: 500;
-    letter-spacing: -0.01em;
-    color: var(--ink);
-    line-height: 1.1;
-  }
-  .atelier-section-corner {
-    position: absolute;
-    right: 18px;
-    top: 4px;
-    font-family: var(--font-display);
-    font-size: 64px;
-    line-height: 1;
-    color: var(--rule-strong);
-    font-weight: 400;
-    letter-spacing: -0.04em;
-    pointer-events: none;
-    user-select: none;
-    opacity: 0.32;
-    z-index: 2;
-    mix-blend-mode: multiply;
-  }
-  .atelier-section-body {
-    position: relative;
-    z-index: 1;
-  }
-  .atelier-section-body-pad {
-    padding: 16px 24px;
+  .rail-item { transition: background-color 160ms var(--ease), color 160ms var(--ease); }
+  .rail-item:not([aria-current="page"]):hover { background: var(--hover); color: var(--ink-2); }
+
+  /* Generic interactive row: records, tree, facets, files, jobs. */
+  .fm-row { transition: background-color 160ms var(--ease); }
+  .fm-row:not([data-selected="true"]):hover { background: var(--hover); }
+
+  /* Ghost controls raise border and fill together on hover. With no
+     shadow anywhere in the system, a border-only change is too quiet
+     to register. */
+  .btn { transition: background-color 160ms var(--ease), border-color 160ms var(--ease), color 160ms var(--ease); }
+  .btn:not(:disabled):hover { border-color: var(--rule-hover); background: var(--hover); color: var(--ink); }
+  .btn:not(:disabled):active { background: var(--seg-bg); }
+  .btn-primary:not(:disabled):hover { background: var(--signal-2); border-color: var(--signal-2); color: var(--signal-ink); }
+  .btn-danger:not(:disabled):hover { border-color: var(--danger); color: var(--danger); background: var(--danger-wash); }
+
+  .seg-item { transition: background-color 160ms var(--ease), color 160ms var(--ease); }
+  .seg-item:not([aria-selected="true"]):hover { color: var(--ink-3); background: var(--hover); }
+
+  /* Indeterminate fill, used when no percentage is parseable. A flat
+     two-tone hatch that scrolls; no gradient, no sheen. */
+  .fm-stripe {
+    background-image: repeating-linear-gradient(
+      45deg,
+      var(--signal),
+      var(--signal) 6px,
+      var(--signal-deep) 6px,
+      var(--signal-deep) 12px
+    );
+    background-size: 24px 24px;
+    animation: salma-stripe 0.9s linear infinite;
   }
 
-  /* Fill mode - grow into the parent flex column. Body is a flex column
-     itself; the caller decides whether to scroll inside (e.g. wrap a list
-     in `flex:1 min-h:0 overflow:auto` or set up a custom scroll container
-     for virtualization). */
-  .atelier-section-fill {
-    display: flex;
-    flex-direction: column;
-    flex: 1 1 0;
-    min-height: 0;
-  }
-  .atelier-section-fill > .atelier-section-body {
-    flex: 1 1 0;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* Page-level flex column: fits between TopBar and the bottom padding of
-     the content shell (~ 28 + 50 + 48 = 126px), with no own scroll. */
-  .page-fill {
-    height: calc(100vh - 126px);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  /* Bottom toolbar inside a section (e.g. InstallPage Plugin/FOMODs row) */
-  .atelier-section-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 22px;
-    padding: 8px 22px;
-    border-top: 1px solid var(--rule);
-    background: var(--paper-2);
-    flex-wrap: wrap;
-  }
+  .blink    { animation: sigBlink 1.6s steps(1, end) infinite; }
+  .caret    { animation: caretBlink 1.05s steps(1) infinite; }
+  .rise     { animation: rise 0.28s var(--ease) both; }
+  .seg-live { animation: segLive 1.4s var(--ease) infinite; }
 
   /* ============================================================
-     COLLAPSIBLE QUEUE WRAPPER - animates body height via grid-row
-     ============================================================ */
-
-  .queue-collapse-wrap {
-    display: grid;
-    grid-template-rows: 1fr;
-    transition: grid-template-rows 280ms cubic-bezier(0.21, 0.9, 0.3, 1);
-  }
-  .queue-collapse-wrap[data-collapsed="true"] {
-    grid-template-rows: 0fr;
-  }
-  .queue-collapse-wrap > .queue-collapse-inner {
-    overflow: hidden;
-    min-height: 0;
-  }
-
-  /* Inner scroller inside the queue body. Caps height so the queue can never
-     dominate the page; cap shrinks on shorter viewports so the page itself
-     never scrolls (the inner scroller does instead). */
-  .queue-scroll {
-    max-height: 320px;
-    overflow-y: auto;
-  }
-  @media (max-height: 760px) {
-    .queue-scroll { max-height: 220px; }
-  }
-  @media (max-height: 660px) {
-    .queue-scroll { max-height: 160px; }
-  }
-
-  /* ============================================================
-     QUEUE LEDGER - editorial single-line summary shown in Section 02's
-     header meta slot when the queue body is collapsed. Filename in
-     EB Garamond italic, percent paired with it, teal vertical rule
-     before the expand link, and a thin teal progress sweep along the
-     bottom edge giving live feedback even when collapsed.
-     ============================================================ */
-
-  .queue-ledger {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    flex: 1;
-    min-width: 0;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    padding: 6px 10px 8px;
-    margin: -6px -10px -8px;
-    border-radius: 3px;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    transition: background-color 150ms ease;
-  }
-  .queue-ledger:hover {
-    background: var(--card-2);
-  }
-  .queue-ledger:active {
-    background: var(--card);
-    transform: scale(0.997);
-  }
-  .queue-ledger-left {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    min-width: 0;
-    max-width: 360px;
-  }
-  .queue-ledger-filename {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    min-width: 0;
-    letter-spacing: -0.005em;
-    line-height: 1.2;
-  }
-  .queue-ledger-dots {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-  }
-  .queue-ledger-right {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-shrink: 0;
-  }
-  .queue-ledger-rule {
-    display: inline-block;
-    width: 1px;
-    height: 12px;
-    background: var(--rule-strong);
-    opacity: 0.55;
-  }
-  .queue-ledger-progress {
-    position: absolute;
-    left: 10px;
-    bottom: 4px;
-    height: 1.5px;
-    background: var(--accent);
-    transition: width 320ms cubic-bezier(0.21, 0.9, 0.3, 1);
-    pointer-events: none;
-    border-radius: 1px;
-  }
-  .queue-ledger[data-active="true"] .queue-ledger-progress {
-    box-shadow: 0 0 8px rgba(31, 110, 122, 0.25);
-  }
-
-  /* ============================================================
-     PANEL / CARD primitives
-     ============================================================ */
-
-  /* Legacy alias - many components still reference panel-modern */
-  .panel-modern {
-    position: relative;
-    background: var(--card);
-    border: 1px solid var(--rule);
-  }
-
-  .card-lift {
-    transition: transform 220ms cubic-bezier(0.21, 0.9, 0.3, 1),
-                box-shadow 220ms ease,
-                border-color 220ms ease;
-  }
-  .card-lift:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 1px 0 var(--rule-soft), 0 10px 20px -12px rgba(24, 28, 37, 0.16);
-    border-color: var(--rule-strong);
-  }
-
-  /* Mesh-hero (kept as quiet warning-banner background) */
-  .mesh-hero {
-    position: relative;
-    background: var(--paper-2);
-    border: 1px solid var(--rule);
-    overflow: hidden;
-    isolation: isolate;
-  }
-
-  .empty-state-card {
-    border-radius: var(--radius-md);
-    border: 1px dashed rgba(125, 133, 147, 0.55);
-    background: var(--card-2);
-    padding: 1.25rem;
-    display: flex;
-    align-items: center;
-    gap: 0.875rem;
-  }
-
-  /* ============================================================
-     UPLOAD DROPZONE - the "Click or drag to install" file-upload
-     surface. Three states resolve through nested selectors:
-       default -> hover -> dragging
-     The inner `.upload-dropzone-card` reuses `.empty-state-card`
-     for its dashed border and base layout, then layers state-driven
-     bg / border-color shifts. The icon-ring follows along.
-     ============================================================ */
-
-  .upload-dropzone {
-    padding: 32px 28px;
-    cursor: pointer;
-    background: transparent;
-  }
-  .upload-dropzone[data-disabled="true"] {
-    cursor: not-allowed;
-    opacity: 0.7;
-  }
-  /* Plugin-purged blocked state. The lightest red of the three
-     (vs. dots and buttons) since the dropzone is a large surface -
-     a faint danger wash reads as "blocked" without overwhelming
-     the editorial paper aesthetic. data-purged wins over
-     data-disabled by source order. */
-  .upload-dropzone[data-purged="true"] {
-    cursor: not-allowed;
-    opacity: 1;
-  }
-  .upload-dropzone[data-purged="true"] .upload-dropzone-card {
-    border-color: var(--danger);
-    background: color-mix(in oklab, var(--danger-soft) 35%, var(--card));
-  }
-  .upload-dropzone[data-purged="true"] .upload-dropzone-icon-ring {
-    border-color: var(--danger);
-    background: var(--danger-soft);
-  }
-  .upload-dropzone[data-purged="true"] .fa-duotone {
-    --fa-primary-color: var(--danger);
-    --fa-secondary-color: var(--danger);
-    --fa-secondary-opacity: 0.7;
-  }
-
-  .upload-dropzone-card {
-    transition:
-      background-color 220ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      border-color 220ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      box-shadow 220ms cubic-bezier(0.21, 0.9, 0.3, 1);
-  }
-
-  /* Hover (mouse over, not dragging): card takes on a cool ink-blue
-     accent. Subtle blue-tinted fill, ink-blue dashed border, blue-cast
-     shadow halo. Navy counterpoint to the teal drag-armed state. */
-  .upload-dropzone:not([data-disabled="true"]):not([data-dragging="true"]):hover
-    .upload-dropzone-card {
-    background: color-mix(in oklab, var(--ink-blue) 6%, var(--card));
-    border-color: var(--ink-blue);
-    box-shadow: 0 1px 0 var(--rule-soft), 0 6px 14px -10px rgba(42, 58, 90, 0.28);
-  }
-
-  /* Dragging: the area inside the dashed border fills with the soft
-     accent tint, the border becomes teal, the whole card pulses
-     gently. Reads as "drop target armed". */
-  .upload-dropzone[data-dragging="true"] .upload-dropzone-card {
-    background: var(--accent-soft);
-    border-color: var(--accent);
-    border-style: dashed;
-    box-shadow: 0 0 0 4px rgba(31, 110, 122, 0.10);
-    animation: upload-dropzone-pulse 1.4s ease-in-out infinite;
-  }
-
-  @keyframes upload-dropzone-pulse {
-    0%, 100% { box-shadow: 0 0 0 4px rgba(31, 110, 122, 0.10); }
-    50%      { box-shadow: 0 0 0 6px rgba(31, 110, 122, 0.18); }
-  }
-
-  /* Icon ring inside the dropzone. Tracks hover + dragging states. */
-  .upload-dropzone-icon-ring {
-    width: 38px;
-    height: 38px;
-    border: 1px solid var(--rule-strong);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--paper-2);
-    flex-shrink: 0;
-    transition:
-      transform 300ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      background-color 220ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      border-color 220ms cubic-bezier(0.21, 0.9, 0.3, 1);
-  }
-  .upload-dropzone:not([data-disabled="true"]):not([data-dragging="true"]):hover
-    .upload-dropzone-icon-ring {
-    background: color-mix(in oklab, var(--ink-blue) 8%, var(--paper-2));
-    border-color: var(--ink-blue);
-  }
-  .upload-dropzone[data-dragging="true"] .upload-dropzone-icon-ring {
-    background: var(--paper);
-    border-color: var(--accent);
-  }
-
-  /* ============================================================
-     BUTTONS - tool-btn (default & primary), action-btn (legacy)
-     ============================================================ */
-
-  .tool-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 7px 12px 7px 10px;
-    border: 1px solid var(--rule);
-    border-radius: var(--radius-sm);
-    background: var(--card-2);
-    color: var(--ink-2);
-    font-family: var(--font-body);
-    font-size: 13px;
-    line-height: 1.2;
-    letter-spacing: -0.005em;
-    transition:
-      border-color 180ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      background-color 180ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      color 180ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      box-shadow 180ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      transform 80ms cubic-bezier(0.21, 0.9, 0.3, 1);
-    white-space: nowrap;
-  }
-  .tool-btn:hover {
-    border-color: var(--ink-4);
-    background: var(--card);
-    box-shadow: 0 1px 0 var(--rule-soft), 0 6px 12px -8px rgba(24, 28, 37, 0.12);
-  }
-  .tool-btn:active {
-    transform: translateY(1px);
-    box-shadow: none;
-  }
-  .tool-btn:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-    background: var(--paper-2);
-  }
-  .tool-btn:disabled:hover {
-    border-color: var(--rule);
-    background: var(--paper-2);
-  }
-  /* Plugin-purged blocked state. Still :disabled (cursor, prevented
-     click), but visually communicates "blocked because the plugin was
-     purged" rather than the generic faded-grey disabled look. The
-     opacity:1 deliberately overrides the .tool-btn:disabled fade so
-     the danger-soft fill carries the signal at full saturation.
-     Selectors include :disabled to bump specificity above the
-     existing .tool-btn:disabled / .tool-btn-primary:disabled rules
-     (which otherwise win on source order and re-apply the teal
-     accent fill on the Run tests button). */
-  .tool-btn[data-purged="true"]:disabled {
-    border-color: var(--danger);
-    background: var(--danger-soft);
-    color: var(--danger);
-    opacity: 1;
-  }
-  .tool-btn[data-purged="true"]:disabled:hover {
-    border-color: var(--danger);
-    background: var(--danger-soft);
-    box-shadow: none;
-    transform: none;
-  }
-  .tool-btn[data-purged="true"]:disabled .fa-duotone {
-    --fa-primary-color: var(--danger);
-    --fa-secondary-color: var(--danger);
-    --fa-secondary-opacity: 0.7;
-  }
-  .tool-btn-primary[data-purged="true"]:disabled {
-    background: var(--danger-soft);
-    border-color: var(--danger);
-    color: var(--danger);
-    opacity: 1;
-  }
-  .tool-btn-primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--paper);
-  }
-  .tool-btn-primary:hover {
-    background: var(--accent-ink);
-    border-color: var(--accent-ink);
-    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.06), 0 8px 18px -10px rgba(31, 110, 122, 0.42);
-  }
-  .tool-btn-primary:disabled {
-    background: var(--accent);
-    border-color: var(--accent);
-    opacity: 0.5;
-  }
-
-  /* Hard primary (ink button used for "Begin install") */
-  .tool-btn-ink {
-    background: var(--ink);
-    border-color: var(--ink);
-    color: var(--paper);
-  }
-  .tool-btn-ink:hover {
-    background: var(--ink-2);
-    border-color: var(--ink-2);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px -4px rgba(24, 28, 37, 0.30);
-  }
-
-  /* Legacy action-btn base - kept so any references still resolve */
-  .action-btn {
-    transition: border-color 180ms ease, background-color 180ms ease;
-  }
-  .action-btn:disabled { opacity: 0.55; }
-
-  /* ============================================================
-     STATUS DOT - small circle with optional pulse glow
-     ============================================================ */
-
-  .dot-status {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--ink-5);
-    flex-shrink: 0;
-  }
-  .dot-status-on {
-    background: var(--moss);
-    box-shadow: 0 0 0 3px rgba(61, 122, 61, 0.12);
-  }
-  .dot-status-off {
-    background: var(--ink-5);
-  }
-  .dot-status-warn {
-    background: var(--ochre);
-    box-shadow: 0 0 0 3px rgba(138, 112, 50, 0.12);
-  }
-  .dot-status-error {
-    background: var(--danger);
-    box-shadow: 0 0 0 3px rgba(138, 42, 31, 0.14);
-  }
-  .dot-status-pulse {
-    animation: pulse 2s ease-in-out infinite;
-  }
-
-  /* ============================================================
-     STAT ROW - sidebar mono "label    value *" rows
-     ============================================================ */
-
-  .stat-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 3px 0;
-    font-size: 12px;
-    font-family: var(--font-mono);
-    color: var(--ink-3);
-    letter-spacing: 0.04em;
-  }
-  .stat-row-value {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--ink-2);
-  }
-
-  /* ============================================================
-     NAV RAIL - sidebar nav row
-     ============================================================ */
-
-  .nav-rail-item {
-    display: grid;
-    grid-template-columns: 22px 18px 1fr auto;
-    align-items: center;
-    gap: 10px;
-    padding: 9px 12px;
-    border-radius: var(--radius-md);
-    border: 1px solid transparent;
-    background: transparent;
-    text-align: left;
-    position: relative;
-    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
-    color: var(--ink-2);
-    text-decoration: none;
-  }
-  .nav-rail-item:hover {
-    background: var(--card-2);
-  }
-  .nav-rail-item:hover .nav-rail-num,
-  .nav-rail-item:hover .nav-rail-label {
-    color: var(--ink-2);
-    transition: color 180ms cubic-bezier(0.21, 0.9, 0.3, 1);
-  }
-  .nav-rail-item-active {
-    background: var(--card);
-    border-color: var(--rule);
-  }
-  .nav-rail-item-active::before {
-    content: '';
-    position: absolute;
-    left: -20px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 14px;
-    height: 1px;
-    background: var(--accent);
-  }
-  .nav-rail-num {
-    font-family: var(--font-mono);
-    font-style: italic;
-    font-size: 12px;
-    letter-spacing: 0.1em;
-    color: var(--ink-4);
-  }
-  .nav-rail-item-active .nav-rail-num {
-    color: var(--accent);
-  }
-  .nav-rail-item-active .nav-rail-label {
-    color: var(--ink);
-    font-weight: 500;
-  }
-  .nav-rail-icon {
-    color: var(--ink-3);
-    text-align: center;
-    width: 18px;
-  }
-  .nav-rail-item-active .nav-rail-icon {
-    color: var(--ink);
-  }
-  .nav-rail-label {
-    font-size: 14.5px;
-    color: var(--ink-2);
-    letter-spacing: -0.005em;
-  }
-  .nav-rail-count {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--ink-4);
-    padding: 2px 6px;
-    background: var(--paper-3);
-    border-radius: 999px;
-    border: 1px solid var(--rule-soft);
-  }
-
-  /* ============================================================
-     READY PIP - small green chip with pulse
-     ============================================================ */
-
-  .ready-pip {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 12px 7px 10px;
-    background: var(--card);
-    border: 1px solid var(--rule);
-    border-radius: 999px;
-  }
-
-  /* ============================================================
-     PROGRESS BAR - 2px hairline track with optional sweep
-     ============================================================ */
-
-  .atelier-progress {
-    position: relative;
-    height: 2px;
-    background: var(--rule-soft);
-    overflow: hidden;
-    border-radius: 1px;
-    width: 100%;
-  }
-  .atelier-progress-fill {
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.4s cubic-bezier(0.21, 0.9, 0.3, 1);
-    position: relative;
-  }
-  .atelier-progress-sweep::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
-    animation: sweep 1.5s linear infinite;
-  }
-
-  /* ============================================================
-     FORMAT CHIP - base only. Color variants are inline now.
-     ============================================================ */
-
-  .format-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 3px 7px;
-    border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    font-weight: 400;
-    letter-spacing: 0.02em;
-    border: 1px solid var(--rule-soft);
-    background: var(--paper-3);
-    color: var(--ink-2);
-    line-height: 1.2;
-  }
-
-  /* ============================================================
-     SKELETON - paper-toned shimmer
+     Skeletons
      ============================================================ */
 
   .skeleton-line {
-    border-radius: 999px;
+    border-radius: var(--radius-chip);
     background: linear-gradient(90deg,
-      rgba(125, 133, 147, 0.18),
-      rgba(218, 222, 230, 0.32),
-      rgba(125, 133, 147, 0.18));
+      color-mix(in srgb, var(--ink) 9%, transparent),
+      color-mix(in srgb, var(--ink) 17%, transparent),
+      color-mix(in srgb, var(--ink) 9%, transparent));
     background-size: 200% 100%;
     animation: skeleton-shimmer 1.4s linear infinite;
   }
 
   /* ============================================================
-     MOTION HELPERS
+     Log stream
      ============================================================ */
 
-  .reveal {
-    opacity: 0;
-    animation: atelier-reveal 540ms cubic-bezier(0.21, 0.9, 0.3, 1) forwards;
-  }
-  .reveal-delay-1 { animation-delay: 60ms; }
-  .reveal-delay-2 { animation-delay: 140ms; }
-  .reveal-delay-3 { animation-delay: 220ms; }
-  .reveal-delay-4 { animation-delay: 300ms; }
-  .reveal-delay-5 { animation-delay: 380ms; }
-  .reveal-delay-6 { animation-delay: 460ms; }
-  .reveal-delay-7 { animation-delay: 540ms; }
-
-  .breathe { animation: breathe 3.6s ease-in-out infinite; }
-  .float-gentle { animation: none; } /* legacy no-op */
-
-  .ring-pulse-once {
-    transform-origin: center;
-    animation: ring-pulse-once 650ms ease-out;
-  }
-  .heart-beat-once {
-    transform-origin: center;
-    animation: heart-beat-once 620ms ease-out;
-  }
-
-  /* ============================================================
-     CONTENT SHELL - main wrapper helper
-     ============================================================ */
-
-  .content-shell {
-    position: relative;
-    isolation: isolate;
-  }
-
-  .scroll-pane {
-    padding: 0.625rem 0.375rem;
-  }
-
-  /* ============================================================
-     SERIF LINK WITH ANIMATED ARROW - editorial pattern used for
-     "expand", "collapse", "tail log", "browse", and back links.
-     Wraps the arrow glyph in a `.arrow` span so it can translate
-     on hover without dragging the label letterforms with it.
-     Use `.serif-link-arrow-back` for left-pointing variants so
-     the arrow slides leftward on hover.
-     ============================================================ */
-  .serif-link-arrow {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 0.35em;
-    color: var(--ink-blue);
-    text-decoration: none;
-    transition: color 180ms cubic-bezier(0.21, 0.9, 0.3, 1);
-  }
-  .serif-link-arrow > .arrow {
-    display: inline-block;
-    transition: transform 220ms cubic-bezier(0.21, 0.9, 0.3, 1);
-  }
-  .serif-link-arrow:hover {
-    color: var(--accent);
-  }
-  .serif-link-arrow:hover > .arrow {
-    transform: translateX(3px);
-  }
-  .serif-link-arrow.serif-link-arrow-back:hover > .arrow {
-    transform: translateX(-3px);
-  }
-
-  /* ============================================================
-     FOCUS-VISIBLE - keyboard-only ring keyed off the accent.
-     Browser default rings are removed by Tailwind's reset; this
-     restores a clean, brand-coherent focus state.
-     ============================================================ */
-  :focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-    border-radius: 3px;
-  }
-  .tool-btn:focus-visible,
-  .queue-ledger:focus-visible,
-  .nav-rail-item:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  /* ============================================================
-     SYNTAX HIGHLIGHTING - JSON & log lines
-     Colors resolve through theme tokens so dark/light auto-flip.
-     ============================================================ */
-
-  /* JSON */
-  .json-key     { color: var(--accent); }
-  .json-string  { color: var(--moss); }
-  .json-number  { color: var(--ink-blue); }
-  .json-boolean { color: var(--ochre); }
-  .json-null    { color: var(--ink-4); font-style: italic; }
-  .json-bracket { color: var(--ink-3); }
-
-  /* Log lines */
-  .log-timestamp     { color: var(--ink-4); }
-  .log-tag           { color: var(--ink-blue); }
-  .log-level-info    { color: var(--ink-blue); font-weight: 500; }
-  .log-level-debug   { color: var(--ink-3); }
-  .log-level-warning { color: var(--ochre); font-weight: 600; }
-  .log-level-error   { color: var(--danger); font-weight: 600; }
-  .log-path          { color: var(--ochre); font-weight: 500; }
-  .log-protocol      { color: var(--ink-blue); font-weight: 500; }
-  .log-url           { color: var(--ink-blue); text-decoration: underline; text-decoration-color: rgba(42, 58, 90, 0.32); text-underline-offset: 2px; }
-  .log-route         { color: var(--ink-2); font-weight: 500; }
-  .log-string        { color: var(--moss); }
-  .log-duration      { color: var(--ink-blue); font-weight: 500; }
-  .log-storage       { color: var(--ochre); font-weight: 500; }
-  .log-number        { color: var(--ink-2); }
-  .log-operator      { color: var(--ink-3); }
-  .log-method        { color: var(--ink-blue); font-weight: 500; }
-  .log-status-ok     { color: var(--moss); font-weight: 500; }
-  .log-status-err    { color: var(--danger); font-weight: 600; }
-  .log-ip            { color: var(--ink-4); }
-  .log-key           { color: var(--moss); }
-  .log-guid          { color: var(--ink-4); font-style: italic; }
-
-  .log-line-number {
-    display: inline-block;
-    width: 4ch;
-    text-align: right;
-    color: var(--ink-5);
-    user-select: none;
-    flex-shrink: 0;
-    margin-right: 0.75em;
-  }
-
-  .log-progress-line {
-    position: relative;
-    background: rgba(31, 110, 122, 0.04);
-  }
-  .log-collapsed-count {
-    display: inline-block;
-    margin-right: 0.75em;
-    font-size: 0.78rem;
-    color: var(--ink-4);
-    font-style: italic;
-  }
-  .log-progress-footer {
-    flex-shrink: 0;
-    margin: 0.375rem;
-    padding: 0.375rem 0.75rem;
-    border-radius: var(--radius-md);
-    background: var(--card-2);
-    border: 1px solid var(--rule-soft);
-  }
-  .log-progress-bar-line {
+  .log-viewer {
     font-family: var(--font-mono);
-    font-size: 0.8125rem;
+    font-size: var(--fs-mono);
     line-height: 1.7;
     letter-spacing: 0;
     font-variant-ligatures: none;
+  }
+
+  .log-stream-row { transition: background-color 160ms var(--ease); }
+  .log-stream-row:hover { background: var(--hover); }
+
+  /* Severity is readable down the left edge while scanning: a flat
+     2px inner bar plus a flat wash across the row. */
+  .log-stream-row[data-level="WARN"] {
+    box-shadow: inset 2px 0 0 var(--log-warn);
+    background: var(--warn-wash);
+  }
+  .log-stream-row[data-level="ERROR"] {
+    box-shadow: inset 2px 0 0 var(--log-error);
+    background: var(--err-wash);
+  }
+  .log-stream-row[data-level="WARN"]:hover,
+  .log-stream-row[data-level="ERROR"]:hover { filter: brightness(1.06); }
+
+  /* ============================================================
+     Virtual output tree: reproduction faults
+     ============================================================ */
+
+  /* A faulted row is highlighted across its whole width, like a marker drawn
+     over it. The question a reader brings to this tree is "which files went
+     wrong", and a 2px left rule answers that only for someone who already knows
+     to look at the margin. The fill carries the answer; the edge stays because
+     it still helps a scan down the margin.
+
+     These belong here, not inline, so :hover still composes. An inline
+     background outranks the .fm-row hover rule and freezes the row. */
+  .fm-row[data-fault] { transition: background-color 160ms var(--ease); }
+
+  .fm-row[data-fault="missing"] {
+    box-shadow: inset 2px 0 0 var(--danger);
+    background: var(--fault-bg-danger);
+  }
+  .fm-row[data-fault="hash_mismatch"],
+  .fm-row[data-fault="size_mismatch"],
+  .fm-row[data-fault="extra"] {
+    box-shadow: inset 2px 0 0 var(--brass);
+    background: var(--fault-bg-warn);
+  }
+  .fm-row[data-fault]:hover { filter: brightness(1.04); }
+
+  /* Column widths are cut to what the content needs: a level label is five
+     characters at --fs-micro, a subsystem tag is one short word. Slack in these
+     two columns comes straight out of the message column. */
+  .log-stream-time      { flex-shrink: 0; color: var(--ink-faint); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .log-stream-level     { width: 46px; flex-shrink: 0; text-align: center; }
+  .log-stream-subsystem { width: 68px; flex-shrink: 0; color: var(--ink-5); }
+
+  /* Docked under a scrolling stream, so it keeps an opaque fill - lines
+     have to disappear behind it rather than show through. Same colour
+     as the plane, so there is no visible seam and no rule. */
+  .log-progress-footer {
+    flex-shrink: 0;
+    padding: 9px 18px;
+    background: var(--void);
+  }
+  .log-progress-bar-line {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    line-height: 1.8;
+    letter-spacing: 0;
+    font-variant-ligatures: none;
     white-space: pre;
-    color: var(--ink);
-  }
-}
-
-/* ================================================================
-   DARK THEME - "ash"
-   Single override block; flips paper/ink/card/rule. Teal accent
-   brightens; --danger (oxblood) stays preserved for error states.
-   Dark mode is a tonal inversion, not a separate aesthetic.
-   ================================================================ */
-
-[data-theme="dark"] {
-  /* Field-manual, dark: ink and paper swap roles. Warm paper becomes a
-     warm near-black; ink becomes a warm off-white. Ochre and the brick
-     red keep their warning/error semantics, brightened to hold contrast
-     against the dark surfaces. */
-  --paper:        #1a1917;
-  --paper-2:      #211f1c;
-  --paper-3:      #2a2824;
-  --sheet:        #141311;
-  --card:         #1f1e1b;
-  --card-2:       #232220;
-  --hover:        #26241f;
-
-  --ink:          #f2f0ec;
-  --ink-2:        #c9c7c2;
-  --ink-3:        #a7a5a0;
-  --ink-4:        #87857f;
-  --ink-5:        #6b6964;
-  --ink-6:        #565450;
-  --ink-faint:    #48463f;
-
-  --rule:         #34322e;
-  --rule-soft:    #2a2825;
-  --rule-faint:   #232220;
-  --rule-strong:  #4a4843;
-
-  --ochre:        #c79a4e;
-  --danger:       #d6604e;
-  --moss:         #8a9a6a;
-  --ink-blue:     var(--ink-2);
-
-  --log-info:     #67b7e8;
-  --log-debug:    #b39be2;
-  --log-warn:     #e1aa4f;
-  --log-error:    #f07868;
-  --format-7z:    #b39be2;
-  --format-zip:   #67b7e8;
-  --format-rar:   #e18a62;
-  --format-fomod: #a9c979;
-  --format-json:  #e1aa4f;
-  --format-tar:   #aeb7c5;
-
-  --accent:       var(--ink);
-  --accent-2:     var(--ink-2);
-  --accent-soft:  var(--card-2);
-  --accent-ink:   var(--ink);
-  --teal:         var(--ink-3);
-  --teal-2:       var(--ink-3);
-  --teal-soft:    var(--card-2);
-  --teal-ink:     var(--ink);
-
-  --danger-2:     #e8917f;
-  --danger-soft:  #2e1b17;
-  --danger-ink:   #e8917f;
-
-  --meter-empty:  #34322e;
-
-  /* Confidence tiers, dark: EXACT flips to a filled off-white chip,
-     HIGH an off-white outline; PARTIAL/LOW keep hue with dark fills. */
-  --tier-exact:      #f2f0ec;
-  --tier-exact-fg:   #141311;
-  --tier-exact-bg:   #f2f0ec;
-  --tier-exact-bd:   #f2f0ec;
-  --tier-high:       #f2f0ec;
-  --tier-high-fg:    #f2f0ec;
-  --tier-high-bg:    var(--sheet);
-  --tier-high-bd:    #f2f0ec;
-  --tier-partial:    #c79a4e;
-  --tier-partial-fg: #d8b070;
-  --tier-partial-bg: #2e2718;
-  --tier-partial-bd: #4a3d20;
-  --tier-low:        #d6604e;
-  --tier-low-fg:     #e8917f;
-  --tier-low-bg:     #2e1b17;
-  --tier-low-bd:     #4a2820;
-
-  /* Re-aliases to keep legacy color tokens in sync */
-  --color-primary:                var(--accent);
-  --color-primary-light:          var(--accent-2);
-  --color-primary-dark:           var(--accent-ink);
-  --color-on-surface:             var(--ink);
-  --color-on-surface-variant:     var(--ink-3);
-  --color-outline:                var(--rule-strong);
-  --color-outline-variant:        var(--rule);
-  --color-surface:                var(--paper);
-  --color-surface-ink:            var(--paper-2);
-  --color-surface-dim:            var(--paper-2);
-  --color-surface-container:      var(--card);
-  --color-surface-container-high: var(--card-2);
-  --color-surface-container-highest: var(--paper-3);
-  --color-success:                var(--moss);
-  --color-warning:                var(--ochre);
-  --color-error:                  var(--danger);
-  --color-error-light:            var(--danger-2);
-  --color-info:                   var(--teal);
-  --color-secondary:              var(--ink-blue);
-  --color-tertiary:               var(--ink-2);
-  --color-copper:                 var(--accent);
-
-  /* Glow tokens re-tuned for near-black surfaces. The light-theme
-     defaults sit at 0.10-0.20 alpha which is invisible against --card
-     (#10131a). Matching hues, brighter alphas. */
-  --glow-success:        rgba(106, 154, 106, 0.28);
-  --glow-warning:        rgba(184, 148, 86,  0.28);
-  --glow-error:          rgba(196, 86,  67,  0.32);
-  --glow-info:           rgba( 43, 142, 156, 0.30);
-  --glow-primary-soft:   rgba( 43, 142, 156, 0.22);
-  --glow-secondary-soft: rgba(106, 130, 168, 0.18);
-  --glow-tertiary-soft:  rgba(200, 205, 214, 0.10);
-  --glow-copper-soft:    rgba( 43, 142, 156, 0.24);
-
-  --readiness-ring-track: rgba(138, 147, 163, 0.18);
-
-  --shadow-elevation-1: 0 1px 3px 0 rgba(0, 0, 0, 0.45);
-  --shadow-elevation-2: 0 4px 16px -2px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.04);
-  --shadow-elevation-3: 0 12px 32px -4px rgba(0, 0, 0, 0.58), 0 0 0 1px rgba(255, 255, 255, 0.05);
-}
-
-/* Icons: hold the primary stroke one tier brighter than the light-mode
-   default. In dark mode --ink-3 (#8a93a3) clears 3:1 against near-black
-   paper but feels muddy; --ink-2 (#c8cdd6) gives the silhouette the
-   substance the inky surface wants. Active nav lifts to --ink for
-   emphasis. */
-[data-theme="dark"] .fa-duotone {
-  --fa-primary-color: var(--ink-2);
-}
-[data-theme="dark"] .nav-rail-item-active .fa-duotone {
-  --fa-primary-color: var(--ink);
-}
-
-[data-theme="dark"] body::before {
-  background-image:
-    radial-gradient(circle at 20% 30%, rgba(200, 205, 214, 0.04) 0, transparent 50%),
-    radial-gradient(circle at 80% 70%, rgba(43, 142, 156, 0.03) 0, transparent 60%),
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.93 0 0 0 0 0.94 0 0 0 0 0.96 0 0 0 0.04 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
-}
-
-[data-theme="dark"] .skeleton-line {
-  background: linear-gradient(90deg,
-    rgba(155, 165, 180, 0.10),
-    rgba(200, 210, 224, 0.22),
-    rgba(155, 165, 180, 0.10));
-  background-size: 200% 100%;
-}
-
-[data-theme="dark"] ::-webkit-scrollbar-thumb {
-  background: var(--rule-strong);
-  border-color: var(--paper);
-}
-[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
-  background: var(--ink-4);
-}
-
-/* ----------------------------------------------------------------
-   Dark-mode shadow overrides. Most :hover lifts and status-dot halos
-   in the base theme use `rgba(24, 28, 37, ...)` (light-theme ink) or
-   light-tuned status hues at ~0.12 alpha. Those drops render as
-   nothing against --card (#10131a). Restate them with deeper black
-   drops or rim-light hairlines so cards still lift, status dots
-   still halo, and the primary/ink button hover halos read.
-   ---------------------------------------------------------------- */
-
-[data-theme="dark"] .card-lift:hover {
-  box-shadow: 0 1px 0 var(--rule), 0 14px 32px -12px rgba(0, 0, 0, 0.65);
-  border-color: var(--rule-strong);
-}
-
-[data-theme="dark"] .upload-dropzone:not([data-disabled="true"]):not([data-dragging="true"]):hover .upload-dropzone-card {
-  box-shadow:
-    0 1px 0 var(--rule),
-    0 8px 18px -10px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(106, 130, 168, 0.18);
-}
-
-[data-theme="dark"] .tool-btn:hover {
-  box-shadow: 0 1px 0 var(--rule), 0 6px 14px -8px rgba(0, 0, 0, 0.55);
-}
-
-[data-theme="dark"] .tool-btn-primary:hover {
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.06),
-    0 8px 22px -10px rgba(76, 176, 189, 0.55);
-}
-
-[data-theme="dark"] .tool-btn-ink:hover {
-  box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.65);
-}
-
-[data-theme="dark"] .dot-status-on    { box-shadow: 0 0 0 3px rgba(106, 154, 106, 0.22); }
-[data-theme="dark"] .dot-status-warn  { box-shadow: 0 0 0 3px rgba(184, 148, 86,  0.22); }
-[data-theme="dark"] .dot-status-error { box-shadow: 0 0 0 3px rgba(196, 86,  67,  0.28); }
-
-[data-theme="dark"] .queue-ledger[data-active="true"] .queue-ledger-progress {
-  box-shadow: 0 0 10px rgba(76, 176, 189, 0.40);
-}
-
-/* ================================================================
-   FIELD-MANUAL (v5) component classes. Hover/active behaviours that
-   need real CSS (inline styles can't express :hover). All colors are
-   tokens, so dark/light flip automatically. Selection backgrounds are
-   set inline on the element (winning over these via specificity), so
-   these rules only paint the resting + hover states.
-   ================================================================ */
-@layer base {
-  /* Left module rail row. Active background is set inline; this paints
-     the inactive hover so the inline `background: undefined` lets it show. */
-  .fm-rail-item {
-    transition: background-color 140ms ease, color 140ms ease;
-  }
-  .fm-rail-item:not([data-active="true"]):hover {
-    background: var(--paper-3);
-    color: var(--ink);
+    color: var(--ink-3);
   }
 
-  /* Generic interactive row (records, tree, facet, file, conflict). */
-  .fm-row {
-    transition: background-color 120ms ease;
-  }
-  .fm-row:not([data-selected="true"]):hover {
-    background: var(--hover);
-  }
+  /* ============================================================
+     Syntax highlighting: JSON and log lines
+     ============================================================ */
 
-  /* Full-bleed dotted dropzone surface. */
-  .fm-dropzone {
-    background-color: color-mix(in srgb, var(--sheet) 92%, var(--paper));
-    background-image: radial-gradient(var(--rule-soft) 1px, transparent 1px);
-    background-size: 22px 22px;
-    transition: background-color 160ms ease;
-  }
-  .fm-dropzone:not([data-disabled="true"]):hover {
-    background-color: var(--card-2);
-  }
+  .json-key     { color: var(--signal-2); }
+  .json-string  { color: var(--moss); }
+  .json-number  { color: var(--log-info); }
+  .json-boolean { color: var(--brass); }
+  .json-null    { color: var(--ink-5); font-style: italic; }
+  .json-bracket { color: var(--ink-4); }
 
-  /* Striped, animated progress fill for the install console footer. */
-  .fm-stripe {
-    background-image: repeating-linear-gradient(
-      45deg,
-      var(--ink),
-      var(--ink) 7px,
-      var(--ink-3) 7px,
-      var(--ink-3) 14px
-    );
-    background-size: 30px 30px;
-    animation: salma-stripe 1s linear infinite;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .fm-stripe { animation: none; }
-  }
-}
-
-/* ================================================================
-   PREMIUM OPERATIONAL SURFACES
-   Higher-contrast semantics for the log stream and archive intake.
-   ================================================================ */
-
-@layer base {
-  /* Log lines carry meaning through text color only: no per-level chips,
-     left-accent borders, or background tints. A faint row separator and a
-     neutral hover remain as structural/interaction chrome. */
-  .log-stream-row {
-    border-bottom: 1px solid var(--rule-faint);
-    transition: background-color 120ms ease;
-  }
-  .log-stream-row:hover {
-    background: color-mix(in srgb, var(--ink) 7%, var(--sheet));
-  }
-
-  .log-stream-time {
-    width: 92px;
-    color: var(--ink-4);
-    font-size: 10.5px;
-    letter-spacing: -0.02em;
-  }
-  .log-stream-level {
-    width: 56px;
-    font-size: var(--fs-micro);
-    line-height: 1.2;
-    letter-spacing: 0.08em;
-    white-space: nowrap;
-  }
-  .log-stream-subsystem {
-    width: 96px;
-    font-size: var(--fs-micro);
-    line-height: 1.25;
-  }
-
+  .log-timestamp     { color: var(--ink-5); }
+  .log-tag           { color: var(--signal-2); font-weight: 600; }
   .log-level-info    { color: var(--log-info); font-weight: 600; }
   .log-level-debug   { color: var(--log-debug); font-weight: 600; }
   .log-level-warning { color: var(--log-warn); font-weight: 700; }
@@ -1806,79 +808,31 @@
   .log-protocol,
   .log-method,
   .log-duration      { color: var(--log-info); }
+  .log-url           { color: var(--log-info); text-decoration: underline; text-underline-offset: 2px; }
+  .log-route         { color: var(--ink-2); font-weight: 500; }
   .log-status-ok,
   .log-string,
   .log-key           { color: var(--moss); font-weight: 600; }
   .log-status-err    { color: var(--log-error); font-weight: 700; }
   .log-path,
   .log-storage       { color: var(--log-warn); }
+  .log-number        { color: var(--ink-2); }
+  .log-operator      { color: var(--ink-5); }
+  .log-ip            { color: var(--ink-5); }
+  .log-guid          { color: var(--ink-5); font-style: italic; }
 
-  .install-workspace,
-  .install-drop-target,
-  .install-upload-medallion,
-  .install-format-card,
-  .install-browse-button {
-    transition: transform 180ms cubic-bezier(0.21, 0.9, 0.3, 1),
-      box-shadow 180ms ease, border-color 180ms ease;
-  }
-  .fm-dropzone:not([data-disabled='true']) .install-drop-target:hover {
-    background: color-mix(in srgb, var(--format-fomod) 3.5%, var(--sheet));
-  }
-  .fm-dropzone[data-dragging='true'] .install-workspace {
-    border-color: var(--format-fomod);
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--format-fomod) 11%, transparent), var(--shadow-elevation-3);
-  }
-  .fm-dropzone[data-dragging='true'] .install-drop-target {
-    background: color-mix(in srgb, var(--format-fomod) 7%, var(--sheet));
-  }
-  .fm-dropzone:not([data-disabled='true']):hover .install-upload-medallion {
-    transform: rotate(0deg) translateY(-2px) !important;
-  }
-  .install-format-card:hover {
-    transform: translateX(2px);
-    box-shadow: var(--shadow-elevation-1);
-  }
-  .install-browse-button:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 8px 18px -8px rgba(24, 24, 27, 0.55);
-  }
-  .install-ready-dot {
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--moss) 16%, transparent);
-    animation: salma-blink 2.2s infinite;
-  }
-
-  @media (max-width: 980px) {
-    .install-workspace {
-      grid-template-columns: minmax(0, 1fr) 286px !important;
-    }
-    .install-workspace-shell {
-      padding: 12px !important;
-    }
-  }
-
-  @media (max-width: 720px) {
-    .install-workspace {
-      grid-template-columns: 1fr !important;
-    }
-    .install-protocol-rail {
-      border-top: 1px solid var(--rule);
-      border-left: none !important;
-    }
-  }
-
-  @media (max-height: 720px) {
-    .install-drop-target {
-      padding-top: 50px !important;
-      padding-bottom: 50px !important;
-    }
-    .install-upload-medallion {
-      width: 72px !important;
-      height: 72px !important;
-      margin-bottom: 17px !important;
-    }
-  }
+  /* ============================================================
+     Reduced motion: drop the ambient loops, keep state changes.
+     ============================================================ */
 
   @media (prefers-reduced-motion: reduce) {
-    .install-ready-dot { animation: none; }
+    .blink, .caret, .fm-stripe, .seg-live, .m-spin, .skeleton-line {
+      animation: none !important;
+    }
+    .rise { animation: none !important; opacity: 1; }
+    *, *::before, *::after {
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
