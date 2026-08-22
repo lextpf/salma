@@ -1,8 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { getConfig, getFomodScanStatus, getInstallStatus, getMo2Status, getTestStatus } from './api'
+import { getConfig, getFomodScanStatus, getInstallStatus, getMo2Status, getTestStatus, listFomods } from './api'
+import { tierFromEntry } from './confidence'
 import type { AppConfig, Mo2Status } from './types'
 
 export type EngineState = 'idle' | 'scanning' | 'testing' | 'installing'
+
+/** Library-wide confidence roll-up, derived from the record list. */
+export interface LibraryRollup {
+  total: number
+  /** Records whose inferred selection needs a human look (PARTIAL or LOW). */
+  partial: number
+  /** Mean composite confidence across records that have a score, 0..1. */
+  meanConfidence: number | null
+}
 
 export interface ChromeStatus {
   status: Mo2Status | null
@@ -14,12 +24,16 @@ export interface ChromeStatus {
   serverOn: boolean
   dllLoaded: boolean
   pluginPurged: boolean
+  rollup: LibraryRollup | null
 }
 
-// Consolidates the chrome's background polling (status, scan/test/install
-// activity, config) plus a 1s clock, and derives the engine state + the
-// connection booleans the TopBar / StatusBar / ModuleRail render. One poller for
-// the whole frame; pages keep their own hooks for their own data.
+// The chrome's single background poller: MO2 status, scan, test and install
+// activity, config and the record list every 8 seconds, plus a 1 second clock.
+// It derives the engine state and the connection booleans that TopBar,
+// StatusBar and ModuleRail render. Pages keep their own hooks for page data.
+//
+// Every request is individually caught and turned into null, so one failing
+// endpoint degrades its own field instead of blanking the whole frame.
 export function useChromeStatus(): ChromeStatus {
   const [status, setStatus] = useState<Mo2Status | null>(null)
   const [config, setConfig] = useState<AppConfig | null>(null)
@@ -28,6 +42,7 @@ export function useChromeStatus(): ChromeStatus {
   const [testRunning, setTestRunning] = useState(false)
   const [installRunning, setInstallRunning] = useState(false)
   const [now, setNow] = useState(() => new Date())
+  const [rollup, setRollup] = useState<LibraryRollup | null>(null)
   const inFlightRef = useRef(false)
 
   useEffect(() => {
@@ -42,8 +57,9 @@ export function useChromeStatus(): ChromeStatus {
         getTestStatus().catch(() => null),
         getInstallStatus().catch(() => null),
         getConfig().catch(() => null),
+        listFomods().catch(() => null),
       ])
-        .then(([s, scan, test, install, cfg]) => {
+        .then(([s, scan, test, install, cfg, fomods]) => {
           if (s) {
             setStatus(s)
             setBackendUp(true)
@@ -56,6 +72,27 @@ export function useChromeStatus(): ChromeStatus {
           setScanRunning(scan?.running === true)
           setTestRunning(test?.running === true)
           setInstallRunning(install?.running === true)
+          // The rail footer and the install idle state both show a library
+          // roll-up. Deriving it here costs one fetch for the whole frame
+          // instead of one per screen.
+          if (fomods) {
+            let partial = 0
+            let sum = 0
+            let scored = 0
+            for (const e of fomods) {
+              const tier = tierFromEntry(e)
+              if (tier.hasData && (tier.tier === 'PARTIAL' || tier.tier === 'LOW')) partial++
+              if (tier.hasData) {
+                sum += tier.pct
+                scored++
+              }
+            }
+            setRollup({
+              total: fomods.length,
+              partial,
+              meanConfidence: scored > 0 ? sum / scored / 100 : null,
+            })
+          }
         })
         .finally(() => {
           inFlightRef.current = false
@@ -89,11 +126,12 @@ export function useChromeStatus(): ChromeStatus {
     serverOn: backendUp === true,
     dllLoaded: status?.pluginInstalled === true,
     pluginPurged: backendUp === true && status?.pluginInstalled === false,
+    rollup,
   }
 }
 
 // Derive a human instance label from the MO2 mods path (the segment above
-// "mods"). Used for the static PROFILE chip until multi-instance support lands.
+// "mods"). MO2 calls this an instance, and so does the top-bar chip.
 export function deriveProfile(modsPath?: string): string {
   if (!modsPath) {
     return 'No instance'
