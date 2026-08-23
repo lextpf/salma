@@ -11,12 +11,19 @@ export interface RecordDetailState {
   retry: () => void
 }
 
-// Loads a single FOMOD record's detail JSON for the selected name, with an
-// AbortController that cancels the in-flight request on name change and a bounded
-// auto-retry on transient backend failure (mirrors the old FomodDetailPage). The
-// detail is lifted to the LibraryPage so both sibling columns (the VFS tree and
-// the inspector) share one fetch instead of double-loading. `loading` is derived
-// by callers as (name && !detail && !error).
+// Loads one FOMOD record's detail JSON for the selected name. It is lifted to
+// LibraryPage so the VFS tree and the inspector share a single fetch. Callers
+// derive `loading` as (name && !detail && !error).
+//
+// The AbortController does not cancel the HTTP request: getFomod takes no
+// signal, so the request runs to its own 8 second timeout. The controller only
+// marks the result stale, so a response landing after a name change is dropped
+// instead of overwriting the new record.
+//
+// Every failure is retried, not only an unreachable backend, up to MAX_RETRIES
+// attempts spaced RETRY_DELAY_MS apart. That multiplies getFomod's 8 second
+// budget: the worst wait before an error appears is about MAX_RETRIES * 8s plus
+// the delays. A success resets the counter, and so does the exported `retry()`.
 export function useRecordDetail(name: string | null): RecordDetailState {
   const [detail, setDetail] = useState<FomodDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -32,8 +39,8 @@ export function useRecordDetail(name: string | null): RecordDetailState {
       }
     }
 
-    // Reset stale detail through a helper call (not a direct in-effect setState)
-    // so the name switch clears the old record immediately.
+    // Cleared through a helper call rather than a direct in-effect setState, so
+    // a name switch drops the previous record immediately.
     const reset = () => {
       setDetail(null)
       setError(null)
