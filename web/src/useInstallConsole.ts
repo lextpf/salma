@@ -4,6 +4,18 @@ import { usePolling } from './usePolling'
 import { parseProgressBars } from './progressBarParsing'
 import type { InstallationJob } from './types'
 
+// Projects the salma log tail into the Install screen's console stream.
+//
+// Only [install]-tagged lines survive. Each one is reduced to an op token, a
+// clock and a message; the freshest non-error line is marked active, which is
+// what the progress meter reads to pick its stage.
+//
+// OP_RULES below is the op vocabulary, and it is ordered: the first pattern
+// that matches a line wins, so a failure line naming a pipeline noun keeps that
+// noun's op instead of falling through to 'ERROR'. stages.ts maps these tokens
+// onto the six meter stages and depends on the exact spellings, so adding or
+// renaming one here means editing the table there too.
+
 // One rendered op-line in the install console stream.
 export interface ConsoleLine {
   id: number
@@ -77,8 +89,27 @@ function mapInstallLines(rawLines: string[], processing: boolean): ConsoleLine[]
   return out
 }
 
+/**
+ * The op the console is currently sitting on, scanning from the tail.
+ *
+ * This is what selects the active stage in the progress meter, so both the
+ * active card (which already holds mapped lines) and the docked ribbon (which
+ * only holds the raw window) resolve it the same way.
+ */
+export function activeOpOf(lines: ConsoleLine[]): string | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].state === 'active' || lines[i].state === 'error') return lines[i].op
+  }
+  return null
+}
+
+/** activeOpOf for a caller that only has the raw log window. */
+export function deriveActiveOp(rawLines: string[]): string | null {
+  return activeOpOf(mapInstallLines(rawLines, true))
+}
+
 // Polls the salma log tail (~1s) and projects the [install] stream for the
-// active job. Returns the mapped op-lines plus the raw window so the footer can
+// active job. Returns the mapped op-lines plus the raw window so the meter can
 // reuse parseProgressBars over the same data.
 export function useInstallConsole(activeJobId: string | null, active: boolean): {
   lines: ConsoleLine[]
