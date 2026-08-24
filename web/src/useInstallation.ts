@@ -2,6 +2,33 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { getCsrfToken, getInstallStatus } from './api'
 import type { InstallationJob } from './types'
 
+/**
+ * Owns the Install screen's job list: upload, then poll to completion.
+ *
+ * The job state machine is drawn on InstallationJob in types.ts. Behaviour a
+ * caller has to know:
+ *
+ *   - Jobs run strictly one at a time, in selection order, because the server
+ *     holds a single install slot. handleFileSelect resolves only after the
+ *     last job in the batch settles, and it returns early while isInstalling.
+ *   - A dropped .json file is not a job. It is matched case-insensitively by
+ *     stem to an archive in the same batch and sent with it as the multipart
+ *     `fomodJson` field. An unmatched .json is silently ignored.
+ *   - `cancel()` aborts the in-flight upload, stops polling and marks every
+ *     non-terminal job as an error reading 'Cancelled'. It does not tell the
+ *     server to stop: an install already running there runs to completion and
+ *     writes its output. Cancellation stays armed until the next
+ *     handleFileSelect re-arms it.
+ *   - Polling gives up after 200 attempts at 1.5s, so about 5 minutes. A
+ *     transient poll failure is logged and retried; only the attempt ceiling
+ *     ends the job.
+ *   - `pluginInstalled` false makes handleFileSelect a no-op, with no job row
+ *     and no message. The caller must explain the refusal.
+ *
+ * Unmounting aborts the upload, clears the poll timer and settles the pending
+ * poll promise, so nothing is left running. The jobs array is lost with it;
+ * there is no session history beyond the component's lifetime.
+ */
 export function useInstallation(pluginInstalled: boolean): {
   jobs: InstallationJob[]
   isInstalling: boolean
@@ -50,9 +77,23 @@ export function useInstallation(pluginInstalled: boolean): {
 
       if (cancelledRef.current) return
 
-      // Fetch CSRF token before opening the XHR. Done synchronously here
-      // (not inside the Promise constructor) so the token cache lookup is
-      // awaited and any failure surfaces as the caller's catch.
+      // Fetch the CSRF token before opening the XHR, and outside the Promise
+      // constructor, so the cache lookup is awaited and a failure surfaces in
+      // the caller's catch.
+      //
+      // This upload is the one call that does not go through api.ts, so it has
+      // neither protection the rest of the app gets:
+      //   - No CSRF retry. api.ts drops its cached token and resends once on a
+      //     403 whose body is "csrf token missing or invalid". Here a stale
+      //     token is final. The server rotates its token on every restart, so
+      //     restarting mo2-server with the dashboard open fails the next upload
+      //     with the raw 403 body as the job's error, while every other call
+      //     recovers silently. Reloading the page clears it.
+      //   - No timeout. XHR is here for its upload-progress events and no abort
+      //     signal is armed, so an upload that never answers leaves the job in
+      //     `uploading` until the user cancels.
+      // Do not "simplify" this to fetch() without first replacing the progress
+      // events, and do not add a retry that blindly resends a large body.
       const csrfToken = await getCsrfToken()
 
       const result = await new Promise<Record<string, string>>((resolve, reject) => {
@@ -100,14 +141,20 @@ export function useInstallation(pluginInstalled: boolean): {
 
       setJobs(prev => prev.map(j =>
         j.id === job.id
-          ? { ...j, status: 'processing', uploadProgress: 100, processingStatus: 'Installing mod...' }
+          ? {
+            ...j,
+            status: 'processing',
+            uploadProgress: 100,
+            processingStatus: 'Installing mod...',
+            modName: result.modName ?? j.modName,
+          }
           : j
       ))
 
       if (cancelledRef.current) return
 
-      // Poll for completion using sequential setTimeout (no overlapping fetches).
-      // The timer ID is tracked in pollTimerRef so cleanup on unmount can clear it.
+      // Poll for completion with a chained setTimeout, so two polls never
+      // overlap. pollTimerRef holds the pending id for unmount cleanup.
       await new Promise<void>((resolve) => {
         pollResolveRef.current = resolve
         const MAX_RETRIES = 200
@@ -152,7 +199,7 @@ export function useInstallation(pluginInstalled: boolean): {
             console.error('[install] transient error while polling install status', e)
           }
 
-          // Schedule next poll only after current one completes (prevents overlap)
+          // The next poll is scheduled only once this one has finished.
           pollTimerRef.current = setTimeout(poll, 1500)
         }
 
