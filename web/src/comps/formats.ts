@@ -1,8 +1,8 @@
 /**
- * @brief map accepted dashboard files to archive backends.
- * @author Alex (https://github.com/lextpf)
+ * @brief Map accepted dashboard files to archive backends.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * keep accepted extensions synchronized with `archive_service.rs` readers.
+ * Keep accepted extensions synchronized with `archive_service.rs` readers.
  */
 export type Backend = 'sevenz_rust2' | 'unrar' | 'zip' | 'sidecar'
 
@@ -14,7 +14,7 @@ export interface FormatSpec {
   backend: Backend
 }
 
-// pair this sidecar with an archive by case-insensitive file stem.
+// Pair this sidecar with an archive by case-insensitive file stem.
 const SIDECAR_SPEC: FormatSpec = {
   extension: '.json',
   label: 'Selections',
@@ -46,7 +46,7 @@ export const SIDECAR = SIDECAR_SPEC
 
 export const ARCHIVE_FORMATS: FormatSpec[] = FORMATS.filter(f => f.backend !== 'sidecar')
 
-// a map, not an object: a file named `x.constructor` must miss, not reach Object.prototype.
+// A map, not an object: a file named `x.constructor` must miss, not reach Object.prototype.
 const BY_EXT = new Map<string, FormatSpec>(FORMATS.map(f => [f.extension.slice(1), f]))
 
 export function formatForFile(fileName: string): FormatSpec {
