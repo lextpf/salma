@@ -2,11 +2,11 @@ import type { CSSProperties } from 'react'
 
 /**
  * @interface MIconProps
- * @brief constrain variable icon axes and accessible labeling.
- * @author Alex (https://github.com/lextpf)
+ * @brief Constrain variable icon axes and accessible labeling.
+ * @author Alex (<https://github.com/lextpf>)
  *
  * `size` is in CSS pixels and optical size clamps to [20, 48]. `weight` is in
- * [100, 700] and defaults to 400. omit `label` for decorative icons.
+ * [100, 700] and defaults to 400. Omit `label` for decorative icons.
  */
 interface MIconProps {
   name: string
