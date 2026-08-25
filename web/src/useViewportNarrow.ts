@@ -1,8 +1,8 @@
 /**
- * @brief measure dashboard breakpoints against the available content area.
- * @author Alex (https://github.com/lextpf)
+ * @brief Measure dashboard breakpoints against the available content area.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * keep rail widths synchronized with `ModuleRail.tsx`.
+ * Keep rail widths synchronized with `ModuleRail.tsx`.
  */
 import { useEffect, useState } from 'react'
 
