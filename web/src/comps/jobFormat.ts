@@ -2,10 +2,10 @@ import type { InstallationJob } from '../types'
 
 /**
  * @fn modLeaf(job: InstallationJob): string | null
- * @brief select a compact destination name for job rows.
- * @author Alex (https://github.com/lextpf)
+ * @brief Select a compact destination name for job rows.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * prefer the upload-time name. completed jobs can use the last path segment.
+ * Prefer the upload-time name. Completed jobs can use the last path segment.
  */
 export function modLeaf(job: InstallationJob): string | null {
   if (job.modName) return job.modName
