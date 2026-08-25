@@ -17,10 +17,10 @@ export interface FileDrop {
 
 /**
  * @fn useFileDrop({ onFiles, disabled = false }: UseFileDropOptions): FileDrop
- * @brief combine picker and drag input without hiding repeated selections.
- * @author Alex (https://github.com/lextpf)
+ * @brief Combine picker and drag input without hiding repeated selections.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * callers must attach `inputRef` and `onInputChange` to one file input.
+ * Callers must attach `inputRef` and `onInputChange` to one file input.
  */
 export function useFileDrop({ onFiles, disabled = false }: UseFileDropOptions): FileDrop {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -34,7 +34,7 @@ export function useFileDrop({ onFiles, disabled = false }: UseFileDropOptions): 
     if (disabled) return
     const files = e.target.files
     if (files && files.length > 0) onFiles(files)
-    // allow the same file to trigger a later change event.
+    // Allow the same file to trigger a later change event.
     e.target.value = ''
   }, [disabled, onFiles])
 
