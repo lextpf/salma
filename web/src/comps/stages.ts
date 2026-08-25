@@ -1,18 +1,18 @@
 /**
- * @brief map console operations and percentages onto install stages.
- * @author Alex (https://github.com/lextpf)
+ * @brief Map console operations and percentages onto install stages.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * keep stage order synchronized with `SessionFeed` icons and console ops.
+ * Keep stage order synchronized with `SessionFeed` icons and console ops.
  * `INSTALL`, `ERROR`, and unknown ops use `VALIDATE`.
  */
 export const STAGES = ['VALIDATE', 'EXTRACT', 'SCAN', 'PARSE', 'INFER', 'WRITE'] as const
 
 /**
  * @fn stageIndexForOp(op: string | null): number
- * @brief provide a safe index into the fixed stage sequence.
- * @author Alex (https://github.com/lextpf)
+ * @brief Provide a safe index into the fixed stage sequence.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * values stay in [0, 5].
+ * Values stay in [0, 5].
  */
 export function stageIndexForOp(op: string | null): number {
   switch (op) {
@@ -45,8 +45,8 @@ export function segmentFills(
   tone: string,
   indeterminate: boolean,
 ): number[] {
-  // percentages describe only the active operation.
-  // failed and indeterminate active segments fill fully to keep state visible.
+  // Percentages describe only the active operation.
+  // Failed and indeterminate active segments fill fully to keep state visible.
   return STAGES.map((_, i) => {
     if (tone === 'done') return 100
     if (i < stage) return 100
