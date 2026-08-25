@@ -15,7 +15,7 @@ export interface ConsoleLine {
 const MAX_RAW_LINES = 400
 const INSTALL_TAG = '[install]'
 
-// rules are ordered. keep op names synchronized with `stages.ts`.
+// Rules are ordered. Keep op names synchronized with `stages.ts`.
 const OP_RULES: [RegExp, string][] = [
   [/extract/i, 'EXTRACT'],
   [/parse|moduleconfig/i, 'PARSE'],
@@ -36,6 +36,14 @@ const OP_RULES: [RegExp, string][] = [
 const ERROR_RE = /\b(ERROR|FAIL|FAILED|CRITICAL|FATAL|ABORT|CANCEL)/i
 const TIME_RE = /(\d{2}:\d{2}:\d{2})/
 
+/**
+ * @fn deriveOp(msg: string): string
+ * @brief Map log text to the first matching display stage.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param msg Install log text after the tag.
+ * @return An operation from OP_RULES, or INSTALL when no rule matches.
+ */
 function deriveOp(msg: string): string {
   for (const [re, op] of OP_RULES) {
     if (re.test(msg)) return op
@@ -43,11 +51,27 @@ function deriveOp(msg: string): string {
   return 'INSTALL'
 }
 
+/**
+ * @fn deriveMessage(afterTag: string): string
+ * @brief Remove a leading log severity from install display text.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param afterTag Text following the install tag.
+ * @return Trimmed message text.
+ */
 function deriveMessage(afterTag: string): string {
   return afterTag.replace(/^\s*-?\s*(INFO|DEBUG|TRACE|WARN(?:ING)?|ERROR|CRITICAL|FATAL)\b\s*[:-]?\s*/i, '').trim()
 }
 
-// mark the newest non-error install record as active.
+/**
+ * @fn mapInstallLines(rawLines: string[], processing: boolean): ConsoleLine[]
+ * @brief Filter install log messages and mark the latest record for display.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param rawLines Bounded raw log window.
+ * @param processing Mark the final row active when that row is not an error.
+ * @return Display rows with IDs relative to the input window, not persistent log IDs.
+ */
 function mapInstallLines(rawLines: string[], processing: boolean): ConsoleLine[] {
   const out: ConsoleLine[] = []
   for (let i = 0; i < rawLines.length; i++) {
@@ -73,6 +97,14 @@ function mapInstallLines(rawLines: string[], processing: boolean): ConsoleLine[]
   return out
 }
 
+/**
+ * @fn activeOpOf(lines: ConsoleLine[]): string | null
+ * @brief Find the latest active or failed display stage.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param lines Console rows in time order.
+ * @return The latest matching operation, or null.
+ */
 export function activeOpOf(lines: ConsoleLine[]): string | null {
   for (let i = lines.length - 1; i >= 0; i--) {
     if (lines[i].state === 'active' || lines[i].state === 'error') return lines[i].op
@@ -80,21 +112,47 @@ export function activeOpOf(lines: ConsoleLine[]): string | null {
   return null
 }
 
+/**
+ * @fn deriveActiveOp(rawLines: string[]): string | null
+ * @brief Infer the displayed stage from install log text.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param rawLines Raw log window, which may also contain other subsystems.
+ * @return The active or failed operation, or null when no install messages remain.
+ */
 export function deriveActiveOp(rawLines: string[]): string | null {
   return activeOpOf(mapInstallLines(rawLines, true))
 }
 
+/**
+ * @fn useInstallConsole(activeJobId: string | null, active: boolean): {
+ *   lines: ConsoleLine[]; rawLines: string[]
+ * }
+ * @brief Maintain a bounded log window for the installation console.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * A job change resets the byte offset; a server reset replaces the buffer.
+ * The log endpoint is shared, so a browser job ID does not isolate messages by installation.
+ *
+ * @param activeJobId Browser job ID used to reset the window on the next poll.
+ * @param active Enable one-second polling and mark the final row active unless it is an error.
+ * @return Parsed install rows and the shared raw log window.
+ */
 export function useInstallConsole(activeJobId: string | null, active: boolean): {
   lines: ConsoleLine[]
   rawLines: string[]
 } {
-  // poll once per second without overlap. a new job resets the offset and window.
   const [rawLines, setRawLines] = useState<string[]>([])
   const offsetRef = useRef<number | undefined>(undefined)
   const lastJobRef = useRef<string | null>(null)
 
+  /**
+   * @fn poll(): Promise<void>
+   * @brief Merge incremental log responses and retain at most 400 raw lines.
+   * @author Alex (<https://github.com/lextpf>)
+   */
   const poll = useCallback(async () => {
-    // reset the window when the active job changes.
+    // Reset the window when the active job changes.
     if (lastJobRef.current !== activeJobId) {
       lastJobRef.current = activeJobId
       offsetRef.current = undefined
@@ -125,9 +183,9 @@ export function useInstallConsole(activeJobId: string | null, active: boolean): 
 
 export interface InstallProgress {
   /**
-   * @brief current operation progress.
+   * @brief Current operation progress.
    *
-   * values are in [0, 100], or null when indeterminate.
+   * Values are in [0, 100], or null when indeterminate.
    */
   pct: number | null
   label: string
@@ -135,16 +193,29 @@ export interface InstallProgress {
   indeterminate: boolean
 }
 
+/**
+ * @fn clampPct(n: number): number
+ * @brief Round display progress and limit it to the percentage scale.
+ * @author Alex (<https://github.com/lextpf>)
+ *
+ * @param n Finite percentage before rounding.
+ * @return An integer from zero through 100.
+ */
 function clampPct(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)))
 }
 
 /**
  * @fn computeInstallProgress(job: InstallationJob, rawLines: string[]): InstallProgress
- * @brief select progress from the source available for the current job state.
- * @author Alex (https://github.com/lextpf)
+ * @brief Select progress from the source available for the current job state.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * uploads use XHR progress. processing uses parsed log progress.
+ * Uploads use XHR progress. Processing uses the first parsed log progress bar.
+ * A missing bar or unknown total leaves progress indeterminate.
+ *
+ * @param job Browser installation state.
+ * @param rawLines Current log window used while processing.
+ * @return Display progress, label, and terminal tone.
  */
 export function computeInstallProgress(job: InstallationJob, rawLines: string[]): InstallProgress {
   switch (job.status) {
@@ -160,7 +231,7 @@ export function computeInstallProgress(job: InstallationJob, rawLines: string[])
       break
   }
 
-  // the list is empty before the first tqdm line arrives, so there is often no bar.
+  // The list is empty before the first tqdm line arrives, so there is often no bar.
   const bars = parseProgressBars(rawLines, 'salma')
   const bar: TqdmBar | undefined = bars.length > 0 ? bars[0] : undefined
   if (bar) {
