@@ -33,18 +33,18 @@ function indexAt(prefix: number[], y: number): number {
 
 /**
  * @fn useVirtualScroll(rows: number | number[] = LINE_HEIGHT): VirtualScrollState
- * @brief keep large row sets within the visible scroll window.
- * @author Alex (https://github.com/lextpf)
+ * @brief Keep large row sets within the visible scroll window.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * ### :material-ruler: coordinates
+ * ### :material-ruler: Coordinates
  *
- * row heights and offsets are CSS pixels. exported row heights must match rendered CSS dimensions.
+ * Row heights and offsets are CSS pixels. Exported row heights must match rendered CSS dimensions.
  * `startIdx` is inclusive and `endIdx` is exclusive. `offsetOf` is relative to the full row set.
  *
- * ### :material-refresh: prefix sums
+ * ### :material-refresh: Prefix sums
  *
- * pass one height for uniform rows or one height per row.
- * pass a memoized array to reuse prefix sums.
+ * Pass one height for uniform rows or one height per row.
+ * Pass a memoized array to reuse prefix sums.
  */
 export function useVirtualScroll(rows: number | number[] = LINE_HEIGHT): VirtualScrollState {
   const elRef = useRef<HTMLDivElement | null>(null)
@@ -56,7 +56,7 @@ export function useVirtualScroll(rows: number | number[] = LINE_HEIGHT): Virtual
 
   const uniform = typeof rows === 'number' ? rows : null
 
-  // `prefix[i]` is the row offset. the final entry is the total height.
+  // `prefix[i]` is the row offset. The final entry is the total height.
   const prefix = useMemo(() => {
     if (typeof rows === 'number') return null
     const acc = new Array<number>(rows.length + 1)
@@ -67,7 +67,7 @@ export function useVirtualScroll(rows: number | number[] = LINE_HEIGHT): Virtual
     return acc
   }, [rows])
 
-  // reconnect the observer when a conditional scroll element changes.
+  // Reconnect the observer when a conditional scroll element changes.
   const scrollRef = useCallback((node: HTMLDivElement | null) => {
     if (elRef.current === node) return
     if (obsRef.current) { obsRef.current.disconnect(); obsRef.current = null }
@@ -102,7 +102,7 @@ export function useVirtualScroll(rows: number | number[] = LINE_HEIGHT): Virtual
     setScrollTop(0)
   }, [])
 
-  // keep scroll mutation inside the hook that owns the element.
+  // Keep scroll mutation inside the hook that owns the element.
   const stickToBottom = useCallback(() => {
     if (!isAtBottomRef.current) return
     const el = elRef.current
