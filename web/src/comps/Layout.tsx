@@ -20,7 +20,7 @@ export default function Layout() {
   const inferred = chrome.status?.jsonCount ?? 0
   const mods = chrome.status?.modCount ?? 0
 
-  // update during render so record routes never show one frame at the expanded width.
+  // Update during render so record routes never show one frame at the expanded width.
   const onRecord = useMatch('/fomods/:name') !== null
   const [collapsed, setCollapsed] = useState(() => getRailCollapsed() || onRecord)
   const [wasOnRecord, setWasOnRecord] = useState(onRecord)
