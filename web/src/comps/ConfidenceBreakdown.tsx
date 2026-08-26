@@ -10,7 +10,7 @@ interface BarRowProps {
   hint: string
 }
 
-// component scores use exact color at 0.98 without claiming an exact run.
+// Component scores use exact color at 0.98 without claiming an exact run.
 function BarRow({ label, value, hint }: BarRowProps) {
   const pct = Math.round(value * 100)
   const fill =
@@ -70,7 +70,7 @@ function BarRow({ label, value, hint }: BarRowProps) {
 }
 
 export default function ConfidenceBreakdown({ components }: ConfidenceBreakdownProps) {
-  // keep hints synchronized with `inference_diagnostics.rs` calculations.
+  // Keep hints synchronized with `inference_diagnostics.rs` calculations.
   return (
     <div className="flex flex-col" style={{ gap: 6, width: '100%' }}>
       <BarRow
