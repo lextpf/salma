@@ -11,7 +11,7 @@ const SIZE = 108
 const RING = 9
 
 export default function ConfidenceDial({ confidence, exactMatch, compact = false }: ConfidenceDialProps) {
-  // use a neutral ring and no score when confidence data is absent.
+  // Use a neutral ring and no score when confidence data is absent.
   const info = tierFor({ confidence, exactMatch })
   const turn = info.hasData ? info.pct / 100 : 0
 
