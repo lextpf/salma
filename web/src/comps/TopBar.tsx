@@ -16,7 +16,7 @@ interface TopBarProps {
   instance: string
 }
 
-// the status clock updates once per second. memoization keeps this header stable.
+// The status clock updates once per second. Memoization keeps this header stable.
 function TopBar({ engineState, instance }: TopBarProps) {
   const { theme, toggleTheme } = useTheme()
   const running = engineState !== 'idle'
