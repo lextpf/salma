@@ -36,7 +36,7 @@ function Figure({ label, value, tone }: { label: string; value: string; tone?: s
 }
 
 export default function SpecBand({ diagnostics }: SpecBandProps) {
-  // omit zero fault counts.
+  // Omit zero fault counts.
   if (!diagnostics) {
     return (
       <div
