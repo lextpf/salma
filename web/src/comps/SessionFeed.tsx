@@ -26,9 +26,9 @@ interface SessionFeedProps {
   onDragLeave: (e: React.DragEvent) => void
   onDrop: (e: React.DragEvent) => void
   /**
-   * @brief file names visible during dragover.
+   * @brief File names visible during dragover.
    *
-   * browsers can return an empty list.
+   * Browsers can return an empty list.
    */
   dragFileNames: string[]
   stats?: { inferred: number; mods: number }
@@ -44,16 +44,16 @@ function Tally({ text, dot, fg }: { text: string; dot: string; fg: string }) {
   )
 }
 
-// derive every spine-aligned position from these column constants.
+// Derive every spine-aligned position from these column constants.
 const NUM_W = 26
 const SPINE_W = 22
 const LINE_X = 10
 const SPINE_X = NUM_W + LINE_X + 0.5
 
-// keep this index order synchronized with `STAGES`.
+// Keep this index order synchronized with `STAGES`.
 const STAGE_ICONS = ['shield', 'unarchive', 'manage_search', 'account_tree', 'psychology', 'drive_file_move']
 
-// compact spacing preserves all stages in short viewports.
+// Compact spacing preserves all stages in short viewports.
 interface Rhythm {
   slotPadY: number
   stem: number
@@ -231,7 +231,7 @@ export default function SessionFeed(props: SessionFeedProps) {
 
   const isEmpty = jobs.length === 0
 
-  // compact this pane below 620 CSS pixels.
+  // Compact this pane below 620 CSS pixels.
   const r: Rhythm = useViewportShort(620) ? TIGHT : ROOMY
 
   const browse = (e: React.MouseEvent | React.KeyboardEvent) => {
@@ -328,11 +328,11 @@ export default function SessionFeed(props: SessionFeedProps) {
     color: 'var(--ink-faint)',
   }
 
-  // auto margins become top-aligned when the rail exceeds the scroll viewport.
+  // Auto margins become top-aligned when the rail exceeds the scroll viewport.
   const emptyIntake = (
     <div
       className="rise"
-      // padding remains when auto margins collapse in a short viewport.
+      // Padding remains when auto margins collapse in a short viewport.
       style={{ flex: 1, minHeight: 0, display: 'flex', paddingTop: r.detail ? 14 : 8 }}
     >
       <div style={{ width: '100%', maxWidth: 660, margin: 'auto' }}>
@@ -353,7 +353,7 @@ export default function SessionFeed(props: SessionFeedProps) {
             alignItems: 'center',
             gap: 14,
             padding: `${r.slotPadY}px 18px ${r.slotPadY}px ${SPINE_X - 11}px`,
-            // use a dashed edge only while the drop target accepts input.
+            // Use a dashed edge only while the drop target accepts input.
             border: locked ? '1px solid var(--rule-ctrl)' : '1px dashed var(--signal-bd-dash)',
             borderRadius: 'var(--radius-card)',
             cursor: locked ? 'default' : 'pointer',
@@ -417,7 +417,7 @@ export default function SessionFeed(props: SessionFeedProps) {
           <Facts
             items={[
               { icon: 'lock', text: 'path safety' },
-              // keep 8 GiB synchronized with both server upload limits.
+              // Keep 8 GiB synchronized with both server upload limits.
               { icon: 'scale', text: '8 GiB max' },
             ]}
           />
