@@ -18,17 +18,17 @@ interface RecordsListProps {
 
 const GRID = '34px minmax(0, 1fr) 78px'
 
-// keep this CSS-pixel height synchronized with `VfsTree` and `Inspector`.
+// Keep this CSS-pixel height synchronized with `VfsTree` and `Inspector`.
 const HEAD_H = 34
 
-// reserve the selection edge so state changes do not shift row content.
+// Reserve the selection edge so state changes do not shift row content.
 const EDGE = '2px solid'
 
 type Row =
   | { kind: 'sep'; key: string; label: string; count: number }
   | { kind: 'rec'; key: string; entry: FomodEntry; pri: number }
 
-// group strongest confidence first and sort names within each band.
+// Group strongest confidence first and sort names within each band.
 const BANDS: { tier: Tier | 'NONE'; label: string }[] = [
   { tier: 'EXACT', label: 'Exact' },
   { tier: 'HIGH', label: 'High confidence' },
@@ -47,7 +47,7 @@ function buildRows(fomods: FomodEntry[]): Row[] {
     else buckets.set(key, [e])
   }
 
-  // omit the only band header when no record has confidence data.
+  // Omit the only band header when no record has confidence data.
   const populated = BANDS.filter(b => (buckets.get(b.tier)?.length ?? 0) > 0)
   const flat = populated.length < 2
 
@@ -111,7 +111,7 @@ export default function RecordsList({
   onExpand,
 }: RecordsListProps) {
   const rows = useMemo(() => buildRows(fomods), [fomods])
-  // separator and record rows require separate virtual heights.
+  // Separator and record rows require separate virtual heights.
   const heights = useMemo(
     () => rows.map(r => (r.kind === 'sep' ? ROW_SEP : ROW_RECORD)),
     [rows],
