@@ -98,7 +98,7 @@ export default function Tabs({
                   position: 'absolute',
                   left: 8,
                   right: 8,
-                  // keep the marker flush with the borderless strip.
+                  // Keep the marker flush with the borderless strip.
                   bottom: 0,
                   height: 2,
                   background: 'var(--signal)',
