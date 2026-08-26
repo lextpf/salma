@@ -66,7 +66,7 @@ function MetaRow({ label, value }: { label: string; value: string }) {
 }
 
 // `Library` stays active on detail routes because its link does not require an exact match.
-// the status clock updates once per second. memoization keeps this rail stable.
+// The status clock updates once per second. Memoization keeps this rail stable.
 function ModuleRail({ inferredCount, modCount, partialCount, modsPath, collapsed = false, onToggle }: ModuleRailProps) {
   const resolved = modCount > 0 ? Math.min(100, Math.round((inferredCount / modCount) * 100)) : 0
 
