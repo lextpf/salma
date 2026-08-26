@@ -71,9 +71,9 @@ export default function StageMeter({ job, rawLines, activeOp, errored = false }:
 
   const numeral = pct != null ? String(pct) : tone === 'error' ? '!' : done ? '100' : '--'
 
-  // omit rate and ETA until the same tqdm record provides enough data.
-  // the list is empty before the first tqdm line arrives, so there is often no bar.
-  // alias the fields once and let counted and timed narrow them for every use below.
+  // Omit rate and ETA until the same tqdm record provides enough data.
+  // The list is empty before the first tqdm line arrives, so there is often no bar.
+  // Alias the fields once and let counted and timed narrow them for every use below.
   const bars = parseProgressBars(rawLines, 'salma')
   const bar: TqdmBar | undefined = bars.length > 0 ? bars[0] : undefined
   const current = bar?.current
@@ -84,7 +84,7 @@ export default function StageMeter({ job, rawLines, activeOp, errored = false }:
   const rate = timed ? current / elapsedS : 0
   const remain = timed && current < total ? (total - current) / rate : null
 
-  // discard stale rate and ETA after failure.
+  // Discard stale rate and ETA after failure.
   const failed = tone === 'error'
   const metrics = failed
     ? (job.error ?? label)
