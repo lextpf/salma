@@ -8,7 +8,7 @@ interface ConfidencePillProps {
 }
 
 export default function ConfidencePill({ confidence, exactMatch, size = 'md' }: ConfidencePillProps) {
-  // render nothing when confidence data is absent.
+  // Render nothing when confidence data is absent.
   const info = tierFor({ confidence, exactMatch })
   if (!info.hasData) {
     return null
