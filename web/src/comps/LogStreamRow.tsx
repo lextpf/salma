@@ -39,7 +39,7 @@ function renderParts(parts: HighlightSegment[]) {
 }
 
 export default memo(function LogStreamRow({ record }: { record: LogRecord }) {
-  // row height must match `ROW_LOG` in `useVirtualScroll.ts`.
+  // Row height must match `ROW_LOG` in `useVirtualScroll.ts`.
   const lvl = levelStyle(record.level)
   const subsystem = record.subsystem || 'general'
   return (
