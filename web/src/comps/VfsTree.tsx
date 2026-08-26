@@ -9,7 +9,7 @@ interface VfsTreeProps {
   hasSelection: boolean
   repro?: { missing: number; extra: number; size_mismatch: number; hash_mismatch: number; reproduced: number }
   /**
-   * @brief fault paths, including installed-only files.
+   * @brief Fault paths, including installed-only files.
    */
   reproDetail?: ReproDetail
 }
@@ -34,7 +34,7 @@ function faultMap(detail?: ReproDetail): Map<string, FaultKind> | undefined {
   const put = (paths: string[] | undefined, kind: FaultKind) => {
     for (const p of paths ?? []) m.set(p, kind)
   }
-  // visit weaker faults last so they cannot replace a stronger duplicate.
+  // Visit weaker faults last so they cannot replace a stronger duplicate.
   put(detail.extra, 'extra')
   put(detail.size_mismatch, 'size_mismatch')
   put(detail.hash_mismatch, 'hash_mismatch')
@@ -58,7 +58,7 @@ function faultsOf(repro: VfsTreeProps['repro']): Fault[] {
   ].filter(f => f.count > 0)
 }
 
-// keep this CSS-pixel height synchronized with `RecordsList` and `Inspector`.
+// Keep this CSS-pixel height synchronized with `RecordsList` and `Inspector`.
 const HEAD_H = 34
 
 function extensionOf(name: string): string {
@@ -66,7 +66,7 @@ function extensionOf(name: string): string {
   return dot > 0 && dot < name.length - 1 ? name.slice(dot + 1).toLowerCase() : ''
 }
 
-// a Map, not a plain object, so an extension such as `constructor` cannot resolve
+// A Map, not a plain object, so an extension such as `constructor` cannot resolve
 // an Object.prototype member instead of missing.
 const KIND = new Map<string, { tone: string; glyph: string }>(
   Object.entries({
@@ -143,7 +143,7 @@ export default function VfsTree({ outputTree, hasSelection, repro, reproDetail }
   const rows = flattenTree(roots, collapsed)
   const faults = faultsOf(repro)
 
-  // count source entries so collapse state and grafted missing rows do not affect totals.
+  // Count source entries so collapse state and grafted missing rows do not affect totals.
   const fileTotal = outputTree?.length ?? 0
   const dirTotal = useMemo(() => countDirs(roots), [roots])
   const byteTotal = useMemo(
@@ -235,10 +235,10 @@ export default function VfsTree({ outputTree, hasSelection, repro, reproDetail }
             const isOpen = node.isDir && !collapsed.has(node.path)
             const kind = node.isDir ? null : kindFor(node.name)
             const root = node.isDir && depth === 0
-            // collapsed directories retain their worst descendant fault.
+            // Collapsed directories retain their worst descendant fault.
             const fault = node.isDir ? (isOpen ? undefined : node.worstFault) : node.fault
             const faultTone = fault ? FAULT_TONE[fault] : undefined
-            // kind is null exactly for directories, so it drives both branches.
+            // Kind is null exactly for directories, so it drives both branches.
             const tone = faultTone ?? (kind === null ? (root ? 'var(--ink-4)' : 'var(--ink-5)') : kind.tone)
             const textTone = node.isDir ? (root ? 'var(--ink)' : 'var(--ink-4)') : 'var(--ink-3)'
             const glyph = kind === null ? (isOpen ? 'folder_open' : 'folder') : kind.glyph
@@ -247,7 +247,7 @@ export default function VfsTree({ outputTree, hasSelection, repro, reproDetail }
               : node.absent
                 ? 'not written'
                 : (node.size != null ? formatSize(node.size) : '')
-            // carry the tone on the mark, where `node.fault` is already known to be set.
+            // Carry the tone on the mark, where `node.fault` is already known to be set.
             const mark =
               !node.isDir && node.fault
                 ? { ...FAULT_MARK[node.fault], tone: FAULT_TONE[node.fault] }
