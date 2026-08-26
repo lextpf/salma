@@ -10,7 +10,7 @@ interface SignalMeterProps {
 const HEIGHTS = [5, 7, 9, 11, 13]
 
 export default function SignalMeter({ confidence, exactMatch, lit = false }: SignalMeterProps) {
-  // omit the grade when confidence data is absent.
+  // Omit the grade when confidence data is absent.
   const info = tierFor({ confidence, exactMatch })
   const filled = info.hasData ? info.bars : 0
   const letter = info.hasData ? info.grade : ''
