@@ -3,6 +3,7 @@ import { useState } from 'react'
 import type { ConfidenceScore, FomodReason } from '../types'
 import ConfidenceBreakdown from './ConfidenceBreakdown'
 import MIcon from './MIcon'
+import { HRule } from './Rule'
 
 interface WhyPanelProps {
   confidence?: ConfidenceScore
@@ -17,27 +18,32 @@ const REASON_COLOR: Record<string, string> = {
   FORCED_SELECT_ALL: 'var(--moss)',
   FORCED_AT_LEAST_ONE: 'var(--moss)',
   FORCED_EXACTLY_ONE: 'var(--moss)',
-  UNIQUE_FILE_EVIDENCE: 'var(--accent)',
-  NO_FILE_EVIDENCE: 'var(--ochre)',
+  UNIQUE_FILE_EVIDENCE: 'var(--signal-2)',
+  NO_FILE_EVIDENCE: 'var(--brass)',
   NO_UNIQUE_EVIDENCE: 'var(--ink-3)',
-  CARDINALITY_FORCED: 'var(--accent)',
-  CSP_PHASE_GREEDY: 'var(--accent)',
-  CSP_PHASE_LOCAL_SEARCH: 'var(--accent)',
-  CSP_PHASE_BACKTRACK: 'var(--ochre)',
-  CSP_PHASE_REPAIR: 'var(--ochre)',
-  CSP_PHASE_FOCUSED: 'var(--ochre)',
+  CARDINALITY_FORCED: 'var(--signal-2)',
+  CSP_PHASE_GREEDY: 'var(--signal-2)',
+  CSP_PHASE_LOCAL_SEARCH: 'var(--signal-2)',
+  CSP_PHASE_BACKTRACK: 'var(--brass)',
+  CSP_PHASE_REPAIR: 'var(--brass)',
+  CSP_PHASE_FOCUSED: 'var(--brass)',
   CSP_PHASE_FALLBACK: 'var(--danger)',
   CONDITION_FORCED_TRUE: 'var(--moss)',
   CONDITION_FORCED_FALSE: 'var(--moss)',
-  CONDITION_UNKNOWN: 'var(--ochre)',
+  CONDITION_UNKNOWN: 'var(--brass)',
   STEP_VISIBILITY_FORCED: 'var(--moss)',
-  STEP_VISIBILITY_UNKNOWN: 'var(--ochre)',
+  STEP_VISIBILITY_UNKNOWN: 'var(--brass)',
   STEP_NOT_VISIBLE: 'var(--ink-3)',
   EXTRA_FILE_PRODUCED: 'var(--danger)',
-  FOMOD_PLUS_CACHE: 'var(--ink-blue)',
+  FOMOD_PLUS_CACHE: 'var(--log-info)',
   IMPLICIT_DEFAULT: 'var(--ink-4)',
 }
 
+/**
+ * The reason code as a legend entry rather than a chip: a coloured status dot
+ * and the tracked mono code. A box here would be a second frame inside the
+ * panel's own, to say one word.
+ */
 function CodeChip({ code }: { code: string }) {
   const color = REASON_COLOR[code] ?? 'var(--ink-3)'
   return (
@@ -45,15 +51,13 @@ function CodeChip({ code }: { code: string }) {
       className="flex items-center"
       style={{
         gap: 6,
+        flexShrink: 0,
         fontFamily: 'var(--font-mono)',
         fontSize: 'var(--fs-micro)',
-        letterSpacing: '0.14em',
+        fontWeight: 600,
+        letterSpacing: 'var(--tr-chip)',
         textTransform: 'uppercase',
-        color: 'var(--ink-2)',
-        padding: '2px 8px',
-        borderRadius: 3,
-        background: 'var(--paper-3)',
-        border: '1px solid var(--rule-soft)',
+        color: 'var(--ink-3)',
       }}
     >
       <span
@@ -61,7 +65,7 @@ function CodeChip({ code }: { code: string }) {
         style={{
           width: 6,
           height: 6,
-          borderRadius: '50%',
+          borderRadius: 'var(--radius-full)',
           background: color,
         }}
       />
@@ -70,6 +74,11 @@ function CodeChip({ code }: { code: string }) {
   )
 }
 
+/**
+ * The payload as plain preformatted text, no fill and no border: it sits on the
+ * same plane as the reason above it, so a frame here would be nesting for its
+ * own sake.
+ */
 function DetailBlock({ detail }: { detail: Record<string, unknown> }) {
   const text = JSON.stringify(detail, null, 2)
   return (
@@ -77,12 +86,11 @@ function DetailBlock({ detail }: { detail: Record<string, unknown> }) {
       style={{
         margin: 0,
         marginTop: 6,
-        padding: '8px 10px',
-        background: 'var(--paper-2)',
-        border: '1px solid var(--rule-soft)',
-        borderRadius: 3,
+        padding: '7px 9px',
+        borderRadius: 'var(--radius-chip)',
         fontFamily: 'var(--font-mono)',
         fontSize: 'var(--fs-label)',
+        lineHeight: 1.55,
         color: 'var(--ink-3)',
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
@@ -93,6 +101,14 @@ function DetailBlock({ detail }: { detail: Record<string, unknown> }) {
   )
 }
 
+/**
+ * The inference decision log, disclosed under a ghost toggle.
+ *
+ * Everything below the toggle is stacked bands on the plane the panel already
+ * sits on: a legend row with the reason count, one band per reason, and a final
+ * band for the confidence breakdown. Nothing here is boxed. This tab already
+ * sits inside a pane, so a card here starts a chain of nested frames.
+ */
 export default function WhyPanel({ confidence, reasons, title }: WhyPanelProps) {
   const [open, setOpen] = useState(false)
   const hasContent = (reasons && reasons.length > 0) || !!confidence
@@ -105,14 +121,27 @@ export default function WhyPanel({ confidence, reasons, title }: WhyPanelProps) 
       <button
         type="button"
         onClick={() => { setOpen(v => !v); }}
-        className="tool-btn"
-        style={{ padding: '4px 10px', fontSize: 'var(--fs-micro)', gap: 6 }}
+        className="btn btn-ghost"
+        aria-expanded={open}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          height: 24,
+          padding: '0 9px',
+          fontSize: 'var(--fs-micro)',
+          border: '1px solid var(--rule-ctrl)',
+          borderRadius: 'var(--radius-ctrl)',
+          background: 'var(--btn-bg)',
+          color: 'var(--ink-4)',
+        }}
       >
         <MIcon name={open ? 'arrow_drop_down' : 'arrow_right'} size={14} />
         <span
           style={{
             fontFamily: 'var(--font-mono)',
-            letterSpacing: '0.14em',
+            fontWeight: 600,
+            letterSpacing: 'var(--tr-chip)',
             textTransform: 'uppercase',
             color: 'var(--ink-3)',
           }}
@@ -121,19 +150,39 @@ export default function WhyPanel({ confidence, reasons, title }: WhyPanelProps) 
         </span>
       </button>
       {open && (
-        <div
-          style={{
-            marginTop: 8,
-            padding: '12px 14px',
-            background: 'var(--paper-2)',
-            border: '1px solid var(--rule-soft)',
-            borderRadius: 'var(--radius-sm)',
-          }}
-        >
+        // A band on the plane it already sits on, not a card.
+        <div style={{ marginTop: 10, paddingTop: 9 }}>
+          <div
+            className="flex items-center"
+            style={{
+              gap: 10,
+              marginBottom: 9,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--fs-micro)',
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: 'var(--tr-kicker)',
+              // --ink-5, not --ink-faint: the row carries a real value (the
+              // reason count), and it matches the breakdown legend below it.
+              color: 'var(--ink-5)',
+            }}
+          >
+            <span>Decision log</span>
+            <HRule />
+            <span className="tabular-nums" style={{ letterSpacing: 'var(--tr-chip)' }}>
+              {String(reasonRows.length).padStart(2, '0')}
+              {reasonRows.length === 1 ? ' reason' : ' reasons'}
+            </span>
+          </div>
           {reasonRows.length === 0 && (
             <p
-              className="timestamp-print"
-              style={{ margin: 0, marginBottom: 8 }}
+              style={{
+                margin: 0,
+                marginBottom: 8,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--fs-mono)',
+                color: 'var(--ink-5)',
+              }}
             >
               // no reasons recorded
             </p>
@@ -142,20 +191,19 @@ export default function WhyPanel({ confidence, reasons, title }: WhyPanelProps) 
             <div
               key={i}
               style={{
-                marginBottom: i === reasonRows.length - 1 ? 0 : 12,
-                paddingBottom: i === reasonRows.length - 1 ? 0 : 12,
-                borderBottom:
-                  i === reasonRows.length - 1 ? 'none' : '1px dashed var(--rule-soft)',
+                marginBottom: i === reasonRows.length - 1 ? 0 : 9,
+                paddingBottom: i === reasonRows.length - 1 ? 0 : 9,
               }}
             >
-              <div className="flex items-center" style={{ gap: 10, flexWrap: 'wrap' }}>
+              <div className="flex items-baseline" style={{ gap: 10, flexWrap: 'wrap' }}>
                 <CodeChip code={r.code} />
                 <span
                   style={{
-                    fontSize: 'var(--fs-title)',
+                    fontSize: 'var(--fs-body)',
                     lineHeight: 'var(--lh-body)',
                     color: 'var(--ink-2)',
                     flex: 1,
+                    minWidth: 180,
                   }}
                 >
                   {r.message}
@@ -169,20 +217,25 @@ export default function WhyPanel({ confidence, reasons, title }: WhyPanelProps) 
           {confidence && (
             <div
               style={{
-                marginTop: 12,
-                paddingTop: 12,
-                borderTop: '1px solid var(--rule-soft)',
+                marginTop: 10,
+                paddingTop: 9,
               }}
             >
               <p
-                className="ui-label"
+                className="flex items-center"
                 style={{
+                  margin: 0,
                   marginBottom: 8,
+                  gap: 10,
+                  fontFamily: 'var(--font-mono)',
                   fontSize: 'var(--fs-micro)',
-                  letterSpacing: '0.18em',
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: 'var(--tr-kicker)',
+                  color: 'var(--ink-5)',
                 }}
               >
-                Confidence breakdown
+                <span>Confidence breakdown</span>
               </p>
               <ConfidenceBreakdown components={confidence.components} />
             </div>
