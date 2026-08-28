@@ -4,56 +4,51 @@ import type { ConfidenceScore } from '../types'
 interface ConfidenceDialProps {
   confidence?: ConfidenceScore | number | null
   exactMatch?: boolean
+  /** Below ~700px of content width the dial degrades to an inline chip. */
+  compact?: boolean
 }
 
-const R = 44
-const CIRC = 2 * Math.PI * R // ~276.46
+const SIZE = 108
+const RING = 9
 
-// 112px SVG ring whose filled arc and center percentage track the confidence
-// tier. Tuned for the 112px spec-rail slot. Shows a neutral ring + "--" when no
-// confidence data is available.
-export default function ConfidenceDial({ confidence, exactMatch }: ConfidenceDialProps) {
+/**
+ * The inspector's hero instrument: a plain ring on the card plane with a mono
+ * numeral at its centre.
+ *
+ * The ring is a conic-gradient with hard stops, so it draws two flat arcs, tier
+ * colour against --meter-empty, rather than a fade. That is the same mark an
+ * SVG arc would make without the extra element. The disc behind it is --card,
+ * which is what makes the shape read as a ring. With no confidence data the
+ * ring is neutral and the numeral is "--".
+ */
+export default function ConfidenceDial({ confidence, exactMatch, compact = false }: ConfidenceDialProps) {
   const info = tierFor({ confidence, exactMatch })
-  const offset = CIRC * (1 - (info.hasData ? info.pct / 100 : 0))
+  const turn = info.hasData ? info.pct / 100 : 0
 
-  return (
-    <div style={{ position: 'relative', width: 112, height: 112 }}>
-      <svg width={112} height={112} viewBox="0 0 112 112">
-        <circle cx="56" cy="56" r={R} fill="none" stroke="var(--meter-empty)" strokeWidth="8" />
-        {info.hasData && (
-          <circle
-            cx="56"
-            cy="56"
-            r={R}
-            fill="none"
-            stroke={info.color}
-            strokeWidth="8"
-            strokeLinecap="round"
-            strokeDasharray={CIRC}
-            strokeDashoffset={offset}
-            transform="rotate(-90 56 56)"
-            style={{ transition: 'stroke-dashoffset 500ms cubic-bezier(0.21, 0.9, 0.3, 1)' }}
-          />
-        )}
-      </svg>
-      <div
+  if (compact) {
+    return (
+      <span
         style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          flexDirection: 'column',
+          display: 'inline-flex',
           alignItems: 'center',
-          justifyContent: 'center',
+          gap: 8,
+          flexShrink: 0,
+          padding: '5px 11px',
+          // A degraded readout, not a status tag: it takes the control radius
+          // rather than the pill radius so it reads as part of the instrument.
+          borderRadius: 'var(--radius-ctrl)',
+          border: `1px solid ${info.hasData ? info.pill.bd : 'var(--rule)'}`,
+          background: info.hasData ? info.pill.bg : 'transparent',
         }}
       >
         <span
           className="tabular-nums"
           style={{
             fontFamily: 'var(--font-mono)',
-            fontSize: 'var(--fs-display)',
+            fontSize: 'var(--fs-lg)',
             fontWeight: 600,
-            letterSpacing: '-0.03em',
-            color: info.hasData ? info.color : 'var(--ink-5)',
+            letterSpacing: 'var(--tr-hero)',
+            color: info.hasData ? 'var(--ink)' : 'var(--ink-5)',
           }}
         >
           {info.hasData ? info.pct : '--'}
@@ -61,13 +56,67 @@ export default function ConfidenceDial({ confidence, exactMatch }: ConfidenceDia
         <span
           style={{
             fontFamily: 'var(--font-mono)',
-            fontSize: 'var(--fs-micro)',
-            letterSpacing: '0.14em',
-            color: 'var(--ink-6)',
-            marginTop: 1,
+            fontSize: 'var(--fs-nano)',
+            textTransform: 'uppercase',
+            letterSpacing: 'var(--tr-kicker)',
+            color: info.hasData ? info.color : 'var(--ink-5)',
           }}
         >
-          PERCENT
+          {info.hasData ? info.label : 'NO DATA'}
+        </span>
+      </span>
+    )
+  }
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        width: SIZE,
+        height: SIZE,
+        flexShrink: 0,
+        borderRadius: 'var(--radius-full)',
+        background: info.hasData
+          ? `conic-gradient(from -90deg, ${info.color} 0turn ${turn}turn, var(--meter-empty) ${turn}turn 1turn)`
+          : 'var(--meter-empty)',
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          inset: RING,
+          borderRadius: 'var(--radius-full)',
+          background: 'var(--card)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 1,
+        }}
+      >
+        <span
+          className="tabular-nums"
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--fs-hero-sm)',
+            fontWeight: 600,
+            letterSpacing: 'var(--tr-hero)',
+            lineHeight: 1,
+            color: info.hasData ? 'var(--ink)' : 'var(--ink-5)',
+          }}
+        >
+          {info.hasData ? info.pct : '--'}
+        </span>
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--fs-nano)',
+            textTransform: 'uppercase',
+            letterSpacing: 'var(--tr-kicker)',
+            color: info.hasData ? info.color : 'var(--ink-5)',
+          }}
+        >
+          {info.hasData ? info.label : 'NO DATA'}
         </span>
       </div>
     </div>
