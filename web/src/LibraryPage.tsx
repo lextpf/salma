@@ -1,24 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+
 import { useNavigate, useParams } from 'react-router-dom'
 import { listFomods } from './api'
 import { useScanJob } from './useScanJob'
 import { useSystemStatus } from './useSystemStatus'
 import { useRecordDetail } from './useRecordDetail'
-import Kicker from './comps/Kicker'
+import { useContentBreakpoints } from './useViewportNarrow'
+import Button from './comps/Button'
 import MIcon from './comps/MIcon'
-import VfsTree from './comps/library/VfsTree'
-import RecordsList from './comps/library/RecordsList'
-import Inspector from './comps/library/Inspector'
+import ModuleHeader from './comps/ModuleHeader'
+import { VRule } from './comps/Rule'
+import VfsTree from './comps/VfsTree'
+import RecordsList from './comps/RecordsList'
+import Inspector from './comps/Inspector'
 import type { FomodEntry } from './types'
 
 const RETRY_DELAY_MS = 2000
 
-// Module 02 - Library. The selection-driven triptych: a VFS tree of the selected
-// record (left), the priority-ordered records list (middle), and the record
-// inspector (right). Selection lives in the URL (/fomods/:name); the detail fetch
-// is lifted here so the tree and inspector share one load. Search, scan, and tab
-// state are local; VfsTree + Inspector remount on record change (via key) so
-// their internal state (collapsed folders, active tab) resets cleanly.
+// Module 02 - Library. The selection-driven triptych, left to right: the
+// confidence-banded records list (RecordsList), the VFS tree of the selected
+// record (VfsTree), and the record inspector (Inspector). That is reading order
+// as well as DOM order: choose a mod, see what it installs, then read why.
+//
+// The middle column is conditional. Below 950px of content width hideTree drops
+// VfsTree entirely and the row becomes two columns; see useContentBreakpoints.
+//
+// Selection lives in the URL (/fomods/:name); the detail fetch is lifted here so
+// the tree and inspector share one load. Search, scan, and tab state are local;
+// VfsTree + Inspector remount on record change (via key) so their internal state
+// (collapsed folders, active tab) resets cleanly.
 export default function LibraryPage() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
@@ -43,10 +53,10 @@ export default function LibraryPage() {
   const loadList = useCallback(
     (force = false) => {
       if (inFlightRef.current && !force) return
-      // Note: no synchronous setListLoading(true) here. The initial value is
-      // already true, and background refreshes (scan, retry) keep the current
-      // list visible rather than flashing a skeleton. The .catch path re-arms
-      // the loading flag asynchronously while retries are pending.
+      // No synchronous setListLoading(true) here. The initial value is already
+      // true, and a background refresh (scan, retry) keeps the current list
+      // visible instead of flashing a skeleton. The .catch path re-arms the
+      // loading flag asynchronously while a retry is pending.
       inFlightRef.current = true
       listFomods()
         .then(data => {
@@ -104,8 +114,19 @@ export default function LibraryPage() {
   const selectedEntry = selectedIndex >= 0 ? fomods[selectedIndex] : null
   const priority = selectedIndex >= 0 ? String(selectedIndex + 1).padStart(2, '0') : null
 
+  // The chooser folds itself once a record is picked, and the spine unfolds it.
+  // There is no explicit fold control: unfolding is something you do in order to
+  // pick, and picking folds it again, so the cycle closes on its own.
+  const [keepChooserOpen, setKeepChooserOpen] = useState(false)
+  const chooserFolded = selectedName !== null && !keepChooserOpen
+  const openChooser = useCallback(() => setKeepChooserOpen(true), [])
+
+  // Picking a mod always folds the chooser, including when it was unfolded by
+  // hand: choosing is the job the list is open for, so finishing it is the
+  // moment the width should go back to the tree and the record.
   const handleSelect = useCallback(
     (n: string) => {
+      setKeepChooserOpen(false)
       navigate(`/fomods/${encodeURIComponent(n)}`)
     },
     [navigate],
@@ -115,33 +136,33 @@ export default function LibraryPage() {
   // so VfsTree/Inspector remount (resetting collapse + tab) on every change.
   const recordKey = selectedName ?? ''
 
+  // The tree is the first thing to go when the window is docked narrow: it is
+  // a preview of the selected record, not a way to reach one.
+  const { hideTree, chipDial, compactToolbar } = useContentBreakpoints()
+
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      {/* Header (46px) */}
-      <div
-        style={{
-          height: 46,
-          flexShrink: 0,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '0 18px',
-          borderBottom: '1px solid var(--rule-soft)',
-          boxShadow: 'var(--shadow-elevation-1)',
-        }}
-      >
-        <Kicker num="02" label="Library" />
-        <span aria-hidden="true" style={{ width: 1, height: 13, background: 'var(--rule-soft)' }} />
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--fs-micro)', color: 'var(--ink-4)', whiteSpace: 'nowrap' }}>
+      <ModuleHeader num="02" label="Library">
+        <VRule height={18} />
+        <span
+          className="tabular-nums"
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--fs-label)',
+            color: 'var(--ink-5)',
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
+          }}
+        >
           {listLoading && fomods.length === 0
             ? '...'
             : `${filtered.length} ${filtered.length === 1 ? 'record' : 'records'}`}
         </span>
 
-        <div style={{ position: 'relative', width: 230, marginLeft: 6 }}>
+        <div style={{ position: 'relative', flex: '0 1 250px', minWidth: 126, marginLeft: 6 }}>
           <MIcon
             name="search"
-            size={13}
+            size={15}
             style={{
               position: 'absolute',
               left: 11,
@@ -159,13 +180,14 @@ export default function LibraryPage() {
             aria-label="Filter mods"
             style={{
               width: '100%',
-              padding: '7px 11px 7px 30px',
-              border: '1px solid var(--rule)',
-              borderRadius: 7,
-              background: 'var(--sheet)',
+              height: 30,
+              padding: '0 11px 0 32px',
+              border: '1px solid var(--rule-ctrl)',
+              borderRadius: 'var(--radius-input)',
+              background: 'var(--input)',
               color: 'var(--ink)',
               fontFamily: 'var(--font-mono)',
-              fontSize: 'var(--fs-label)',
+              fontSize: 'var(--fs-mono)',
               outline: 'none',
             }}
           />
@@ -173,46 +195,42 @@ export default function LibraryPage() {
 
         <div style={{ flex: 1 }} />
 
-        <button
-          type="button"
+        <Button
+          icon={pluginInstalled ? 'radar' : 'link_off'}
+          label={scanRunning ? 'Scanning' : 'Scan'}
           onClick={handleScanFomods}
           disabled={!pluginInstalled || scanRunning}
+          running={scanRunning}
+          variant="primary"
+          compact={compactToolbar}
           title={pluginInstalled ? 'Rescan the MO2 mods for FOMOD selections' : 'Plugin not installed'}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '7px 15px',
-            borderRadius: 7,
-            background: 'var(--ink)',
-            color: 'var(--sheet)',
-            border: '1px solid var(--ink)',
-            fontSize: 'var(--fs-body)',
-            fontWeight: 600,
-            fontFamily: 'inherit',
-            cursor: !pluginInstalled || scanRunning ? 'not-allowed' : 'pointer',
-            opacity: !pluginInstalled || scanRunning ? 0.55 : 1,
-          }}
-        >
-          {!pluginInstalled ? (
-            <MIcon name="link_off" size={13} />
-          ) : (
-            <MIcon name="radar" className={scanRunning ? 'm-spin' : undefined} size={13} />
-          )}
-          <span>{scanRunning ? 'Scanning' : 'Scan'}</span>
-        </button>
-      </div>
+        />
+      </ModuleHeader>
 
-      {/* Body (triptych) */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        <VfsTree key={`tree-${recordKey}`} outputTree={detail?.outputTree} hasSelection={selectedName !== null} />
+      {/* Body. Widths are never pinned: see useContentBreakpoints. The fill
+          lives here and no column sets a plane or a fill step of its own, so
+          the three read as one surface split by spacing. The chooser leads
+          because it is the entry point, and folds to a spine once picked. */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 22, background: 'var(--paper)' }}>
         <RecordsList
           fomods={filtered}
           selectedName={selectedName}
           onSelect={handleSelect}
           loading={listLoading}
           totalCount={fomods.length}
+          tight={chipDial}
+          collapsed={chooserFolded}
+          onExpand={openChooser}
         />
+        {!hideTree && (
+          <VfsTree
+            key={`tree-${recordKey}`}
+            outputTree={detail?.outputTree}
+            hasSelection={selectedName !== null}
+            repro={detail?.diagnostics?.repro}
+            reproDetail={detail?.reproDetail}
+          />
+        )}
         <Inspector
           key={`inspector-${recordKey}`}
           name={selectedName}
@@ -221,6 +239,7 @@ export default function LibraryPage() {
           detail={detail}
           error={detailError}
           onRetry={retryDetail}
+          tight={chipDial}
         />
       </div>
     </div>
