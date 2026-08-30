@@ -1409,10 +1409,13 @@ grep over `FomodPropagator.cpp`: `atom_index` appears only on the parameter line
   rule reads `atoms.per_plugin[flat_start + pi]` directly (forward, per-plugin),
   not the reverse index.
 
-Rust does NOT warn on unused function parameters, so both are kept un-prefixed
-(NOT `_atom_index` / `_overrides`) to preserve the exact call signature. A
-`let _ = (atom_index, overrides);` line documents the intent at the top of the
-body.
+Both are kept un-prefixed (NOT `_atom_index` / `_overrides`) to preserve the
+exact call signature. Rust DOES warn on an unused function parameter: the
+default `unused_variables` lint fires on parameters exactly as it does on
+locals. The warning is suppressed by the `let _ = (atom_index, overrides);`
+line at the top of the body, which counts as a use. That line therefore does
+two jobs: it silences the lint and it records the intent. Do not delete it
+expecting the build to stay clean.
 
 ### Doc-vs-code gap: `Required` is NOT pinned
 
@@ -1720,8 +1723,13 @@ Port of `src/FomodCSPSolver.cpp` + `src/FomodCSPSolverPhases.cpp` to
 the five phase functions across two TUs; the port folds them into one module so
 the large private helper set (rebuild_flags, evaluate_candidate, lower_bound,
 contested_signature, the backtracker, etc.) stays module-private. Only
-`solve_fomod_csp` is `pub`. The `CheckpointGuard` struct (CSP.cpp:941-978) is DEAD
-in C++ and not ported.
+`solve_fomod_csp` is `pub`. The dead C++ checkpoint struct
+(`SelectionCheckpoint`, around FomodCSPSolver.cpp:941-978) had no callers in
+either language and is not ported; only the live `save_checkpoint` lambda site
+is. Naming caveat: this document called the same struct `CheckpointGuard` here
+and `SelectionCheckpoint` in the Task 17 log-surface tables. Both spellings
+referred to one struct, and neither can be re-verified now that the C++ is
+deleted, so `SelectionCheckpoint` is used throughout.
 
 ### Entry control flow and phase short-circuits (`solve_fomod_csp`)
 
@@ -2686,6 +2694,8 @@ bytes / signed `\u`, and the depth cap (at the cap, past it, a 100k-deep hostile
 blob, and a wide-but-shallow document proving depth is per-path).
 `tests/fomod_inference_service_fixtures.rs` drives the whole orchestration over
 the committed corpus cases. The real gate remains `tools/compare_infer.py`.
+(SUPERSEDED: that fixture file, the corpus and `compare_infer.py` were all
+removed. See "Retiring the real-mod corpus".)
 
 ## Task 13 - Port the fomod_inference GoogleTest suite
 
@@ -2999,7 +3009,7 @@ Root cause, fully traced, is NOT a replay defect:
 
 Fix is to the ORACLE, not the replay (the replay is correct): the exact-case size
 assertion now byte-checks only files whose golden size the committed archive can
-actually produce (`golden_size ∈ set(archive entry sizes)`), and skips + counts
+actually produce (`golden_size in set(archive entry sizes)`), and skips + counts
 files whose golden size is unreachable. This is safe by construction - a genuine
 wrong-winner produces SOME archive size, so if the correct golden size were
 reachable the assertion still fires; only sizes NO archive source can produce are
@@ -3634,11 +3644,11 @@ deliberately.
 `build\bin\Release\`, so the Rust DLL can be deployed through the unmodified
 script by staging it there. Two hazards, both documented in CUTOVER.md: the
 override is sticky (every later `deploy.bat` keeps shipping the Rust build), and
-the repo root was NOT git-ignored for that name, so a 2.5 MB binary could have
-been committed by accident. An ANCHORED `/mo2-salma.dll` rule was added to
-`.gitignore` to close the second one; anchored specifically so it cannot hide a
-DLL elsewhere in the tree, which is the trap recorded for the old unanchored
-`logs/` pattern.
+the repo root is not git-ignored for that name, so a 2.5 MB binary can be
+committed by accident. The second hazard is still open: `.gitignore` carries no
+rule matching `mo2-salma.dll` at any anchoring. Closing it wants an ANCHORED
+`/mo2-salma.dll` rule, anchored specifically so it cannot hide a DLL elsewhere
+in the tree, which is the trap recorded for the old unanchored `logs/` pattern.
 
 ### Tests
 
@@ -3734,7 +3744,9 @@ would not otherwise re-run when the plugin changes.
 
 The corpus-backed gates deliberately stay out of CI: `compare_infer.py` and
 `run_harness.py` need the mod archives and the C++ oracle DLL, neither of which
-exists on a clean runner.
+exists on a clean runner. (SUPERSEDED in part: `compare_infer.py` was removed
+with the corpus; `run_harness.py` moved to `scripts/` and still stays out of CI
+for the same reason. See "Retiring the real-mod corpus".)
 
 `lint.yaml` became `eslint.yaml`, named for the tool it actually runs, and
 gained a `web/**` path filter. It was already scoped to `web/` by
@@ -3989,10 +4001,9 @@ regenerated either.
 ### What replaced them
 
 Nothing in the repo, deliberately. Validation against real mods now happens only
-against a live MO2 instance, through `tools/run_harness.py`, `test_all.py` and
+against a live MO2 instance, through `scripts/run_harness.py`, `test_all.py` and
 `test_one.py --full`, all of which read from `SALMA_MODS_PATH` and write nothing
-back. `tools/gen_golden.py` still builds a corpus under `tests/golden/full/`,
-which `.gitignore` keeps local.
+back.
 
 Suite size went 594 -> 533. The remainder is self-contained: 524 inline unit
 tests plus `tests/inference_diagnostics_test.rs`. The C++ side is unaffected at
@@ -4002,12 +4013,66 @@ Historical parity evidence is not lost, only frozen: the 197-fixture, 0 DIVERGE
 runs recorded in this document were real, and were produced while both engines
 and the corpus existed.
 
-### Tools that had to be told
+### Finishing the job: the generator and the local corpus
 
-`compare_infer.py --curated` read the committed cases and now exits with an
-explanation instead of silently iterating an empty directory and reporting a
-clean run over zero fixtures. `gen_golden.py curate` is annotated that anything
-it writes is local-only.
+The first pass removed the COMMITTED cases but left the machinery that produced
+them, on the reasoning that `tests/golden/full/` was gitignored and therefore
+harmless. That reasoning was wrong in one respect: gitignoring controls what
+leaves the machine, not what the repo invites you to create. `gen_golden.py`
+existed to point at a real mod list and write 198 files describing it, and
+`compare_infer.py` existed to read them. Keeping a generator whose only output
+is a corpus nobody may commit is an instruction to produce exactly the artifact
+the previous section deleted.
+
+So both are gone, along with the local `tests/golden/full/` corpus they had
+already produced (198 files, 3.3 MB, untracked and unrecoverable by design):
+
+| Removed | Was |
+| --- | --- |
+| `tools/gen_golden.py` | corpus generator: walked `SALMA_MODS_PATH`, ran the DLL per mod, wrote a fixture + `manifest.json` |
+| `tools/compare_infer.py` | the parity gate over that corpus; its `--curated` half was already dead |
+| `tests/golden/**` | the generated corpus, plus the `.gitignore`, `.gitattributes` and `sonar.exclusions` rules that described it |
+
+Nothing in `cargo test` referenced any of it: `tests/` holds no golden paths and
+`src/*.rs` mentions the corpus only in doc comments explaining WHY a given
+behavior reproduces the C++, which stay. Those comments are the surviving record
+of what the corpus proved, and they name no mod.
+
+The `--baseline` guard in `run_harness.py` (see "The oracle is gone") is
+deliberately NOT removed. It still refuses to stage
+`build/bin/Release/mo2-salma.dll` as a C++ baseline, which is now the Rust
+engine; that trap outlived the corpus.
+
+### `tools/` folded into `scripts/`
+
+Two directories of Python with no rule separating them: `scripts/` held the MO2
+plugin and the harness helpers, `tools/` held packaging, the smoke tests and the
+corpus machinery. With the corpus machinery deleted, what was left in `tools/`
+was packaging and smoke tests, which are neither more nor less "tooling" than
+`scripts/install.py`. The directory is gone and its four survivors moved:
+
+| From | To |
+| --- | --- |
+| `tools/package.py` | `scripts/package.py` |
+| `tools/run_harness.py` | `scripts/run_harness.py` |
+| `tools/smoke_ctypes.py` | `scripts/smoke_ctypes.py` |
+| `tools/smoke_plugin.py` | `scripts/smoke_plugin.py` |
+
+The move needed no code change. Every one of them derives the repo root as
+`Path(__file__).resolve().parent.parent`, and `scripts/` sits at the same depth
+as `tools/` did, so the path arithmetic is unchanged. None of them imported from
+`scripts/`, so no import cycle appears now that they live inside it, and none
+manipulates `sys.path`, so `scripts/` being a namespace package is irrelevant to
+them.
+
+One consequence did need handling. `CMakeLists.txt` installs `scripts/` into the
+DASHBOARD component with a blanket `install(DIRECTORY)`, so the move would have
+shipped four build-time scripts inside the release ZIP, where their
+`parent.parent` resolves to the unpacked `dashboard/` directory and means
+nothing. They are excluded by `PATTERN`, leaving the bundle exactly as it was.
+The `POST_BUILD copy_directory` into `build/bin/Release/scripts` does copy them,
+because `cmake -E copy_directory` has no exclude; that is a local build output,
+not a shipped artifact.
 
 ### If this ever needs redoing
 
@@ -4016,3 +4081,69 @@ METADATA (`case.json`) rather than in the file names, so a scan of directory
 listings understated it. And the test files themselves had absorbed mod
 identifiers into assertion tables, far from the fixtures, so deleting the
 corpus alone would have left them behind.
+
+## Per-file reproduction detail (`reproDetail`)
+
+A deliberate divergence from the C++ schema, added for the Library's virtual
+output tree. The C++ engine never emitted this key; nothing in the port had to
+match, so this is new surface rather than a parity fix.
+
+### Why it exists
+
+`diagnostics.repro` says HOW MANY dests were missing, extra, size-mismatched or
+hash-mismatched. It has never said WHICH. The engine knew - that is how it
+counts them - but `compare_trees_impl` holds each diverging `dest` for exactly
+one stack frame, passes it to a gating predicate, increments an `i32` and drops
+it. `outputTree` entries carry only `path`, `size` and `source`, so the UI was
+given four totals and no way to attribute them. `VfsTree.tsx` documented this
+and deliberately refused to mark rows rather than guess.
+
+### What was added
+
+- `DestStatus` + `classify_dests` in `fomod_forward_simulator.rs`.
+- `add_repro_detail` in `fomod_inference_atoms.rs`, emitting a top-level
+  `reproDetail` object of four path arrays keyed by the same names
+  `diagnostics.repro` counts under.
+- Both `infer_selections` and the Tier-1 cache path call it, so the key is
+  always present.
+
+### Why `collect_mismatched_dests` was left alone
+
+It looks like the same function and is not. It collapses all four categories
+into one `HashSet`, because its four callers in `fomod_csp_solver.rs` ask "which
+dests are wrong, so which groups do I retarget" and want a flat set. They also
+depend on its ordering. `classify_dests` is a second walk that keeps the
+category; the duplication is intentional and cheaper than giving the solver a
+richer type it does not use.
+
+### The invariant that keeps it honest
+
+`classify_dests` copies the else-chain from `compare_trees_impl` verbatim: a
+size mismatch SUPPRESSES the hash check, and a zero size or zero hash on either
+side falls through to reproduced. It also honours the same `excluded` set. If
+the two ever drift, the per-file marks would contradict the `repro` counts in
+the same payload. `classify_dests_agrees_with_compare_trees` asserts each bucket
+is exactly as large as the counter of the same name, and two further tests pin
+the suppression and fall-through rules.
+
+### Consequences for the UI
+
+`outputTree` is built from the SIMULATED tree, so a MISSING file has no row to
+colour - it is a file the installed mod has and the inferred selection never
+writes. The frontend grafts those paths in as `absent` rows (struck through, no
+size) rather than the engine injecting them into `outputTree`, which would
+silently change the meaning of a field three call sites read as "what this mod
+installs". The footer tally and byte total still count only real entries.
+
+### Schema version
+
+`schema_version` stays 2. The key is additive and old readers ignore it. Records
+written before this change simply lack it and show no marks until re-inferred;
+by explicit decision there is no back-compat path, and a rescan is the remedy.
+
+### Caps
+
+`reproDetail` shares `MAX_OUTPUT_TREE_ENTRIES` (5000) as its path budget, with
+`truncated` / `total` markers mirroring `outputTreeTruncated` / `outputTreeTotal`.
+Past that point the tree those paths would mark is itself capped, so more paths
+would mark nothing.
