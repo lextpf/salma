@@ -1,101 +1,70 @@
-# Cutover: swapping the C++ `mo2-salma.dll` for the Rust build
+# Cutover: deploying the engine DLL to MO2
 
-How to deploy the Rust engine in place of the C++ one, how to verify it took,
-and how to get back. Read the [Status](#status) and
-[Before you cut over](#before-you-cut-over) sections first: there is one open
-issue that should gate the decision.
+How to put a freshly built `mo2-salma.dll` into a live MO2 install, prove which
+build is running, and get back to the previous one. Read
+[Before you deploy](#before-you-deploy) first: one open issue should gate the
+decision. [Cutover record](#cutover-record) holds the state the engine was
+signed off in.
 
-Detailed parity findings live in [PARITY-NOTES.md](PARITY-NOTES.md), organised
-by task.
+`PARITY-NOTES.md` carries the detailed behavior notes this page summarises.
 
-## Status
+## Before you deploy
 
-The Rust DLL (`mo2_salma_rs.dll`) exports the same eight C ABI symbols as the
-C++ `mo2-salma.dll`, and all eight are backed by real engine code.
+### Check the build
 
-| Area | State |
-| --- | --- |
-| `getApiVersion`, `freeResult` | parity |
-| `inferFomodSelections` | parity: 197 corpus fixtures, 0 DIVERGE |
-| `install`, `installWithConfig` | parity: 16/16 identical install trees vs the C++ DLL |
-| `resolveModArchive` | parity |
-| `installSucceeded` | parity (reproduces the CODE predicate, not the header's) |
-| `setLogCallback` + `logs/salma.log` | parity; `[archive]` lines name this build's real backends, see below |
+Four things exercise a build before it reaches MO2:
 
-Evidence, all reproducible from this repo:
-
-- `cargo test --release` - 594 tests, 0 failures.
-- `python tools/compare_infer.py target/release/mo2_salma_rs.dll --curated`
-  - 1 EXACT / 15 METRICS_EQUAL / 0 DIVERGE. Full corpus: 197 fixtures, 0 DIVERGE.
-- `python tools/run_harness.py` - the repo's own `test_all.py` over the corpus:
-  56 tested, 56 passed, 0 failed, and **zero per-mod disagreements** against the
-  C++ baseline. The byte-for-byte content compare is ON by default (`--no-full`
-  turns it off), so all 56 are byte-exact, not just metric-equal. The harness
-  SHA-256-verifies which DLL actually loaded.
-- `python tools/smoke_ctypes.py target/release/mo2_salma_rs.dll` - raw
-  ABI surface.
-- `python tools/smoke_plugin.py` - the MO2 plugin's OWN `find_dll` /
+- `cargo test --release` - the engine suite.
+- `python scripts/smoke_ctypes.py target/release/mo2_salma_rs.dll` - the raw ABI
+  surface: eight exports, the version string, one owned string freed through
+  `freeResult`.
+- `python scripts/smoke_plugin.py` - the MO2 plugin's own `find_dll` /
   `load_dll` / `_configure_dll` / `_check_api_version`, run verbatim against the
   packaged DLL. 12 checks.
-
-## Before you cut over
+- `python scripts/run_harness.py` - the round-trip harness (`test_all.py`)
+  against a live MO2 install. The byte-for-byte content compare is on by default
+  (`--no-full` turns it off), and the harness verifies by SHA-256 which DLL
+  actually loaded.
 
 ### Blocker: memory use on archives that expand enormously
 
-The C++ streams contested archive entries to disk through bit7z; the Rust
-backends buffer whole entries in memory. On a real corpus mod
-(`Zaki Tattoos General 8K Addon`, 43 MB compressed, >63 GB expanded) this was
-measured at **39.4 GB resident and still climbing** before the run was killed.
+The archive backends buffer whole entries in memory rather than streaming them
+to disk. On one corpus mod (`Zaki Tattoos General 8K Addon`, 43 MB compressed,
+over 63 GB expanded) this reached 39.4 GB resident and was still climbing when
+the run was killed.
 
-The C++ degrades into a disk-space failure that its own `disk_full_encountered`
-guard converts into a clean `Install aborted` error. The Rust has **no
-equivalent guard for memory** and would take the host process (MO2) down with
-it. See PARITY-NOTES "Task 16".
+There is no memory guard on that path, so the failure mode is the host process
+(MO2) dying, not an error message. Ordinary FOMOD mods are unaffected: the risk
+is specific to archives whose uncompressed size dwarfs available RAM. Judge it
+against your own mod list. See `PARITY-NOTES.md`.
 
-Judge this against your own corpus. Ordinary FOMOD mods are unaffected; the
-risk is specific to archives whose uncompressed size dwarfs available RAM.
+### Logging
 
-### Slower
+The mechanism is fixed and matches what MO2 users already expect: the log file
+sits next to the DLL, lines are
+`YYYY-MM-DD HH:MM:SS.mmm LEVEL message` with INFO, WARNING and ERROR levels,
+rotation is at 10 MiB keeping `salma.log.1` through `.3`, a registered callback
+replaces file logging for as long as it stays registered, and a re-entrancy
+guard protects the callback path.
 
-End to end the port is **~1.57x slower** than the C++ (inference 1.57x, install
-replay 1.86x) over 52 tested mods. Correct, just slower. Two known causes are
-recorded in PARITY-NOTES (Tasks 9 and 11) and neither has been profiled.
+Coverage spans all fourteen engine modules, including the `[infer]` 0/9-to-9/9
+pipeline narrative and the `[solver]` phase narrative with its progress bar.
 
-### Logging: complete, with `[archive]` lines naming different libraries
+`[archive]` lines name the crate that actually ran: `zip`, `sevenz_rust2` or
+`unrar`. Keep them honest, because any other library named there would be a
+backend this DLL does not link.
 
-The logging MECHANISM is at parity: same file location (next to the DLL), same
-`YYYY-MM-DD HH:MM:SS.mmm LEVEL message` format, same INFO/WARNING/ERROR tags,
-same 10 MiB rotation keeping `salma.log.1`-`.3`, same callback routing (a
-registered callback REPLACES file logging), same re-entrancy guard.
-
-Message coverage is complete across all fourteen engine modules, including the
-full `[infer]` 0/9-to-9/9 pipeline narrative and the `[solver]` phase narrative
-with its tqdm-style progress bar. MO2's log window shows what it always did.
-
-One deliberate difference is user-visible. The C++ `[archive]` lines name their
-backends ("via bit7z", "falling back to libarchive"); this build links neither,
-so those lines name the crate that actually ran instead - `zip`, `sevenz_rust2`
-or `unrar`. The line shapes and tags are unchanged. Emitting the C++ strings
-verbatim would have made the DLL report libraries it does not contain. Lines
-describing machinery this port has no equivalent for (the `7z.dll` discovery
-narrative, libarchive's per-entry write warnings, the bit7z-to-libarchive
-fallback) are simply not emitted.
-
-That substitution is also the most reliable way to tell WHICH engine a deployed
-DLL is, since `getApiVersion` reports `1.2.0` on both: grep `logs/salma.log` for
-`via sevenz_rust2` (Rust) versus `via bit7z` (C++).
-
-The full exception list - sites with no counterpart, and sites whose trailing
-text differs because the C++ interpolates an exception's `what()` - is in
-PARITY-NOTES "Task 17".
+That wording is also the reliable way to tell a current DLL from a pre-cutover
+one, since `getApiVersion` reports `1.2.0` on both: grep `logs/salma.log` for
+`via sevenz_rust2` (current) against `via bit7z` (pre-cutover).
 
 ### Other accepted divergences
 
 Non-ASCII paths, XML strictness, `.001` multi-volume archives, and several
-reproduced C++ bugs. All catalogued in PARITY-NOTES under "Task 15 - accepted
-divergences" and the per-task divergence sections.
+odd-looking behaviors reproduced on purpose. All catalogued in
+`PARITY-NOTES.md`.
 
-## Cutover
+## Deploying
 
 ### 1. Build and stage
 
@@ -105,22 +74,22 @@ divergences" and the per-task divergence sections.
 
 Formats, lints, builds release, and stages `target\package\mo2-salma.dll`,
 printing its SHA-256. The rename from `mo2_salma_rs.dll` happens in
-`package.py` and only there: during the parity phase the two names are kept
-distinct so a stray copy can never be mistaken for the C++ build.
+`package.py` and only there, so a file under the deploy name has provably been
+through that step.
 
-To stage without the fmt/clippy/build steps (an existing release build):
-
-```powershell
-python tools\package.py --no-build
-```
-
-### 2. Back up the deployed C++ DLL
+To stage an existing release build without the fmt, clippy and build steps:
 
 ```powershell
-copy "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll" "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll.cpp-backup"
+python scripts\package.py --no-build
 ```
 
-Do not skip this. It is the rollback.
+### 2. Back up the deployed DLL
+
+```powershell
+copy "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll" "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll.backup"
+```
+
+Do not skip this. That copy is the rollback.
 
 ### 3. Deploy
 
@@ -128,10 +97,19 @@ Do not skip this. It is the rollback.
 .\deploy.bat
 ```
 
-`deploy.bat` now prefers `target\package\mo2-salma.dll` over the C++
-`build\bin\Release\mo2-salma.dll`, so a plain run ships the Rust engine and also
-refreshes `scripts\mo2-salma.py` in the plugins directory. It prints a cutover
-warning before copying.
+`deploy.bat` requires `SALMA_DEPLOY_PATH`; run `setup.bat` once if it is unset.
+It copies the DLL to `%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll` and the Python
+plugin to `%SALMA_DEPLOY_PATH%\mo2-salma.py`.
+
+It takes the DLL from one of two sources, in this order:
+
+1. `target\package\mo2-salma.dll` - the artifact `scripts\package.py` stages.
+2. `build\bin\Release\mo2-salma.dll` - the copy CMake places next to
+   `mo2-server.exe`, which is source 1 as it stood at the last C++ build. Same
+   engine, possibly older.
+
+Deleting the staged artifact does not select a different engine: it falls back
+to an older copy of the same DLL, or fails when that copy is absent.
 
 The equivalent direct copy, if you want to leave the Python plugin alone:
 
@@ -139,36 +117,27 @@ The equivalent direct copy, if you want to leave the Python plugin alone:
 copy /Y target\package\mo2-salma.dll "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll"
 ```
 
-**To deploy the C++ build instead**, delete or rename the staged Rust artifact
-first, since it takes precedence:
-
-```powershell
-del target\package\mo2-salma.dll
-.\deploy.bat
-```
-
-A `mo2-salma.dll` at the REPO ROOT still overrides both sources. That path is
-git-ignored by an anchored `/mo2-salma.dll` rule so a 2.5 MB binary cannot be
-committed by accident, but only that exact path is covered: a copy under any
-other name or directory is still visible to `git add`.
+A `mo2-salma.dll` at the repository root overrides both sources, and nothing
+ignores it: `.gitignore` carries no rule matching that name at any anchoring, so
+a DLL staged there shows up as untracked and a 2.5 MB binary can be committed by
+accident. Check `git status` before committing after a root-override deploy, or
+add an anchored `/mo2-salma.dll` rule to close the hole for that exact path.
 
 ### 4. Verify it took
 
 ```powershell
-python tools\smoke_plugin.py --dll "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll"
+python scripts\smoke_plugin.py --dll "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll"
 ```
 
-Then confirm by hash and by log, which is what actually distinguishes the two
-builds - `getApiVersion` reports `1.2.0` on BOTH and proves nothing on its own:
+Then confirm by hash and by log. `getApiVersion` reports `1.2.0` for every build
+of the engine and proves nothing on its own.
 
 - **Hash**: compare the deployed file's SHA-256 against the one `package.py`
   printed.
 - **Log**: delete `%SALMA_DEPLOY_PATH%\salma\logs\salma.log`, run an install
-  from MO2, and check the new file. Both engines write the same format, so read
-  the CONTENT: the Rust build currently emits the install skeleton
-  (`=== Starting mod installation ===`, `Archive:`, `Extracting archive...`,
-  `Moving unfomod files...`) but none of the `[fomod]`-tagged per-plugin lines
-  the C++ emits. Their absence is the Rust build; their presence is the C++.
+  from MO2, and read the new file. The format alone does not identify a build,
+  so look at the archive backend named on the `[archive]` lines, as described
+  under [Logging](#logging).
 
 ### 5. Smoke test in MO2
 
@@ -179,27 +148,52 @@ silent wrong answer there is the thing to watch for.
 ## Rollback
 
 ```powershell
-copy /Y "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll.cpp-backup" "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll"
+copy /Y "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll.backup" "%SALMA_DEPLOY_PATH%\salma\mo2-salma.dll"
 ```
 
-Or rebuild and redeploy the C++ side, which is untouched by this branch:
+The backup you took in step 2 is the only rollback this repository can perform.
+`CMakeLists.txt` defines `salma-support`, `mo2-server` and `salma_tests`, and no
+target that produces an engine DLL, so there is nothing here to rebuild an
+older engine from. Going further back means checking out an earlier commit in a
+separate working tree and building there.
 
-```powershell
-cmake --build build --config Release --target mo2-core
-.\deploy.bat
-```
+Restart MO2 after any swap. The plugin caches the loaded DLL handle for the
+lifetime of the process (`_dll_cache` in `scripts/mo2-salma.py`), so a file
+replaced on disk has no effect until the host restarts. Windows also keeps the
+loaded DLL locked, so a deploy over a running MO2 fails outright.
 
-Restart MO2 either way: the plugin caches the loaded DLL handle for the
-process's lifetime (`_dll_cache` in `scripts/mo2-salma.py`), so a swap on disk
-does not take effect until the host restarts.
+## Cutover record
 
-## What is NOT covered
+The table records how each export was signed off when this engine replaced its
+predecessor. It is a record, not a suite you can re-run: the fixture corpus and
+the comparison gate behind these numbers are both gone.
 
-- `mo2-server.exe` and `salma_tests.exe` link the C++ `mo2core` symbols
-  directly. The Rust cdylib exports only the 8 C entry points, not the 88
-  mangled C++ ones, so it is a drop-in for the **MO2 Python plugin only**. The
-  server and the GoogleTest binary still need the C++ build.
-- Corpus mods 301-309 were not exercised by the round-trip harness; both
-  engines stop at the archive described under [Blocker](#blocker-memory-use-on-archives-that-expand-enormously).
-- The port has not been run inside MO2 itself in this repo's automation; the
+| Export | State at sign-off |
+| --- | --- |
+| `getApiVersion`, `freeResult` | parity |
+| `inferFomodSelections` | parity over 197 corpus fixtures, no divergence |
+| `install`, `installWithConfig` | parity: 16 of 16 identical install trees |
+| `resolveModArchive` | parity |
+| `installSucceeded` | parity with the predicate the old engine ran, which its own header described inaccurately |
+| `setLogCallback` and `logs/salma.log` | parity, except that `[archive]` lines name this build's real backends (see [Logging](#logging)) |
+
+End to end the engine measured about 1.57x slower than the one it replaced
+(inference 1.57x, install replay 1.86x) over 52 mods. Correct, just slower. Two
+suspected causes are recorded in `PARITY-NOTES.md` and neither has been profiled.
+
+## What this does not cover
+
+- Drift between `mo2-server.exe` and the DLL. The cdylib is the engine for every
+  consumer, not only the MO2 plugin: `mo2-server.exe` and `salma_tests.exe` both
+  compile `src/SalmaEngine.cpp`, which loads `mo2-salma.dll` at runtime with
+  `LoadLibraryW` and binds the same eight C exports the Python plugin uses.
+  Neither binary links engine symbols; `mo2-server` links only `salma-support`,
+  Crow and nlohmann-json. The server and the DLL are therefore separate files
+  that can run different versions, and deploying to MO2 does not touch the
+  server's copy. `run.bat` byte-compares the copy beside `mo2-server.exe`
+  against `target\package\mo2-salma.dll` and warns when they differ.
+- Mods 301-309 of the cutover corpus were never exercised by the round-trip
+  harness; the run stops at the archive described under
+  [Blocker](#blocker-memory-use-on-archives-that-expand-enormously).
+- Nothing in this repository's automation runs the engine inside MO2 itself. The
   plugin-loader path is verified headlessly by `smoke_plugin.py`.
