@@ -1,18 +1,11 @@
-# Doxide Configuration for salma
-# https://doxide.org
+# @brief configure C++ API generation for the server and support library.
+# @author Alex (https://github.com/lextpf)
+#
 
 title: salma
-description: Crow HTTP server and support library behind the salma dashboard
+description: the Crow server and support library behind the salma dashboard
 
-# This config covers the C++ ONLY: the Crow server and the salma-support static
-# library. The engine is Rust and documents itself through rustdoc, which
-# build.bat step 7 renders into site/rust/. Do not add engine groups here; there
-# is no C++ engine left to attach them to.
-#
-# Every group below MUST have at least one `@ingroup <Name>` in src/*.{hpp,cpp}.
-# Twelve groups describing the deleted C++ engine were removed for exactly that
-# reason: they had outlived their code and doxide silently generated nothing for
-# them, while mkdocs.yml's nav went on pointing at the pages that never appeared.
+# each group needs a matching `@ingroup` entry in a C++ header.
 output: docs
 
 defines:
@@ -25,40 +18,40 @@ files:
 groups:
   - name: Core
     title: ":material-cube: Core"
-    description: Logging and shared support types linked into the server.
+    description: logging and shared support types linked into the server.
     groups:
       - name: Logger
         title: Logger
-        description: Thread-safe logging with external callback support.
+        description: thread-safe logging with external callback support.
       - name: Utils
         title: Utils
-        description: Shared string, path, hashing, and path-safety helpers.
+        description: string, path, hash, and path-safety helpers.
       - name: SecurityContext
         title: SecurityContext
-        description: Per-process CSRF token and the Origin allowlist.
+        description: per-process CSRF token and Origin allowlist.
 
   - name: Server
     title: ":material-server: Server"
-    description: Crow HTTP server, REST controllers, and static file serving.
+    description: Crow server, REST controllers, and static file serving.
     groups:
       - name: InstallationController
         title: InstallationController
-        description: REST endpoints for upload, install, and status.
+        description: upload, install, and status endpoints.
       - name: MultipartHandler
         title: MultipartHandler
-        description: Multipart form-data parsing and file saving.
+        description: multipart form-data parsing and file storage.
       - name: StaticFileHandler
         title: StaticFileHandler
-        description: Static file serving for the React SPA.
+        description: static file serving for the React SPA.
       - name: ConfigService
         title: ConfigService
-        description: Singleton configuration manager for salma.json.
+        description: settings stored in salma.json.
       - name: Mo2Controller
         title: Mo2Controller
-        description: REST endpoints for MO2 integration dashboard.
+        description: MO2 dashboard endpoints.
       - name: SecurityMiddleware
         title: SecurityMiddleware
-        description: Crow middleware enforcing the Origin allowlist and CSRF header.
+        description: Origin and CSRF enforcement for Crow.
       - name: Mo2Helpers
         title: Mo2Helpers
-        description: Shared response, decoding, and path helpers for the MO2 controllers.
+        description: response, decoding, and path helpers for MO2 controllers.
