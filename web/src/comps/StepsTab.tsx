@@ -68,7 +68,7 @@ function Mark({ on }: { on: boolean }) {
   )
 }
 
-// include selection state in the title because the marker is decorative.
+// Include selection state in the title because the marker is decorative.
 function OptionLine({ name, on }: { name: string; on: boolean }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
@@ -167,7 +167,7 @@ function GroupRow({ group, index }: { group: NormalizedGroup; index: number }) {
               display: 'flex',
               alignItems: 'center',
               gap: 5,
-              // prevent the block parent from stretching the button.
+              // Prevent the block parent from stretching the button.
               width: 'fit-content',
               marginTop: 4,
               marginLeft: -6,
