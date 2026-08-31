@@ -16,7 +16,7 @@ interface FacetChipProps {
   onClick: () => void
 }
 
-// omit an inline background so stylesheet hover state remains effective.
+// Omit an inline background so stylesheet hover state remains effective.
 function FacetChip({ label, count, share, on, onClick }: FacetChipProps) {
   return (
     <button
@@ -81,7 +81,7 @@ function FacetChip({ label, count, share, on, onClick }: FacetChipProps) {
 }
 
 export default function SubsystemFacets({ facets, active, total, onToggle, onClear }: SubsystemFacetsProps) {
-  // normalize mini-bars against the largest subsystem, not the total.
+  // Normalize mini-bars against the largest subsystem, not the total.
   const facetMax = Math.max(1, ...facets.map(f => f.count))
 
   return (
