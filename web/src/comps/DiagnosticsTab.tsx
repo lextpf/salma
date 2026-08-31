@@ -10,9 +10,9 @@ interface KvEntry {
   v: string
   color?: string
   /**
-   * @brief normalized bar share.
+   * @brief Normalized bar share.
    *
-   * values are in [0, 1].
+   * Values are in [0, 1].
    */
   share?: number
   bar?: string
@@ -97,7 +97,7 @@ export default function DiagnosticsTab({ diagnostics }: DiagnosticsTabProps) {
 
   const { repro, groups, timings_ms: timings, confidence } = diagnostics
 
-  // include all compared files in the reproduction-rate denominator.
+  // Include all compared files in the reproduction-rate denominator.
   const accounted =
     repro.reproduced + repro.missing + repro.extra + repro.size_mismatch + repro.hash_mismatch
   const rate = accounted > 0 ? repro.reproduced / accounted : 0
@@ -132,7 +132,7 @@ export default function DiagnosticsTab({ diagnostics }: DiagnosticsTabProps) {
     },
   ]
 
-  // report time outside measured stages as `other`.
+  // Report time outside measured stages as `other`.
   const measured = timings.list + timings.scan + timings.solve
   const other = Math.max(0, timings.total - measured)
   const denom = Math.max(1, timings.total)
