@@ -1,4 +1,6 @@
-# salma clang-tidy configuration.
+# @brief configure static analysis for project C++ sources.
+# @author Alex (https://github.com/lextpf)
+#
 
 Checks: >
   -*,
@@ -91,20 +93,15 @@ Checks: >
   readability-uniqueptr-delete-release,
   readability-use-anyofallof
 
-# Warnings print but only tool errors (bad config, missing file)
-# exit non-zero. Flip to '*' once the code is clean against the checks above.
+# findings do not fail the tool; configuration errors still fail.
 WarningsAsErrors: ''
 
-# Never diagnose system headers (crow, gtest, the MSVC stdlib). The default,
-# stated explicitly so it survives a tooling change.
+# exclude dependency and standard-library headers.
 SystemHeaders: false
 
-# Project headers only, matching clang-format's HeaderFilter; anything under
-# vcpkg_installed/ is excluded.
+# limit header findings to project C++ sources.
 HeaderFilterRegex: '^.*[\\/]src[\\/][^\\/]+\.(hpp|cpp)$'
 
-# PascalCase files and types, snake_case functions and variables,
-# trailing _ on members, g_ on globals, UPPER_SNAKE or kCamel constants.
 CheckOptions:
   - key: readability-identifier-length.MinimumVariableNameLength
     value: 1
