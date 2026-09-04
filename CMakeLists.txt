@@ -1,19 +1,19 @@
+# @brief build and package the C++ server and support library.
+# @author Alex (https://github.com/lextpf)
+#
+
 cmake_minimum_required(VERSION 3.20)
 project(salma VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Ask for compile_commands.json. Only the Ninja and Makefile generators honour this, and the
-# default preset uses the Visual Studio generator, so build/ has none: clangd falls back to
-# .clangd, and `cmake --preset compile-db` is the Ninja sidecar that emits a real one.
+# only the Ninja `compile-db` preset writes `compile_commands.json`.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 enable_testing()
 
-# The C++ here is the Crow dashboard server plus the shared helpers mo2-server and salma_tests
-# link. The engine is mo2-salma.dll, built from the Rust crate at the repo root and reached
-# through src/SalmaEngine.cpp.
+# the C++ targets load the separately built Rust engine through `SalmaEngine.cpp`.
 
 find_package(nlohmann_json CONFIG REQUIRED)
 
@@ -30,8 +30,6 @@ target_include_directories(salma-support
 target_link_libraries(salma-support
     PRIVATE nlohmann_json::nlohmann_json
 )
-
-# --- mo2-server (executable) ---
 
 find_package(Crow CONFIG REQUIRED)
 
@@ -66,8 +64,6 @@ set_target_properties(mo2-server PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-# --- salma_tests (Google Test) ---
-
 find_package(GTest CONFIG REQUIRED)
 include(GoogleTest)
 
@@ -92,10 +88,6 @@ gtest_discover_tests(salma_tests
     PROPERTIES TIMEOUT 60
 )
 
-# --- Copy test suite + scripts next to the exe ---
-
-# The output dir varies by config: bin/Release, bin/Debug, etc.
-# Use a generator expression so the files land beside the actual exe.
 set(OUTDIR "$<TARGET_FILE_DIR:mo2-server>")
 
 add_custom_command(TARGET mo2-server POST_BUILD
@@ -113,12 +105,8 @@ add_custom_command(TARGET mo2-server POST_BUILD
     COMMENT "Copying test suite and scripts to output directory"
 )
 
-# mo2-server and salma_tests both load mo2-salma.dll from their own directory and both land in
-# build/bin/<config>, so this one copy serves both. It hangs off mo2-server, so a build that
-# targets salma_tests alone (build presets tests-only and ci-tests) skips it and every SalmaEngine
-# test fails on ensure_loaded(). CMake does not build the DLL; it is the Rust artifact staged by
-# `python scripts/package.py`, and the EXISTS check below runs at configure time, so staging it
-# later needs a reconfigure.
+# both binaries load the DLL beside the executable. a tests-only build skips this server hook.
+# stage `target/package/mo2-salma.dll` before configure because `EXISTS` is evaluated then.
 if(EXISTS "${CMAKE_SOURCE_DIR}/target/package/mo2-salma.dll")
     add_custom_command(TARGET mo2-server POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -132,17 +120,8 @@ else()
         "next to mo2-server.exe by hand.")
 endif()
 
-# --- Release bundle: install layout + CPack ZIP ---
-#
-# Two CPack components combine into one salma-mo2-<ver>.zip:
-#   - MO2_PLUGIN: drops into <MO2 instance>/plugins/ (mo2-salma.py + salma/*)
-#   - DASHBOARD:  mo2-server, web/dist and the helper scripts. The engine DLL is
-#                 not duplicated here: copy plugins/salma/mo2-salma.dll next to
-#                 mo2-server.exe or the server loads no engine.
-#
-# src/capi.rs owns the version: MO2_SALMA_API_VERSION is what the engine reports over the ABI and
-# what names the release zip. project()'s 1.0.0 above is not used for packaging. Changing the
-# constant's spelling fails configure below.
+# CPack puts the MO2 plugin and dashboard in one archive. the engine is not duplicated.
+# `MO2_SALMA_API_VERSION` owns the package version. its spelling is part of this parser contract.
 file(READ "${CMAKE_SOURCE_DIR}/src/capi.rs" _capi_rs_content)
 string(REGEX MATCH "MO2_SALMA_API_VERSION:[ \t]*&str[ \t]*=[ \t]*\"([0-9]+\\.[0-9]+\\.[0-9]+)\""
        _ver_match "${_capi_rs_content}")
@@ -157,14 +136,11 @@ file(WRITE "${CMAKE_BINARY_DIR}/VERSION" "${SALMA_API_VERSION}\n")
 install(FILES "${CMAKE_SOURCE_DIR}/scripts/mo2-salma.py"
         DESTINATION plugins
         COMPONENT MO2_PLUGIN)
-# The plugin DLL is the RUST artifact, which CMake does not build. Staged by
-# `python scripts/package.py` into target/package/mo2-salma.dll and installed from
-# there when present, so `cpack` still produces a complete MO2_PLUGIN bundle.
+# install the separately staged Rust artifact when it is present.
 install(FILES "${CMAKE_SOURCE_DIR}/target/package/mo2-salma.dll"
         DESTINATION plugins/salma
         COMPONENT MO2_PLUGIN
         OPTIONAL)
-# DASHBOARD component
 install(TARGETS mo2-server
         RUNTIME DESTINATION dashboard
         COMPONENT DASHBOARD)
@@ -172,9 +148,7 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/web/dist/"
         DESTINATION dashboard/web/dist
         COMPONENT DASHBOARD
         OPTIONAL)
-# The dashboard bundle ships the harness helpers common.py, scan.py, install.py and the compare.py
-# CLI. The excludes below drop build-time scripts that only work inside a source tree;
-# _clean_docs.py and _promote_subgroups.py are doc-site tooling and currently ship too.
+# ship runtime helpers, but omit source-tree packaging and smoke tools.
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/scripts/"
         DESTINATION dashboard/scripts
         COMPONENT DASHBOARD
@@ -194,7 +168,6 @@ install(FILES
         DESTINATION dashboard
         COMPONENT DASHBOARD)
 
-# Top-level metadata: VERSION always, README if present.
 install(FILES "${CMAKE_BINARY_DIR}/VERSION"
         DESTINATION .
         COMPONENT MO2_PLUGIN)
@@ -209,5 +182,5 @@ set(CPACK_PACKAGE_NAME "salma-mo2")
 set(CPACK_PACKAGE_VERSION "${SALMA_API_VERSION}")
 set(CPACK_PACKAGE_FILE_NAME "salma-mo2-${SALMA_API_VERSION}")
 set(CPACK_COMPONENTS_ALL MO2_PLUGIN DASHBOARD)
-set(CPACK_ARCHIVE_COMPONENT_INSTALL OFF)   # one zip containing both components
+set(CPACK_ARCHIVE_COMPONENT_INSTALL OFF)   # one archive contains both components
 include(CPack)
