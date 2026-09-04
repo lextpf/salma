@@ -1,31 +1,3 @@
-// Utils - the server half of salma's shared string, path and path-safety
-// helpers. The engine keeps its own copy in src/utils.rs; this file holds only
-// what mo2-server and salma-support use. Where the two screen the same value
-// they have to agree (see is_safe_mod_name below).
-//
-// Two path vocabularies live here. Do not mix them:
-//
-//   normalize_path / is_safe_destination / normalize_destination_for_join
-//     take mod-root-relative FOMOD destinations: lowercase strings with '/'
-//     separators. They never touch the filesystem. normalize_path is the single
-//     place where lowercasing, separator conversion, prefix and suffix
-//     stripping, slash collapsing and "." / ".." removal happen, in that order.
-//     Everything else here assumes it already ran.
-//
-//   is_inside / executable_directory / module_directory
-//     take real filesystem paths, touch the filesystem (weakly_canonical,
-//     GetModuleFileNameW) and preserve case.
-//
-// Case convention: normalize_path lowercases, which is right on Windows and is
-// what the FOMOD comparison layer expects. is_inside compares weakly_canonical
-// results without lowercasing, because the Windows filesystem is already
-// case-insensitive.
-//
-// Failure convention: nothing here throws to reject input. The path-safety
-// predicates return false when they cannot prove the input safe, and the
-// directory lookups fall back to the current working directory when the
-// platform call fails. Allocation failure still propagates.
-
 #include "Utils.hpp"
 
 #include <algorithm>
@@ -45,18 +17,7 @@ namespace mo2core
 namespace
 {
 
-// Resolve the parent directory of the file backing `hMod`. Pass nullptr to
-// query the host executable. Returns an empty path on lookup failure, and
-// callers then fall back to the working directory.
-//
-// GetModuleFileNameW does not report the size it needs: on truncation it
-// returns the buffer length it just filled. The buffer therefore starts at
-// MAX_PATH and doubles while the API keeps filling it exactly, capped at 5
-// retries (260 * 32 = 8320 wide chars) so the loop is bounded.
-//
-// The success test is `retries < kMaxRetries`, so a path that first fits on the
-// fifth doubling is discarded along with one that never fits. Both return an
-// empty path.
+// double the module-path buffer at most five times. return empty on truncation.
 std::filesystem::path module_path_for(HMODULE hMod)
 {
     std::wstring buf(MAX_PATH, L'\0');
@@ -83,8 +44,7 @@ std::filesystem::path module_path_for(HMODULE hMod)
 std::string to_lower(const std::string& s)
 {
     std::string out = s;
-    // Unsigned char cast is required - std::tolower is undefined for negative values
-    // from plain char on MSVC.
+    // std::tolower is undefined for a negative plain char.
     std::transform(
         out.begin(), out.end(), out.begin(), [](unsigned char c) { return std::tolower(c); });
     return out;
@@ -94,15 +54,15 @@ std::string normalize_path(const std::string& p)
 {
     std::string out = to_lower(p);
     std::replace(out.begin(), out.end(), '\\', '/');
-    // Strip leading "./" or "/" prefixes that some archivers emit
+    // strip prefixes emitted by some archivers.
     while (out.starts_with("./"))
         out = out.substr(2);
     while (out.starts_with("/"))
         out = out.substr(1);
-    // Strip trailing "/"
+    // strip the trailing separator.
     while (out.ends_with("/"))
         out.pop_back();
-    // Single-pass collapse of consecutive slashes
+    // collapse consecutive separators in one pass.
     {
         std::string collapsed;
         collapsed.reserve(out.size());
@@ -115,7 +75,7 @@ std::string normalize_path(const std::string& p)
         out = std::move(collapsed);
     }
 
-    // Remove "." and ".." path components to prevent directory traversal
+    // remove traversal components.
     {
         std::vector<std::string> parts;
         size_t start = 0;
@@ -144,17 +104,8 @@ std::string normalize_path(const std::string& p)
 std::string random_hex_string(size_t length)
 {
     static const char hex[] = "0123456789abcdef";
-    // Two callers in this binary: MultipartHandler::save_uploaded_file, for the
-    // upload temp filename, and SecurityContext, for the 64-hex-char CSRF
-    // token. Uploads run on Crow worker threads and can overlap, so one shared
-    // engine would need a lock and would serialize them. thread_local gives
-    // each worker its own engine, seeded once per thread from std::random_device.
-    //
-    // mt19937 is a general-purpose generator, not a cryptographic one: given
-    // enough consecutive output an observer can recover its state and predict
-    // the rest. Neither caller hands a remote party a sequence of values, so
-    // nothing here depends on unpredictability. Do not reuse this function for
-    // a secret an attacker can sample repeatedly.
+    // keep one generator per worker to avoid serialization. MT19937 is not
+    // cryptographically secure; do not use this output as a sampled secret.
     thread_local std::mt19937 rng{std::random_device{}()};
     std::uniform_int_distribution<int> dist(0, 15);
 
@@ -180,8 +131,7 @@ std::string_view plugin_type_to_string(PluginType type)
 
 std::string normalize_destination_for_join(std::string destination)
 {
-    // FOMOD destinations are mod-root-relative. Values like "\" or "/"
-    // mean "root", not an absolute filesystem path.
+    // FOMOD treats a separator-only destination as the mod root.
     while (!destination.empty() && (destination.front() == '\\' || destination.front() == '/'))
     {
         destination.erase(destination.begin());
@@ -218,19 +168,8 @@ bool is_safe_destination(const std::string& dest)
     if (dest.empty())
         return true;
     auto norm = normalize_path(dest);
-    // normalize_path strips every "." and ".." segment, so no traversal
-    // sequence survives into `norm`. An input made only of those segments
-    // normalizes to empty, which is safe: it resolves to the mod root.
-    //
-    // Only the drive-letter test is live. normalize_path also strips every
-    // leading '/', so `norm.front() == '/'` is never true and an absolute POSIX
-    // path is re-anchored under the mod root rather than rejected:
-    // is_safe_destination("/etc/passwd") returns true, having seen
-    // "etc/passwd". That is intended. FOMOD destinations are mod-root-relative,
-    // and normalize_destination_for_join strips leading separators again before
-    // any join, so a re-anchored path cannot escape the mod directory. The '/'
-    // disjunct stays as a guard in case normalize_path ever stops stripping the
-    // prefix.
+    // normalization removes traversal and reanchors a leading POSIX separator.
+    // reject drive-qualified Windows paths; retain the slash guard if normalization changes.
     if (norm.empty())
         return true;
     if (norm.front() == '/' || (norm.size() >= 2 && norm[1] == ':'))
@@ -243,8 +182,7 @@ bool is_safe_mod_name(const std::string& name)
     if (name.empty())
         return false;
 
-    // Reject leading/trailing whitespace. Windows trims trailing whitespace
-    // in CreateFile, which would mask the input the user actually supplied.
+    // reject whitespace that Windows can trim during file creation.
     auto is_ws = [](unsigned char c) { return std::isspace(c) != 0; };
     if (is_ws(static_cast<unsigned char>(name.front())) ||
         is_ws(static_cast<unsigned char>(name.back())))
@@ -252,29 +190,22 @@ bool is_safe_mod_name(const std::string& name)
         return false;
     }
 
-    // Reject path separators and absolute paths (drive letters, leading slash).
+    // reject separators and absolute paths.
     if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos)
         return false;
     if (std::filesystem::path(name).is_absolute())
         return false;
 
-    // Reject "." and "..".
+    // reject dot directory names.
     if (name == "." || name == "..")
         return false;
 
-    // Reject trailing '.' (CreateFile strips it silently on Windows).
+    // reject a trailing dot that Windows can strip.
     if (name.back() == '.')
         return false;
 
-    // Reject Windows reserved device names. Compare against the lowercase stem
-    // (everything before the final '.'), so "CON", "con" and "CON.txt" are all
-    // rejected.
-    //
-    // Keep this list identical to `RESERVED_NAMES` in
-    // src/installation_service.rs (22 entries), which the engine applies to
-    // moduleName. The server screens modName first and the engine re-validates,
-    // so a name missing here is still rejected, but as an engine error instead
-    // of the 400 the dashboard expects.
+    // compare the lowercase stem so names such as CON.txt remain reserved.
+    // keep this list synchronized with RESERVED_NAMES in installation_service.rs.
     static const std::unordered_set<std::string> kReservedNames = {
         "con",  "prn",  "aux",  "nul",  "com1", "com2", "com3", "com4", "com5", "com6", "com7",
         "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
