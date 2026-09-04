@@ -14,8 +14,8 @@ function systemTheme(): Theme {
 
 /**
  * @fn ThemeProvider({ children }: { children: ReactNode }): React.JSX.Element
- * @brief preserve system mode as a preference distinct from its resolved theme.
- * @author Alex (https://github.com/lextpf)
+ * @brief Preserve system mode as a preference distinct from its resolved theme.
+ * @author Alex (<https://github.com/lextpf>)
  *
  */
 export function ThemeProvider({ children }: { children: ReactNode }) {
