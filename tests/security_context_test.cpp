@@ -4,26 +4,6 @@
 
 #include <algorithm>
 
-// Unit tests for the CORS and CSRF policy primitives in src/SecurityContext.cpp.
-//
-// SecurityMiddleware makes the decisions, but the predicates behind them live in
-// salma-support so they can be tested without linking Crow. The rules pinned
-// here are the ones the middleware depends on:
-//   - the allowlist match is byte-exact, so scheme, host case and port all have
-//     to agree, and an empty Origin never matches;
-//   - only POST, PUT, DELETE and PATCH count as state-changing, so an unknown
-//     method is treated as safe and skips the CSRF check;
-//   - constant_time_equals is binary-safe and, on two inputs of equal length,
-//     compares every byte with no early exit, so a token comparison cannot leak
-//     which byte differed. It does return early on a length mismatch, which
-//     reveals the length and nothing else.
-//
-// The singleton tests have to tolerate SALMA_ALLOWED_ORIGINS being set in the
-// environment: it is read once at construction and replaces the defaults, and
-// the singleton cannot be reset. No test may assume the defaults are in force.
-
-// --- default_allowed_origins ---
-
 TEST(DefaultAllowedOrigins, IncludesProductionAndViteOrigins)
 {
     auto defaults = mo2core::default_allowed_origins();
@@ -33,8 +13,6 @@ TEST(DefaultAllowedOrigins, IncludesProductionAndViteOrigins)
     EXPECT_NE(std::ranges::find(defaults, "http://localhost:3000"), defaults.end());
     EXPECT_NE(std::ranges::find(defaults, "http://127.0.0.1:3000"), defaults.end());
 }
-
-// --- parse_origin_list ---
 
 TEST(ParseOriginList, EmptyInputReturnsEmpty)
 {
@@ -71,8 +49,6 @@ TEST(ParseOriginList, DropsEmptyEntries)
     EXPECT_EQ(out[1], "http://b");
 }
 
-// --- origin_in_allowlist ---
-
 TEST(OriginInAllowlist, MatchesExact)
 {
     std::vector<std::string> allow{"http://localhost:5000", "http://127.0.0.1:5000"};
@@ -82,8 +58,7 @@ TEST(OriginInAllowlist, MatchesExact)
 
 TEST(OriginInAllowlist, RejectsCaseMismatch)
 {
-    // Browsers send Origin lowercase, and the comparison is byte-exact, so a
-    // mixed-case Origin must not match a lowercase allowlist entry.
+    // origin matching is byte-exact.
     std::vector<std::string> allow{"http://localhost:5000"};
     EXPECT_FALSE(mo2core::origin_in_allowlist(allow, "http://LocalHost:5000"));
 }
@@ -111,8 +86,6 @@ TEST(OriginInAllowlist, EmptyAllowlistRejectsEverything)
     std::vector<std::string> allow;
     EXPECT_FALSE(mo2core::origin_in_allowlist(allow, "http://localhost:5000"));
 }
-
-// --- is_state_changing ---
 
 TEST(IsStateChanging, PostPutDeletePatchAreStateChanging)
 {
@@ -142,8 +115,6 @@ TEST(IsStateChanging, UnknownMethodIsSafe)
     EXPECT_FALSE(mo2core::is_state_changing("FROBNICATE"));
 }
 
-// --- constant_time_equals ---
-
 TEST(ConstantTimeEquals, EqualStringsReturnTrue)
 {
     EXPECT_TRUE(mo2core::constant_time_equals("hello", "hello"));
@@ -172,8 +143,6 @@ TEST(ConstantTimeEquals, BinarySafeOnNonAscii)
     EXPECT_FALSE(mo2core::constant_time_equals(a, c));
 }
 
-// --- SecurityContext ---
-
 TEST(SecurityContextSingleton, TokenIs64HexChars)
 {
     const auto& token = mo2core::SecurityContext::instance().csrf_token();
@@ -189,8 +158,7 @@ TEST(SecurityContextSingleton, TokenIs64HexChars)
 TEST(SecurityContextSingleton, IsOriginAllowedDelegates)
 {
     auto& ctx = mo2core::SecurityContext::instance();
-    // With SALMA_ALLOWED_ORIGINS unset, the singleton carries the four
-    // defaults and the exact expectations below hold.
+    // the environment can replace defaults before singleton construction.
     if (ctx.allowed_origins() == mo2core::default_allowed_origins())
     {
         EXPECT_TRUE(ctx.is_origin_allowed("http://localhost:5000"));
@@ -199,8 +167,7 @@ TEST(SecurityContextSingleton, IsOriginAllowedDelegates)
     }
     else
     {
-        // The environment replaced the defaults, so check only that the
-        // delegation works against whatever was loaded.
+        // validate delegation against the configured list.
         for (const auto& origin : ctx.allowed_origins())
         {
             EXPECT_TRUE(ctx.is_origin_allowed(origin));
