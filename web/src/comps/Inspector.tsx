@@ -19,7 +19,7 @@ interface InspectorProps {
   tight?: boolean
 }
 
-// conflict views require MO2 VFS data that the backend does not expose.
+// Conflict views require MO2 VFS data that the backend does not expose.
 type TabId = 'steps' | 'diagnostics'
 
 const TAB_ITEMS: { id: TabId; label: string }[] = [
@@ -27,7 +27,7 @@ const TAB_ITEMS: { id: TabId; label: string }[] = [
   { id: 'diagnostics', label: 'Diagnostics' },
 ]
 
-// keep this CSS-pixel height synchronized with `RecordsList` and `VfsTree`.
+// Keep this CSS-pixel height synchronized with `RecordsList` and `VfsTree`.
 const HEAD_H = 34
 
 const LABEL_STYLE = {
@@ -106,7 +106,7 @@ function PlaceholderBody({ children }: { children: ReactNode }) {
 }
 
 export default function Inspector({ name, priority, entry, detail, error, onRetry, tight = false }: InspectorProps) {
-  // detail state is lifted so the sibling tree shares the request.
+  // Detail state is lifted so the sibling tree shares the request.
   const [tab, setTab] = useState<TabId>('steps')
 
   if (!name) {
