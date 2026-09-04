@@ -20,25 +20,16 @@ namespace mo2server
 {
 
 /**
- * @brief Build a crow::response with a JSON body and Content-Type header.
- * @ingroup Mo2Helpers
+ * @fn crow::response json_response(int code, const nlohmann::json& j)
+ * @brief can fail when native path bytes are not valid UTF-8.
+ * @author Alex (https://github.com/lextpf)
  *
- * The body is `j.dump()`: compact, no indentation, no trailing newline.
- * The header is `application/json` with no `charset` parameter.
+ * serialization uses strict UTF-8 validation and can raise
+ * `nlohmann::json::type_error` for a native Windows path.
  *
- * `dump()` runs with nlohmann's strict UTF-8 error handler, so a string
- * inside @p j that is not valid UTF-8 throws
- * `nlohmann::json::type_error`. That path is reachable: on Windows
- * `std::filesystem::path::string()` returns the native narrow encoding,
- * which is not guaranteed to be UTF-8. A handler that puts a path into a
- * response body and does not catch `std::exception` lets the throw
- * escape into Crow.
- *
- * @param code HTTP status code. Not validated.
- * @param j JSON body to serialize via `dump()`.
- * @return Crow response with `Content-Type: application/json`.
- * @throw nlohmann::json::type_error When @p j holds a string that is not
- *        valid UTF-8.
+ * @param code HTTP status code.
+ * @param j value to serialize.
+ * @return response with an `application/json` content type.
  */
 inline crow::response json_response(int code, const nlohmann::json& j)
 {
@@ -48,35 +39,16 @@ inline crow::response json_response(int code, const nlohmann::json& j)
 }
 
 /**
- * @brief Decode an `application/x-www-form-urlencoded` string.
- * @ingroup Mo2Helpers
+ * @fn std::string url_decode(const std::string& src)
+ * @brief keeps malformed escapes and removes encoded null bytes.
+ * @author Alex (https://github.com/lextpf)
  *
- * Implements the HTML form-encoding superset of RFC 3986 percent
- * decoding:
+ * `%XX` becomes one byte, `+` becomes a space, malformed escapes remain, and
+ * encoded null bytes are removed. literal null bytes remain. output is not
+ * validated as UTF-8 or as a safe path.
  *
- * - `%XX` sequences decode to bytes, hex digits in either case.
- * - `+` becomes a space. That is form encoding, not strict RFC 3986, so
- *   a caller decoding an RFC 3986 path component has to pre-filter `+`
- *   or use a strict decoder.
- * - Percent-encoded null bytes (`%00`) are dropped silently. A literal
- *   0x00 byte already in @p src is copied through unchanged, so a caller
- *   that hands the result to a C-string consumer has to screen it
- *   itself.
- * - A malformed `%XX` (too few characters, or a non-hex digit) is left
- *   in place verbatim.
- *
- * The result is a byte string. Decoded bytes are neither validated as
- * UTF-8 nor normalized, so the output can hold any byte. A caller that
- * builds a filesystem path from the result still needs its own
- * containment check; `get_fomod` and `delete_fomod` use
- * `mo2core::is_inside` for exactly that.
- *
- * Allocation aside, the decoder cannot fail: no input is rejected and no
- * error is reported.
- *
- * @param src URL-encoded input string.
- * @return Decoded string. Free of percent-encoded NULs, but not of a NUL
- *         the input carried literally.
+ * @param src encoded byte string.
+ * @return decoded byte string.
  */
 inline std::string url_decode(const std::string& src)
 {
@@ -105,19 +77,6 @@ inline std::string url_decode(const std::string& src)
     return out;
 }
 
-/**
- * @brief Trim leading and trailing whitespace from a string.
- * @ingroup Mo2Helpers
- *
- * Whitespace is whatever `std::isspace` reports for the current C
- * locale, tested one byte at a time, so multi-byte characters are not
- * understood. The caller is the `meta.ini` reader in
- * Mo2FomodController.cpp, whose input is ASCII key/value text.
- *
- * @param s Input string.
- * @return A new string with leading/trailing whitespace removed. An
- *         all-whitespace input yields an empty string.
- */
 inline std::string trim_copy(const std::string& s)
 {
     size_t start = 0;
@@ -136,31 +95,14 @@ inline std::string trim_copy(const std::string& s)
 #ifdef _WIN32
 /**
  * @struct HandleGuard
- * @brief RAII owner for one Win32 HANDLE.
+ * @brief owns one valid Win32 handle.
  * @author Alex (https://github.com/lextpf)
  * @ingroup Mo2Helpers
  *
- * Closes `h` in the destructor when it is not null, so an early return
- * or an exception cannot leak the handle. Assign the handle straight to
- * the public member after the Win32 call that produced it.
+ * destruction closes a non-null handle. `release` transfers ownership. the type
+ * is neither copyable nor movable.
  *
- * Ownership rules:
- *
- * - The guard closes exactly one handle, once.
- * - `release()` hands the handle back to the caller and clears the
- *   member, so the destructor then does nothing. Use it when the handle
- *   has to outlive the scope, such as a process handle kept for later
- *   polling.
- * - Copy is deleted and no move operations are declared, so the guard is
- *   neither copyable nor movable. It cannot be returned by value or
- *   stored in a container.
- * - Only a null `h` is skipped. `INVALID_HANDLE_VALUE` does not count as
- *   empty, so never assign it to the member.
- *
- * Windows only, and currently unreferenced: the two spawn sites
- * (Mo2PluginController.cpp and Mo2TestController.cpp) manage their
- * handles by hand because one of the handles has to survive the
- * function.
+ * @warning never assign `INVALID_HANDLE_VALUE`; only null is treated as empty.
  */
 struct HandleGuard
 {
@@ -183,78 +125,28 @@ struct HandleGuard
 #endif
 
 /**
- * @brief Resolve the MO2 plugin deploy path from config/env.
- * @ingroup Mo2Helpers
+ * @fn std::filesystem::path resolve_deploy_path(const std::string& mo2_mods_path)
+ * @brief gives SALMA_DEPLOY_PATH precedence over derived paths.
+ * @author Alex (https://github.com/lextpf)
  *
- * Reads two environment variables and does pure path arithmetic. It
- * touches no file and creates no directory.
+ * `SALMA_DEPLOY_PATH` wins when set. otherwise the function uses the parameter,
+ * then `SALMA_MODS_PATH`, and derives `<mods>/../../MO2/plugins`. the result is
+ * not canonicalized, created, or checked for existence.
  *
- * Resolution order:
- *
- * 1. `SALMA_DEPLOY_PATH` if non-empty, returned verbatim.
- * 2. The `mo2_mods_path` parameter if non-empty.
- * 3. `SALMA_MODS_PATH` if step 2 was empty.
- *
- * With a mods path from step 2 or 3, the deploy path is
- * `{mods_path.parent_path().parent_path()} / "MO2" / "plugins"`. The
- * walk climbs two levels, out of the mods directory and out of the MO2
- * directory that holds it, then descends back into `MO2/plugins`, which
- * is why the literal `MO2` segment reappears in the result. README.md
- * states the same rule as `<mods_path>/../../MO2/plugins`.
- *
- * Worked example for the standard layout:
- *
- * ```text
- * SALMA_DEPLOY_PATH unset
- * mo2_mods_path      = D:/Games/MO2/mods
- *   parent_path()   -> D:/Games/MO2
- *   parent_path()   -> D:/Games
- * result             = D:/Games/MO2/plugins
- *
- * plugin_installed_at() then probes:
- *   D:/Games/MO2/plugins/salma/mo2-salma.dll
- *   D:/Games/MO2/plugins/mo2-salma.py
- * ```
- *
- * Failure logs `[server] Cannot determine plugin deploy path` at error
- * level and returns an empty path. Two distinct inputs reach it:
- *
- * - Neither `SALMA_DEPLOY_PATH` nor a mods path (parameter or
- *   `SALMA_MODS_PATH`) is set.
- * - A mods path is set but has fewer than two parent levels, so the
- *   two-level walk yields an empty path. In practice that means a
- *   relative path with fewer than three components, such as `mods` or
- *   `MO2/mods`. An absolute path always keeps its root, so it never
- *   reaches this branch.
- *
- * The returned path is not validated: not canonicalized, not checked for
- * existence, not created. Callers probe it themselves, usually with
- * `plugin_installed_at`.
- *
- * @param mo2_mods_path Configured MO2 mods directory (may be empty).
- * @return Resolved deploy path, or an empty path on either failure
- *         above.
+ * @param mo2_mods_path configured mods directory, or empty.
+ * @return the derived directory, or an empty path when no usable input exists.
  */
 std::filesystem::path resolve_deploy_path(const std::string& mo2_mods_path);
 
 /**
- * @brief Check whether the Salma plugin is installed at the given deploy path.
- * @ingroup Mo2Helpers
+ * @fn bool plugin_installed_at(const std::filesystem::path& deploy_path)
+ * @brief requires both the DLL and Python entry point.
+ * @author Alex (https://github.com/lextpf)
  *
- * Reports installed only when both `<deploy_path>/salma/mo2-salma.dll`
- * and `<deploy_path>/mo2-salma.py` exist, so a half-deployed directory
- * reports false. Existence is the only test: neither file is opened,
- * hashed or version-checked, so a stale DLL still reports installed.
+ * this tests existence only. filesystem failures are logged and return `false`.
  *
- * An empty @p deploy_path short-circuits to false without touching the
- * filesystem. That is the normal result when `resolve_deploy_path`
- * failed.
- *
- * @param deploy_path Path to the MO2 plugins directory.
- * @return `true` if both plugin files exist, `false` otherwise. A
- *         filesystem exception (for example a permissions error) is
- *         caught, logged as a warning, and reported as `false`; it
- *         never propagates.
+ * @param deploy_path MO2 plugin directory, or empty.
+ * @return `true` when both `salma/mo2-salma.dll` and `mo2-salma.py` exist.
  */
 bool plugin_installed_at(const std::filesystem::path& deploy_path);
 
