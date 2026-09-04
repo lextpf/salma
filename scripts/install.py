@@ -1,19 +1,10 @@
-"""Install a single mod using a JSON config.
+"""
+@brief install one archive from recorded FOMOD selections.
+@author Alex (https://github.com/lextpf)
 
-Library function:
-    install_mod(archive, output_dir, json_path, dll=None) -> str
-
-CLI:
-    python scripts/install.py <archive> <output_dir> <json_path> [--dll PATH]
-
-Replays a FOMOD install into `output_dir` using the selections in `json_path`,
-and prints whatever the DLL returns. The exit code is always 0, a failed install
-included: failure travels in the returned text and in the separate
-installSucceeded() flag, and this script inspects neither.
-
-Precondition: SALMA_MODS_PATH and SALMA_DEPLOY_PATH must be set even when
---dll is given. Importing scripts.common reads them and exits 2 if either is
-missing, before argparse runs.
+the command exits 0 even when the DLL reports failure. it does not call
+`installSucceeded()`. importing `scripts.common` requires `SALMA_MODS_PATH` and
+`SALMA_DEPLOY_PATH`, including when `--dll` is set.
 """
 
 from pathlib import Path
@@ -26,15 +17,13 @@ from scripts.common import call_owned_string, find_dll, load_dll
 
 def install_mod(archive: Path, output_dir: Path, json_path: Path,
                 dll=None) -> str:
-    """Call installWithConfig. Returns the DLL's result string.
+    """
+    @fn install_mod(archive: Path, output_dir: Path, json_path: Path, dll=None) -> str
+    @brief return the ambiguous install path or error text from the DLL.
+    @author Alex (https://github.com/lextpf)
 
-    That string is the install path on success and an error message on failure;
-    only ``installSucceeded()`` tells the two apart, and this function does not
-    check it.
-
-    Goes through ``call_owned_string`` so the C-side ``_strdup`` buffer is
-    freed. Calling the export directly with ``restype = c_char_p`` leaks the
-    result pointer on every call.
+    install_mod does not call `installSucceeded()`. `call_owned_string` frees
+    the DLL allocation after copying it.
     """
     if dll is None:
         dll = load_dll(find_dll())
