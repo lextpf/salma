@@ -12,10 +12,10 @@ interface State {
 
 /**
  * @class ErrorBoundary
- * @brief isolate render failures from the dashboard shell.
- * @author Alex (https://github.com/lextpf)
+ * @brief Isolate render failures from the dashboard shell.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * pages handle asynchronous and event errors.
+ * Pages handle asynchronous and event errors.
  */
 export default class ErrorBoundary extends Component<Props, State> {
   state: State = { hasError: false, error: null }
