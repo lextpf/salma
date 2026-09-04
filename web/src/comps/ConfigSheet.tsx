@@ -140,7 +140,7 @@ function Select<T extends string>({
   onChange: (v: T) => void
   ariaLabel: string
 }) {
-  // mirror native focus onto the visible chrome over the transparent select.
+  // Mirror native focus onto the visible chrome over the transparent select.
   const [ring, setRing] = useState(false)
   return (
     <span
@@ -265,10 +265,10 @@ export default function ConfigSheet({
   valid,
   saveMessage,
 }: ConfigSheetProps) {
-  // only `mo2ModsPath` persists on the server. other settings are browser-local.
+  // Only `mo2ModsPath` persists on the server. Other settings are browser-local.
   const { mode, setMode, theme } = useTheme()
 
-  // an empty path means not configured, not invalid.
+  // An empty path means not configured, not invalid.
   const pathState = modsPath.trim().length === 0
     ? { icon: 'remove', tone: 'var(--ink-5)', text: 'not set' }
     : !valid
@@ -277,7 +277,7 @@ export default function ConfigSheet({
         ? { icon: 'check_circle', tone: 'var(--moss)', text: 'exists' }
         : { icon: 'warning', tone: 'var(--brass)', text: 'not found' }
 
-  // report the saved path, not the edit buffer.
+  // Report the saved path, not the edit buffer.
   const resolvedState = config.mo2ModsPath.trim().length === 0
     ? { text: 'not set', tone: 'var(--ink-5)' }
     : config.mo2ModsPathValid
@@ -291,7 +291,7 @@ export default function ConfigSheet({
     { k: 'fomod output', v: config.fomodOutputDir || 'not derived yet' },
     { k: 'config file', v: 'salma.json' },
     { k: 'persisted key', v: 'mo2ModsPath' },
-    // the API does not expose the resolved `SALMA_BIND_ADDR` value.
+    // The API does not expose the resolved `SALMA_BIND_ADDR` value.
     { k: 'bind address', v: '127.0.0.1:5000' },
     { k: 'log file', v: 'logs/salma.log' },
     { k: 'theme mode', v: mode === 'system' ? `system (${theme})` : mode },
