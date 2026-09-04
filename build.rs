@@ -1,9 +1,9 @@
-//! Build script for `mo2_salma_rs`.
-//!
-//! `unrar_sys` compiles the bundled unRAR C sources but leaves their Win32
-//! linkage to the downstream crate, so supply it here or the final link fails
-//! with ~13 LNK2019 errors. Windows-only, gated on `CARGO_CFG_TARGET_OS`
-//! because a build script must test the target, not the host `cfg!`.
+/*!
+ * @brief link the Win32 libraries required by unrar_sys.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * unrar_sys does not declare these libraries. the target OS gate supports cross-compilation.
+ */
 
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
