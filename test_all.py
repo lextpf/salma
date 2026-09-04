@@ -1,52 +1,21 @@
-"""FOMOD round-trip test over every installed mod.
+"""
+@brief run FOMOD round-trip checks for installed MO2 mods.
+@author Alex (https://github.com/lextpf)
 
-For each mod with an archive in meta.ini: infer FOMOD selections, reinstall into
-a temp folder through installWithConfig, then compare the produced file tree
-against the mod as installed. A mismatch means inference or install replay has a
-bug.
+each check infers a configuration, installs into a temporary directory, and compares the trees.
+`compare_trees` owns the exclusions for files that the archive cannot reproduce.
 
-Two classes of reported failure are not inference bugs. Rule both out before
-investigating a diff:
+### :material-cog-outline: configuration and logs
 
-  - Installed files that exist nowhere in the archive. A mod folder can hold
-    content its own archive never shipped: files merged in from another mod,
-    hand-edited additions, or anything written into the folder after install.
-  - Files rewritten at runtime, such as the empty .log placeholders a script
-    extender plugin truncates on load. IGNORED_FILES in scripts/common.py drops
-    four basenames from both trees: meta.ini, mo_salma.log, salma-install.log
-    and mujointfix.log. The set is fixed, with no pattern or extension rule, so
-    any other runtime-rewritten file a mod ships is still reported and has to be
-    added there by hand. meta.ini is in the set for its own reason: MO2 writes
-    it after the install, so no archive can produce it.
+`SALMA_MODS_PATH` and `SALMA_DEPLOY_PATH` must be set before import. use
+`scripts/run_harness.py` to force the current DLL. each run replaces `test.log`. a failed install
+can leave its temporary configuration in `%TEMP%`.
 
-The first class is suppressed automatically where the evidence allows it.
-compare_trees receives the archive and drops differences the archive cannot
-explain; read its docstring for the three rules and the 7-Zip precondition they
-depend on.
+### :material-check-circle-outline: results and cleanup
 
-Environment variables:
-  SALMA_MODS_PATH      - mods directory (required)
-  SALMA_DEPLOY_PATH    - MO2 plugins dir (required)
-  SALMA_DOWNLOADS_PATH - downloads dir for resolving relative archive paths
-
-Usage:
-  python test_all.py [--no-full] [--limit N] [--separator NAME]
-
-  --no-full         Skip the byte-for-byte content compare (faster, weaker).
-                    The compare is on by default; --full turns it back on.
-  --limit N         Stop after N mods reach the inference stage. Mods skipped
-                    for a missing archive do not count; mods skipped because
-                    inference returned empty do (0 = all, default: all)
-  --separator NAME  Only test mods under the given separator in modlist.txt
-
-Exits 1 if any mod failed or the run died, 0 otherwise, and 2 when importing
-scripts.common finds SALMA_MODS_PATH or SALMA_DEPLOY_PATH unset, before argparse
-runs. Every run truncates and rewrites test.log next to this script: the console
-gets INFO lines, that file gets DEBUG lines. Each mod is reinstalled into a fresh
-temporary directory that is removed afterwards, so nothing under SALMA_MODS_PATH
-is modified. The selections file is written beside that directory as
-<tmpdir>_config.json and is deleted once the install returns; an install that
-raises leaves its copy behind in %TEMP%.
+exit status 0 means all checks passed. status 1 means a check or the run failed. status 2 means a
+required path was unset during import. each check removes its install directory and does not modify
+`SALMA_MODS_PATH`.
 """
 
 import argparse
@@ -67,10 +36,6 @@ from scripts.common import (
 from scripts.scan import scan
 from scripts.install import install_mod
 
-
-# ---------------------------------------------------------------------------
-# Logging - console gets INFO, test.log gets DEBUG with the ANSI colors stripped
-# ---------------------------------------------------------------------------
 
 LOG_FILE = Path(__file__).with_name("test.log")
 SALMA_LOG = Path(__file__).with_name("logs") / "salma.log"
@@ -111,17 +76,7 @@ def log_debug(msg: str):
 
 
 def log_salma(msg: str):
-    """Append one INFO line to logs/salma.log in the engine logger's format.
-
-    The line is `YYYY-MM-DD HH:MM:SS.mmm LEVEL message`, the same shape
-    src/logger.rs writes, so a marker dropped here reads as an ordinary engine
-    line. No caller in this script uses it.
-
-    Writes to logs/salma.log next to this script, which is the engine's log file
-    only when the loaded DLL also sits in this directory. With a deployed or a
-    staged DLL the engine logs beside that DLL instead, and these markers land in
-    a separate file. Appends, and fails if the directory does not exist.
-    """
+    # the local path can differ from the engine log when the DLL is elsewhere.
     from datetime import datetime
     now = datetime.now()
     ts = now.strftime("%Y-%m-%d %H:%M:%S") + f".{now.microsecond // 1000:03d}"
@@ -144,16 +99,11 @@ def status_line(label: str, status: str, detail: str = "",
 
 
 def normalize_install_result(value: str) -> str:
-    """Make install result log-friendly (plain path/text)."""
     text = value.strip()
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
         text = text[1:-1]
     return text.replace("\\\\", "\\")
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="FOMOD round-trip test")
@@ -161,19 +111,18 @@ def main():
         "--full",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Compare file contents byte-for-byte (default: enabled)",
+        help="compare file contents byte-for-byte (default: enabled)",
     )
     parser.add_argument("--limit", type=int, default=0,
-                        help="Stop after N mods reach the inference stage; "
+                        help="stop after N mods reach the inference stage; "
                              "mods skipped for a missing archive don't count, "
                              "mods skipped for empty inference do "
                              "(0 = all, default: all)")
     parser.add_argument("--separator", type=str, default=None, metavar="NAME",
-                        help="Only test mods under the given separator in "
+                        help="only test mods under the given separator in "
                              "modlist.txt (e.g. CUSTOM)")
     args = parser.parse_args()
 
-    # Parse separator mods if requested
     separator_mods: set[str] | None = None
     if args.separator:
         separator_mods = parse_separator_mods(args.separator)
@@ -188,18 +137,15 @@ def main():
         for m in sorted(separator_mods)[:10]:
             log_debug(f"  separator mod: {m!r}")
 
-    # Locate and load DLL
     dll_path = find_dll()
     log(f"DLL: {dll_path}")
     lib = load_dll(dll_path)
 
-    # Enumerate mod folders that have archives in meta.ini
     mod_folders = sorted(
         d for d in MODS_PATH.iterdir()
         if d.is_dir() and get_archive_path(d)
     )
 
-    # Apply separator filter before counting
     if separator_mods is not None:
         mod_folders = [d for d in mod_folders if d.name in separator_mods]
 
@@ -224,7 +170,6 @@ def main():
         label = f"[{i}/{total}] {mod_name}"
         log_debug(f"--- {label} ---")
 
-        # Resolve archive
         raw_archive = get_archive_path(mod_folder)
         archive = resolve_archive(raw_archive)
         if archive is None:
@@ -235,7 +180,6 @@ def main():
             skipped += 1
             continue
 
-        # Check if we've hit the test limit (skips don't count)
         if args.limit > 0 and tested >= args.limit:
             break
 
@@ -244,12 +188,10 @@ def main():
 
         tested += 1
 
-        # Scan -> install -> compare
         tmp = tempfile.mkdtemp(prefix="salma_test_")
         try:
             t0 = time.perf_counter()
 
-            # Step 1: infer FOMOD selections
             log_debug(f"  [scan] Starting FOMOD inference...")
             json_str = scan(archive, mod_folder, dll=lib)
             t_scan = time.perf_counter() - t0
@@ -267,12 +209,11 @@ def main():
                 f"({len(json_str)} chars, {t_scan:.1f}s)",
             ))
 
-            # Step 2: write JSON to temp file (outside install dir)
+            # keep the config outside the install tree so it is not an extra file.
             json_file = Path(tmp + "_config.json")
             json_file.write_text(json_str, encoding="utf-8")
             log_debug(f"  [config] Written to {json_file}")
 
-            # Step 3: install
             t_install_start = time.perf_counter()
             log_debug(f"  [install] Installing to {tmp}...")
             result = install_mod(archive, Path(tmp), json_file, dll=lib)
@@ -281,10 +222,8 @@ def main():
             log_debug(f"  [install] Done in {t_install:.2f}s: "
                       f"{result_text:.200}")
 
-            # Clean up config file
             json_file.unlink(missing_ok=True)
 
-            # Step 4: compare file trees
             t_cmp_start = time.perf_counter()
             log_debug(f"  [compare] Comparing trees "
                       f"(full={args.full})...")
@@ -337,7 +276,6 @@ def main():
 
     total_time = time.perf_counter() - t_start
 
-    # Summary
     sep = "=" * 60
     log("")
     log(sep)
