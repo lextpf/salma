@@ -4,20 +4,6 @@
 
 namespace fs = std::filesystem;
 
-// StaticFileHandler - serves web/dist for every path Crow did not route to an
-// API handler, with an index.html fallback for client-side routing.
-//
-// serve() is the only containment check on this path. It ends in
-// set_static_file_info_unsafe, which does no traversal checking of its own, so
-// the guard below is what keeps a request inside the static root. Both the
-// requested file and the index.html fallback are re-validated; do not add a
-// third path that reaches the response without going through the same test.
-//
-// Return codes: 403 for a path resolving outside the root, 404 when
-// canonicalization throws or the file cannot be opened, otherwise 200 with the
-// content type from get_content_type, which defaults to
-// application/octet-stream.
-
 namespace mo2server
 {
 
@@ -30,19 +16,8 @@ crow::response StaticFileHandler::serve(const std::string& path)
 {
     auto file_path = fs::path(static_dir_) / (path.empty() ? "index.html" : path);
 
-    // Traversal guard. Canonicalize both the static root and the requested
-    // file, take the file relative to the root, and reject an empty result or
-    // one starting with "..". Comparing relative paths, rather than string
-    // prefixes, is what stops a sibling directory matching: "web-extra/app.js"
-    // relative to "web" is "../web-extra/app.js", while a prefix test on "web"
-    // would accept it.
-    //
-    // The ".." test is itself a string prefix test, so a real entry whose name
-    // begins with ".." is rejected as traversal. web/dist holds no such name,
-    // and that is the safe direction to be wrong in.
-    //
-    // weakly_canonical rather than canonical, because the requested file need
-    // not exist: a miss falls through to the index.html fallback below.
+    // compare canonical relative paths because string prefixes accept sibling roots.
+    // weak canonicalization permits a missing path to reach the SPA fallback.
     fs::path canonical_base, canonical_file;
     try
     {
@@ -59,12 +34,11 @@ crow::response StaticFileHandler::serve(const std::string& path)
         return crow::response(403);
     }
 
-    // A missing path or a directory serves index.html, so the React router can
-    // handle the route in the browser.
+    // let the browser router handle missing paths and directories.
     if (!fs::exists(file_path) || fs::is_directory(file_path))
     {
         file_path = fs::path(static_dir_) / "index.html";
-        // The fallback is a fresh path, so it gets the same containment test.
+        // validate the fallback as an independent path.
         try
         {
             auto fallback_canonical = fs::weakly_canonical(file_path);
