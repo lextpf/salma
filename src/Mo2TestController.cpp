@@ -12,36 +12,15 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-// Mo2TestController - run test_all.py as a child process and report on it.
-//
-// This is the one long-running job the server does not put on a BackgroundJob.
-// It tracks a raw process handle plus test_running_, both under test_mutex_,
-// because the work happens in another process and there is no worker thread to
-// own. The handle is closed and the pair cleared by whichever call first
-// observes the child finished; Mo2Controller's destructor terminates a child
-// still running at shutdown.
-//
-// Liveness is always tested with WaitForSingleObject(handle, 0), never with
-// GetExitCodeProcess plus STILL_ACTIVE: a script exiting with code 259 is
-// indistinguishable from a running process under that test.
-//
-// The child writes its own output to test.log, which /api/logs/test serves.
-// Nothing is captured here.
-
 namespace mo2server
 {
-
-// ---------------------------------------------------------------------------
-// POST /api/test/run   - spawn test_all.py in background
-// ---------------------------------------------------------------------------
 
 crow::response Mo2Controller::run_tests(const crow::request& req)
 {
 #ifdef _WIN32
     std::unique_lock<std::mutex> lock(test_mutex_);
 
-    // A stale test_running_ survives a child that exited without anyone polling
-    // status, so re-check the handle before rejecting the request.
+    // reap a finished child that no status request observed.
     if (test_running_)
     {
         if (test_process_)
@@ -56,16 +35,14 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
                 mo2core::Logger::instance().log_warning(std::format(
                     "[server] WaitForSingleObject failed (error {}), cleaning up", GetLastError()));
             }
-            // Finished, or the wait itself failed: release the handle either
-            // way, so a failed wait cannot wedge the endpoint at 409.
+            // release the handle after completion or a failed wait.
             CloseHandle(test_process_);
             test_process_ = nullptr;
             test_running_ = false;
         }
     }
 
-    // `args` is optional. A body that will not parse is logged and ignored,
-    // which runs the suite with no arguments rather than failing the request.
+    // invalid optional JSON falls back to an argument-free run.
     std::string args;
     if (!req.body.empty())
     {
@@ -86,11 +63,7 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
         }
     }
 
-    // args is interpolated into the command line below, so it is allowlisted
-    // rather than denylisted: alphanumerics, space, underscore, hyphen and dot
-    // only. Quotes and path separators are excluded so an argument cannot break
-    // out of its own boundary or reach outside the exe directory, and ".." is
-    // rejected separately because dot alone is allowed.
+    // allowlist interpolated arguments so they cannot add syntax or paths.
     static const std::regex kAllowedArgs(R"(^[a-zA-Z0-9 _\-\.]*$)");
     if (!std::regex_match(args, kAllowedArgs))
     {
@@ -107,8 +80,7 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
         return json_response(
             404, {{"error", std::format("test_all.py not found in {}", exe_dir.string())}});
 
-    // No output redirection: test_all.py writes test.log itself, which
-    // /api/logs/test then serves.
+    // test_all.py writes the log served by the test-log route.
     std::string cmd = std::format("python \"{}\" {}", py_path.string(), args);
 
     STARTUPINFOA si{};
@@ -146,10 +118,6 @@ crow::response Mo2Controller::run_tests(const crow::request& req)
 #endif
 }
 
-// ---------------------------------------------------------------------------
-// GET /api/test/status
-// ---------------------------------------------------------------------------
-
 crow::response Mo2Controller::get_test_status()
 {
 #ifdef _WIN32
@@ -176,7 +144,7 @@ crow::response Mo2Controller::get_test_status()
                              {{"running", false}, {"error", "Failed to query process status"}});
     }
 
-    // The child is finished, so its exit code is now unambiguous.
+    // completion makes exit code 259 unambiguous.
     DWORD exit_code = 0;
     GetExitCodeProcess(test_process_, &exit_code);
     CloseHandle(test_process_);

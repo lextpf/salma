@@ -20,69 +20,11 @@
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 
-// Mo2FomodController - the FOMOD scan job and the /api/mo2/fomods reads.
-//
-// The scan walks every mod folder under the configured MO2 mods directory and
-// tries to recover the FOMOD choices the user originally made, writing one
-// <mod name>.json per success into the FOMOD output directory. It runs on a
-// BackgroundJob; only one scan may run at a time.
-//
-// Per-mod pipeline (process_single_mod), first match wins:
-//
-//   for each directory under <mods>      ("Salma FOMODs Output" is skipped)
-//     |
-//     +-- <output>/<mod>.json exists? --------yes--> ExistingSkip
-//     +-- meta.ini [General] installationFile? -no--> ArchiveSkipNoValue
-//     +-- SalmaEngine::resolve_mod_archive ----no--> ArchiveSkipMissing
-//     +-- SalmaEngine::infer_selections
-//           returns ""            -------------------> NoFomod
-//           invalid JSON          -------------------> Error
-//           no non-empty "steps"  -------------------> NoFomod
-//           otherwise: inject_choice_metadata
-//                      -> write <mod>.json.tmp
-//                      -> rename over <mod>.json ----> Inferred
-//
-// The write is tmp-then-rename so a crash mid-write cannot leave a half-written
-// choices file that a later scan would then treat as ExistingSkip.
-//
-// Each outcome increments a fixed set of counters in the summary JSON that
-// run_fomod_scan_job returns and /api/mo2/fomods/scan/status reports. This
-// mapping is the contract with the dashboard's summary panel:
-//
-//   outcome              counters incremented
-//   -------------------  -------------------------------------
-//   ExistingSkip         alreadyHadChoices
-//   ArchiveSkipNoValue   noArchiveFound
-//   ArchiveSkipMissing   archiveMissing
-//   Inferred             archivesProcessed + choicesInferred
-//   NoFomod              archivesProcessed + noFomod
-//   Error                archivesProcessed + errors
-//
-// totalModFolders counts every folder considered, so the six counters sum to it
-// only when the scan was not cancelled.
-//
-// Per-mod progress is reported as log lines, not as job state, and the
-// dashboard parses those lines. infer_status builds each row as
-// "<label> <dots> <status> <detail>", padding the dot run so the status word
-// starts near column 64:
-//
-//   [infer] [7/312] SkyUI ............................ INFERRED (1.4s)
-//
-// web/src/progressBarParsing.tsx locates the status word with `\.{3,}`, so the
-// dot run must never fall below 4 characters. infer_status holds that floor
-// even when the label alone is longer than the column.
-
 namespace mo2server
 {
 
-// ---------------------------------------------------------------------------
-// Static helpers
-// ---------------------------------------------------------------------------
-
-// Parse [General] installationFile from MO2 meta.ini. Returns the value with
-// surrounding single or double quotes removed, or "" when the file is absent,
-// has no [General] section, or has no installationFile key. Section and key
-// comparison is case-insensitive; the value is returned verbatim.
+// read installationFile from the case-insensitive General section.
+// return empty when the file, section, or key is missing.
 static std::string read_installation_file(const fs::path& meta_ini_path)
 {
     std::ifstream ifs(meta_ini_path);
@@ -101,7 +43,7 @@ static std::string read_installation_file(const fs::path& meta_ini_path)
             line.pop_back();
         }
 
-        // Strip UTF-8 BOM if present on the first line
+        // strip a UTF-8 BOM from the first line.
         if (first_line)
         {
             first_line = false;
@@ -159,25 +101,7 @@ static std::string read_installation_file(const fs::path& meta_ini_path)
     return "";
 }
 
-// Archive resolution lives in the engine DLL and is reached through
-// `SalmaEngine::resolve_mod_archive` (the `resolveModArchive` C-API export), so
-// the dashboard and the MO2 plugin run the same implementation.
-
-// One SAX pass over a FOMOD choices JSON. It counts the objects in the
-// top-level "steps" array and, on the way there, captures
-// diagnostics.confidence.composite, diagnostics.confidence.band and
-// diagnostics.exact_match, without materializing the document.
-//
-// One pass suffices because both nlohmann::json and the engine's writer store
-// object members in sorted key order, so the top-level keys arrive as
-// diagnostics, metadata, outputTree (with its outputTree* siblings),
-// schema_version, steps. diagnostics always precedes steps.
-//
-// Each captured value has a paired present-flag, so the caller emits nothing
-// for a JSON written before the diagnostics block existed.
-//
-// Keep this helper on plain `//` comments: doxide globs src/*.cpp and would
-// otherwise publish a reference page for it next to the real controllers.
+// count top-level steps and collect optional diagnostics without building a DOM.
 struct StepCounter : nlohmann::json_sax<json>
 {
     int depth = 0;
@@ -185,7 +109,7 @@ struct StepCounter : nlohmann::json_sax<json>
     int steps_depth = 0;
     int& count;
 
-    // Out-parameters, each with its present-flag.
+    // each optional output has a matching presence flag.
     double& confidence;
     std::string& band;
     bool& exact_match;
@@ -269,8 +193,7 @@ struct StepCounter : nlohmann::json_sax<json>
         {
             steps_depth = depth + 1;
         }
-        // diagnostics and confidence are objects, never arrays. Drop any armed
-        // flag so a stray array value cannot be mistaken for one of them.
+        // do not accept array values for diagnostic object fields.
         arm_diag = false;
         arm_conf = false;
         depth++;
@@ -281,8 +204,7 @@ struct StepCounter : nlohmann::json_sax<json>
         depth--;
         if (steps_depth && depth < steps_depth)
         {
-            // The steps array is closed, so stop parsing. Reset the state so a
-            // second array at the same depth cannot be taken for it.
+            // stop after the top-level steps array closes.
             in_steps = false;
             steps_depth = 0;
             return false;
@@ -323,7 +245,7 @@ struct StepCounter : nlohmann::json_sax<json>
         }
         return true;
     }
-    // Value callbacks. Each stores whatever `pending` armed, then keeps going.
+    // store the value armed by the preceding key.
     bool null() override { return true; }
     bool boolean(bool val) override
     {
@@ -378,18 +300,7 @@ private:
     }
 };
 
-// Parse a Nexus-style archive filename "Name-ModID-Version-FileID" and return
-// {modid, fileid}, or two empty strings when the name does not follow the
-// convention. The pair goes into the choices JSON metadata block, which lets
-// the MO2 plugin look up choices by stable identifier instead of a fuzzy
-// filename stem-prefix match.
-//
-// strip_nexus_suffix in InstallationController.cpp decodes the same convention
-// with its own regex. The two are deliberately separate: that one needs only
-// the stem, so it is greedy on the stem and restrictive on the version segment,
-// while this one needs the two numeric ids, so it is lazy on the stem and
-// unrestricted in the middle. They can disagree on a name carrying extra
-// hyphen-digit groups. Change one and check the other.
+// extract stable mod and file ids from a Nexus-style archive name.
 static std::pair<std::string, std::string> parse_nexus_archive_name(const std::string& filename)
 {
     static const std::regex kPattern(R"(^(.+?)-(\d+)-(.*)-(\d+)$)");
@@ -401,7 +312,7 @@ static std::pair<std::string, std::string> parse_nexus_archive_name(const std::s
     return {};
 }
 
-// Format a system-clock time point as "YYYY-MM-DDTHH:MM:SSZ" UTC.
+// format a system-clock value as UTC.
 static std::string format_iso8601_utc(std::chrono::system_clock::time_point tp)
 {
     auto t = std::chrono::system_clock::to_time_t(tp);
@@ -420,17 +331,8 @@ static std::string format_iso8601_utc(std::chrono::system_clock::time_point tp)
                        tm_utc.tm_sec);
 }
 
-// Add the `metadata` block to a parsed choices JSON before it is written. The
-// consumer is _find_fomod_json in scripts/mo2-salma.py, which tries
-// (modid, fileid) first, then (archive_size, archive_mtime), then an exact
-// filename match, and only then a stem-prefix match. That last fallback is
-// fragile, because two similarly named mods pick each other's choices file.
-// Every field written here exists to keep the lookup off it.
-//
-// archive_mtime is whole POSIX seconds, because the Python side compares it
-// against int(stat.st_mtime) with a one-second tolerance. archive_size is in
-// bytes. Both become 0 when the archive cannot be stat'ed, which makes the
-// fingerprint lookup miss and nothing worse.
+// add identifiers and an archive fingerprint before writing the choices file.
+// archive_mtime uses POSIX seconds and archive_size uses bytes. stat failure stores zero.
 static void inject_choice_metadata(json& parsed,
                                    const fs::path& archive_path,
                                    const std::string& mod_name)
@@ -446,9 +348,7 @@ static void inject_choice_metadata(json& parsed,
     auto file_time = fs::last_write_time(archive_path, ec);
     if (!ec)
     {
-        // file_clock and system_clock have different epochs on Windows, so
-        // clock_cast bridges them. Without it the value would not be POSIX
-        // seconds and the Python lookup could never match.
+        // convert file_clock to the system-clock epoch used by the Python lookup.
         auto sctp = std::chrono::clock_cast<std::chrono::system_clock>(file_time);
         metadata["archive_mtime"] =
             std::chrono::duration_cast<std::chrono::seconds>(sctp.time_since_epoch()).count();
@@ -466,13 +366,7 @@ static void inject_choice_metadata(json& parsed,
     parsed["metadata"] = metadata;
 }
 
-// Per-mod inference result. Every value maps to a counter in the scan summary;
-// see the table at the top of this file.
-//
-// The archive-skip case splits into ArchiveSkipNoValue and ArchiveSkipMissing
-// so the caller can tell "no installationFile entry" from "entry set, archive
-// gone" without re-parsing meta.ini. The dashboard reports them separately,
-// because the two need different user action.
+// distinguish a missing archive setting from an archive that no longer exists.
 enum class ModResult
 {
     ExistingSkip,
@@ -527,8 +421,7 @@ static ModResult process_single_mod(const fs::path& mod_folder,
         double elapsed_s =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - item_start).count();
 
-        // A single mod past 5 minutes usually means the solver is thrashing on
-        // a pathological installer. Flag it so the scan log names the culprit.
+        // identify a solver that spends more than five minutes on one mod.
         if (elapsed_s > 300.0)
         {
             logger.log_warning(
@@ -560,8 +453,7 @@ static ModResult process_single_mod(const fs::path& mod_folder,
 
         inject_choice_metadata(parsed, archive_path, mod_name);
 
-        // Write to .tmp and rename over the target. A crash mid-write then
-        // leaves no half-written file for a later scan to read as ExistingSkip.
+        // rename a complete temporary file so later scans never accept a partial file.
         auto tmp_file = choices_file;
         tmp_file += ".tmp";
         std::ofstream ofs(tmp_file);
@@ -657,11 +549,7 @@ static json run_fomod_scan_job(const fs::path& mods_dir,
     logger.log(std::format("[infer] Output dir: {}", output_dir.string()));
     logger.log(std::format("[infer] Found {} mod folders", total));
 
-    // The column the status word is padded out to. Raising it pushes the status
-    // past the width of a log pane and turns every scan row into an ellipsis;
-    // 64 aligns the common case and still fits. The floor of 4 dots below is
-    // load-bearing: the dashboard's scan-progress regex (progressBarParsing.tsx,
-    // `\.{3,}`) finds the status word by the dot run.
+    // the dashboard parser requires at least three dots before the status word.
     constexpr size_t kInferDotColumn = 64;
     InferStatusFn infer_status = [total](int index,
                                          const std::string& mod_name,
@@ -750,10 +638,6 @@ static json run_fomod_scan_job(const fs::path& mods_dir,
     return summary;
 }
 
-// ---------------------------------------------------------------------------
-// GET /api/mo2/fomods
-// ---------------------------------------------------------------------------
-
 crow::response Mo2Controller::list_fomods()
 {
     {
@@ -784,14 +668,7 @@ crow::response Mo2Controller::list_fomods()
         auto epoch =
             std::chrono::duration_cast<std::chrono::milliseconds>(sctp.time_since_epoch()).count();
 
-        // Counting through a SAX callback keeps peak memory constant in the file
-        // size instead of proportional to it.
-        //
-        // Time is still linear in the bytes. The early abort in
-        // StepCounter::end_array only skips what follows the steps array, and
-        // "steps" sorts last among the top-level keys, so the lexer has already
-        // walked the whole file by then. Listing a directory of large choices
-        // JSONs is expensive; the cache above is what makes it acceptable.
+        // use SAX to keep memory constant; the five-second cache bounds repeat cost.
         int step_count = 0;
         double confidence = 0.0;
         std::string band;
@@ -857,10 +734,6 @@ crow::response Mo2Controller::list_fomods()
     return json_response(200, list);
 }
 
-// ---------------------------------------------------------------------------
-// POST /api/mo2/fomods/scan
-// ---------------------------------------------------------------------------
-
 crow::response Mo2Controller::scan_fomods()
 {
     auto& cfg = ConfigService::instance();
@@ -921,19 +794,10 @@ crow::response Mo2Controller::scan_fomods()
     return json_response(200, {{"success", true}, {"running", true}, {"started", true}});
 }
 
-// ---------------------------------------------------------------------------
-// GET /api/mo2/fomods/scan/status
-// ---------------------------------------------------------------------------
-
 crow::response Mo2Controller::get_scan_status()
 {
-    // `running` is read outside read_result's mutex-held callback, unlike
-    // InstallationController::handle_status. A poll landing between the worker
-    // storing its result and clearing the running flag can therefore report
-    // running=true next to a completed summary. That is acceptable here: the
-    // dashboard polls on a timer, the next poll corrects it, and the scan
-    // summary is advisory rather than a completion signal anything acts on. Do
-    // not copy this relaxation into a status read whose result gates work.
+    // a poll can briefly pair running=true with a completed summary. the next poll
+    // corrects this advisory status.
     json result = {{"running", scan_job_.is_running()}};
 
     scan_job_.read_result(
@@ -960,10 +824,6 @@ crow::response Mo2Controller::get_scan_status()
 
     return json_response(200, result);
 }
-
-// ---------------------------------------------------------------------------
-// GET /api/mo2/fomods/<name>
-// ---------------------------------------------------------------------------
 
 crow::response Mo2Controller::get_fomod(const std::string& name)
 {
@@ -997,10 +857,6 @@ crow::response Mo2Controller::get_fomod(const std::string& name)
         return json_response(500, {{"error", "Failed to read FOMOD JSON"}});
     }
 }
-
-// ---------------------------------------------------------------------------
-// DELETE /api/mo2/fomods/<name>
-// ---------------------------------------------------------------------------
 
 crow::response Mo2Controller::delete_fomod(const std::string& name)
 {
