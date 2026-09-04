@@ -19,7 +19,7 @@
     {
       "name": "default",
       "displayName": "Release (local default)",
-      "description": "Release build with vcpkg, mirrors what CI and packaging consume.",
+      "description": "release server and tests with vcpkg.",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release"
@@ -28,7 +28,7 @@
     {
       "name": "debug",
       "displayName": "Debug",
-      "description": "Debug build of mo2-server and salma_tests with the same triplet. The FOMOD engine is Rust: debug it with cargo, not this preset.",
+      "description": "debug server and tests with vcpkg; use Cargo for the Rust engine.",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
@@ -37,19 +37,19 @@
     {
       "name": "ci-release",
       "displayName": "CI Release",
-      "description": "Release for CI. Inherits default, so edits to default reach CI too; the separate name exists so a workflow never has to spell out a preset that local tooling also owns.",
+      "description": "release configuration for CI.",
       "inherits": "default"
     },
     {
       "name": "ci-debug",
       "displayName": "CI Debug",
-      "description": "Same as debug; named explicitly for CI predictability.",
+      "description": "debug configuration for CI.",
       "inherits": "debug"
     },
     {
       "name": "compile-db",
       "displayName": "compile_commands.json (Ninja sidecar)",
-      "description": "Ninja-based configure whose only purpose is to emit a real compile_commands.json for clang-tidy/clangd. Shares vcpkg_installed/ with the default preset so vcpkg does not re-install. Never built directly; only configured.",
+      "description": "generate compile_commands.json with Ninja and reuse the vcpkg cache.",
       "binaryDir": "${sourceDir}/build-cdb",
       "generator": "Ninja",
       "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
@@ -79,7 +79,7 @@
       "name": "tests-only",
       "configurePreset": "default",
       "displayName": "Build the salma_tests target only",
-      "description": "Skips mo2-server, and with it the post-build copy of mo2-salma.dll into build/bin/Release, so the SalmaEngine tests fail on ensure_loaded() unless that DLL is already there.",
+      "description": "build salma_tests; does not stage mo2-salma.dll.",
       "configuration": "Release",
       "targets": ["salma_tests"]
     },
@@ -91,7 +91,7 @@
     {
       "name": "ci-tests",
       "configurePreset": "ci-release",
-      "description": "Skips mo2-server, and with it the post-build copy of mo2-salma.dll into build/bin/Release, so the SalmaEngine tests fail on ensure_loaded() unless that DLL is already there.",
+      "description": "build salma_tests for CI; does not stage mo2-salma.dll.",
       "configuration": "Release",
       "targets": ["salma_tests"]
     },
