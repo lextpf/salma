@@ -1,32 +1,15 @@
 #!/usr/bin/env python
-"""Produce a deployable artifact directory for the salma engine DLL.
+"""
+@brief build and stage the engine DLL under the MO2 plugin name.
+@author Alex (https://github.com/lextpf)
 
-Builds `mo2_salma_rs.dll` in release, then stages it into `target/package/`
-under the name the MO2 plugin expects.
+the command writes only to the artifact directory and never deploys. the
+`mo2-salma.dll` name confirms that the raw Cargo artifact passed through this
+step. use the printed SHA-256 to identify exact build bytes because
+`getApiVersion` is identical across builds.
 
-The rename is the point of this script. `scripts/mo2-salma.py::find_dll` looks
-for `mo2-salma.dll` while the cargo artifact is `mo2_salma_rs.dll`. Keeping the
-two names apart means a file called `mo2-salma.dll` has provably been through
-this step, and a raw cargo artifact sitting somewhere else can never be mistaken
-for a deployable one. Do not let the build rename silently; the auditable step
-is the guarantee.
-
-Usage:
-  python scripts/package.py                  # build + stage
-  python scripts/package.py --no-build       # stage an existing build
-  python scripts/package.py --out DIR        # stage somewhere else
-  python scripts/package.py --keep-rust-name # stage as mo2_salma_rs.dll
-
-The artifact directory holds the DLL and nothing else: the engine has no runtime
-data files, and it creates `logs/` next to the DLL on first use. CUTOVER.md
-covers deploying it and rolling back.
-
-The printed SHA-256 is the only practical proof that a later deploy carries these
-exact bytes, because getApiVersion returns the same string for every build.
-
-Exits non-zero when `cargo build` fails, and when the built DLL is absent under
-`--no-build`. Apart from that build it writes only into the artifact directory,
-and it never deploys: copying the staged file to MO2 stays a manual step.
+the selected destination file is removed without backup before copy. Windows
+cannot overwrite a DLL that another process has mapped.
 """
 
 import argparse
@@ -84,8 +67,7 @@ def main() -> int:
     out_dir: Path = args.out
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / name
-    # Remove first: overwriting a DLL another process still has mapped fails
-    # with a sharing violation on Windows.
+    # remove first because Windows cannot overwrite a mapped DLL.
     dest.unlink(missing_ok=True)
     shutil.copy2(BUILT_DLL, dest)
 
@@ -98,11 +80,9 @@ def main() -> int:
     if not args.keep_rust_name:
         print(f"[package] NOTE   : renamed {BUILT_DLL.name} -> {name} for deployment.")
     print()
-    print("[package] Next: see CUTOVER.md. Deploying is a deliberate step -")
+    print("[package] Next: deploy deliberately by copying this file over")
     print("[package] copy this file over %SALMA_DEPLOY_PATH%\\salma\\mo2-salma.dll,")
-    print("[package] then verify by comparing the deployed file's SHA-256")
-    print("[package] against the digest above. getApiVersion cannot confirm a")
-    print("[package] deploy: every build of the engine reports the same string.")
+    print("[package] then verify the deployed file against the SHA-256 above.")
     return 0
 
 
