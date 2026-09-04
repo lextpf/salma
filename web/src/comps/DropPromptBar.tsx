@@ -1,4 +1,4 @@
-// show this inert status only while intake is blocked.
+// Show this inert status only while intake is blocked.
 
 import MIcon from './MIcon'
 
