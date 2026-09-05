@@ -22,7 +22,7 @@
  *    ----------------------------------------------------------------------
  *
  *      Repository:   https://github.com/lextpf/salma
- *      License:      MIT
+ *      License:      GPL
  */
 #include <crow.h>
 
@@ -44,55 +44,7 @@
 
 namespace fs = std::filesystem;
 
-// main - process entry point and the server's route table.
-//
-// Start-up runs in this order, and each step depends on the one before it:
-//   1. Install SalmaLogHandler, so Crow's own output joins salma.log from the
-//      first line rather than going to Crow's default sink.
-//   2. ConfigService::load() reads salma.json next to the executable.
-//   3. Touch the SecurityContext singleton, so the CSRF token and the Origin
-//      allowlist exist before any request can observe them.
-//   4. Construct crow::App<SecurityMiddleware>, the controllers and the static
-//      file handler, register every route, then bind and run.
-//
-// The engine DLL is not loaded here. SalmaEngine loads mo2-salma.dll lazily on
-// the first install, inference or archive-resolution call, so the dashboard
-// still starts and serves pages when the engine is missing.
-//
-// Routes fall into three groups: /api/installation/*, the MO2 integration
-// endpoints (/api/config, /api/mo2/*, /api/plugin/*, /api/logs*, /api/test/*),
-// and every other path, which StaticFileHandler serves from web/dist with an
-// index.html fallback for client-side routing. A path that starts with "api/"
-// and matched no route returns 404 instead of falling through to index.html.
-//
-// app.run() blocks until Crow stops the app. The controllers are stack objects
-// in main, so their destructors, which shut the background jobs down, run only
-// after that return.
-
-// Bridges Crow's ILogHandler into salma's Logger, so HTTP-server output shares
-// the timestamp and level format of the rest of salma. Every forwarded message
-// is prefixed with `[crow]`. Level mapping:
-//   Error / Critical -> Logger::log_error
-//   Warning          -> Logger::log_warning
-//   everything else  -> Logger::log
-//
-// Suppression policy. The dashboard polls `/api/logs`, `/api/logs/test` and
-// `/api/mo2/status` continuously. Their Request and Response lines would drown
-// out everything else, so both are dropped. A Response line with a non-200
-// status survives, because a failing poll is worth seeing.
-//
-// The filter matches a `starts_with` on "Request:" or "Response:", so a
-// non-Crow message with either prefix would also be dropped. Only Crow
-// produces them today.
-//
-// To suppress another endpoint, add a `message.find(...)` clause to the
-// `is_heartbeat` check in should_suppress_noise(), then raise Crow to
-// LogLevel::Debug and confirm the target lines stop reaching salma.log while
-// non-200 responses still arrive.
-//
-// Keep this class on plain `//` comments: doxide globs src/*.cpp, and a block
-// doc comment here would publish a page for an internal main.cpp helper that
-// mkdocs.yml's nav never references.
+// route Crow output through the shared logger and suppress successful poll noise.
 class SalmaLogHandler : public crow::ILogHandler
 {
 public:
@@ -116,7 +68,7 @@ public:
             return false;
         }
 
-        // Keep failed polls, drop the successful heartbeat traffic.
+        // retain failed polls and drop successful heartbeat traffic.
         if (is_response)
         {
             return message.find(" 200 ") != std::string::npos;
@@ -159,9 +111,7 @@ int main()
 
     mo2server::ConfigService::instance().load();
 
-    // Touch the singleton before any route exists, so the CSRF token is
-    // generated and the Origin allowlist parsed before a request can race an
-    // uninitialized state.
+    // initialize the CSRF token and origin allowlist before routes become visible.
     auto& security = mo2core::SecurityContext::instance();
     {
         std::string joined;
@@ -177,16 +127,13 @@ int main()
         logger.log(std::format("[server] Allowed origins: {}", joined));
     }
 
-    // SecurityMiddleware enforces the CORS and CSRF policy. See SecurityMiddleware.hpp.
+    // apply the CORS and CSRF policy to every route.
     crow::App<mo2server::SecurityMiddleware> app;
 
     mo2server::InstallationController controller;
     mo2server::Mo2Controller mo2_controller;
 
-    // Anchor the static directory to the exe location, not the working
-    // directory, so the dashboard works wherever mo2-server.exe is launched
-    // from. <exe>/web/dist is the release layout; <exe>/../web/dist is the
-    // in-tree dev layout, where the exe sits in build/bin/Release.
+    // resolve release and development assets relative to the executable.
     auto exe_dir = mo2core::executable_directory();
     auto static_dir = (exe_dir / "web" / "dist").string();
     if (!fs::exists(static_dir))
@@ -201,14 +148,7 @@ int main()
     logger.log(std::format("[server] Static files directory: {}", static_dir));
     mo2server::StaticFileHandler static_handler(static_dir);
 
-    // POST /api/installation/upload         - multipart archive upload + install
-    // POST /api/installation/install        - install from an existing archive path
-    // GET  /api/installation/status/current - status of the single in-flight install
-    //
-    // The status path segment is ignored. InstallationController holds a single
-    // BackgroundJob, not a map of jobs, so any segment other than "current"
-    // logs a warning and still reports that one job. Do not build per-job
-    // polling on this route.
+    // the status segment is advisory; every value reports the single install job.
     CROW_ROUTE(app, "/api/installation/upload")
         .methods(crow::HTTPMethod::POST)([&controller](const crow::request& req)
                                          { return controller.handle_upload(req); });
@@ -221,10 +161,7 @@ int main()
         .methods(crow::HTTPMethod::GET)([&controller](const std::string& job_id)
                                         { return controller.handle_status(job_id); });
 
-    // SecurityMiddleware gates state-changing requests on an X-Salma-Csrf
-    // header matching this token. CORS keeps the token readable only from
-    // allowlisted origins, so a cross-origin attacker cannot fetch it and
-    // forge a request.
+    // only allowed origins can read the token required for state-changing requests.
     CROW_ROUTE(app, "/api/csrf-token")
         .methods(crow::HTTPMethod::GET)(
             [&security]()
@@ -236,7 +173,6 @@ int main()
                 return res;
             });
 
-    // MO2 integration routes
     CROW_ROUTE(app, "/api/config")
         .methods(crow::HTTPMethod::GET)([&mo2_controller]()
                                         { return mo2_controller.get_config(); });
@@ -305,8 +241,7 @@ int main()
         .methods(crow::HTTPMethod::GET)([&mo2_controller]()
                                         { return mo2_controller.get_test_status(); });
 
-    // Non-API paths are served from the static directory.
-    // Unknown paths fall through to index.html for client-side routing.
+    // serve non-API paths with the client-side routing fallback.
     CROW_ROUTE(app, "/")
     ([&static_handler]() { return static_handler.serve(""); });
 
@@ -321,29 +256,12 @@ int main()
             return static_handler.serve(path);
         });
 
-    // stream_threshold bounds a response, not a request. It sets the res.body
-    // size beyond which Crow streams instead of buffering: crow/app.h stores it
-    // as res_stream_threshold_, and crow/http_connection.h compares it against
-    // res.body on the write path. Set this high, Crow buffers every response.
-    //
-    // Nothing in Crow 1.3.0 bounds a request body. Its max_payload setting is
-    // websocket-only, so req.body is buffered whole before any handler runs.
-    // The upload cap is enforced only by kMaxUploadBytes, in
-    // InstallationController::parse_and_validate_upload, and that check reads a
-    // body that is already resident in memory. The two constants hold the same
-    // value, but neither one constrains the other.
-    //
-    // The cost is real: the dashboard upload path holds the whole archive in
-    // memory, once in req.body and again in the multipart copy, so a
-    // multi-gigabyte drop needs multi-gigabyte headroom. The MO2 plugin has no
-    // such limit, because it passes a path to the engine and uploads nothing.
+    // this threshold controls response streaming. Crow buffers request bodies
+    // before handlers run, so the 8 GiB upload check does not cap memory use.
     static constexpr size_t kStreamThreshold = 8ULL * 1024 * 1024 * 1024;
 
-    // Bind to loopback by default. These endpoints write files, extract
-    // archives, run batch scripts and spawn child processes, so exposing them
-    // to the LAN is unsafe. SALMA_BIND_ADDR overrides the bind for cases that
-    // need it, such as a dev container or a remote dashboard, and the warning
-    // below makes that choice visible in the log.
+    // default to loopback because routes write files and start child processes.
+    // SALMA_BIND_ADDR permits remote access and logs an explicit warning.
     std::string bind_addr = "127.0.0.1";
     if (const char* bind_env = std::getenv("SALMA_BIND_ADDR"); bind_env && *bind_env)
     {
