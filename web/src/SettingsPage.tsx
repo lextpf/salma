@@ -11,7 +11,7 @@ import type { AppConfig } from './types'
 const MONO = 'var(--font-mono)'
 const RETRY_DELAY_MS = 2000
 
-// this is a syntax screen only. the server checks whether the path exists.
+// This is a syntax screen only. The server checks whether the path exists.
 function isPathValid(p: string): boolean {
   return p.trim().length > 0 && !/[*?<>|]/.test(p)
 }
