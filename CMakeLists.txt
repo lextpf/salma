@@ -105,19 +105,23 @@ add_custom_command(TARGET mo2-server POST_BUILD
     COMMENT "Copying test suite and scripts to output directory"
 )
 
-# both binaries load the DLL beside the executable. a tests-only build skips this server hook.
-# stage `target/package/mo2-salma.dll` before configure because `EXISTS` is evaluated then.
+# both binaries load the DLL beside their executable, so each target stages its own copy. a
+# tests-only build (`ci-tests` preset) never builds mo2-server, and without its own hook
+# `SalmaEngine.*` would run with no engine. stage `target/package/mo2-salma.dll` before
+# configure because `EXISTS` is evaluated then.
 if(EXISTS "${CMAKE_SOURCE_DIR}/target/package/mo2-salma.dll")
-    add_custom_command(TARGET mo2-server POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/target/package/mo2-salma.dll"
-            "${OUTDIR}/"
-        COMMENT "Copying the Rust engine DLL next to mo2-server")
+    foreach(_engine_host mo2-server salma_tests)
+        add_custom_command(TARGET ${_engine_host} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/target/package/mo2-salma.dll"
+                "$<TARGET_FILE_DIR:${_engine_host}>/"
+            COMMENT "Copying the Rust engine DLL next to ${_engine_host}")
+    endforeach()
 else()
     message(WARNING
-        "target/package/mo2-salma.dll not found. mo2-server needs it at runtime; "
-        "run build.bat (or python scripts/package.py) and reconfigure, or copy it "
-        "next to mo2-server.exe by hand.")
+        "target/package/mo2-salma.dll not found. mo2-server and salma_tests need it at "
+        "runtime; run build.bat (or python scripts/package.py) and reconfigure, or copy it "
+        "next to the executables by hand.")
 endif()
 
 # CPack puts the MO2 plugin and dashboard in one archive. the engine is not duplicated.

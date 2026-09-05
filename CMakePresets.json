@@ -79,7 +79,7 @@
       "name": "tests-only",
       "configurePreset": "default",
       "displayName": "Build the salma_tests target only",
-      "description": "build salma_tests; does not stage mo2-salma.dll.",
+      "description": "build salma_tests; stages mo2-salma.dll when target/package holds it.",
       "configuration": "Release",
       "targets": ["salma_tests"]
     },
@@ -91,7 +91,7 @@
     {
       "name": "ci-tests",
       "configurePreset": "ci-release",
-      "description": "build salma_tests for CI; does not stage mo2-salma.dll.",
+      "description": "build salma_tests for CI; stages mo2-salma.dll when target/package holds it.",
       "configuration": "Release",
       "targets": ["salma_tests"]
     },
