@@ -18,7 +18,7 @@ export function useScanJob(
   const [scanError, setScanError] = useState<string | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Initial status check with retry
+  // retry the initial status check until the backend responds.
   useEffect(() => {
     const loadScanStatus = () => {
       getFomodScanStatus()
@@ -45,7 +45,6 @@ export function useScanJob(
     }
   }, [])
 
-  // Poll while running
   const scanPoller = useCallback(async () => {
     try {
       const s = await getFomodScanStatus()

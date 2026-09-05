@@ -15,7 +15,7 @@ export function useTestRunner(pluginInstalled: boolean): TestRunnerState {
   const [testError, setTestError] = useState<string | null>(null)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Initial status check with retry
+  // retry the initial status check until the backend responds.
   useEffect(() => {
     const loadTestStatus = () => {
       getTestStatus()
@@ -42,7 +42,6 @@ export function useTestRunner(pluginInstalled: boolean): TestRunnerState {
     }
   }, [])
 
-  // Poll while running
   const testPoller = useCallback(async () => {
     try {
       const s = await getTestStatus()
