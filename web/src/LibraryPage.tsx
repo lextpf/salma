@@ -18,7 +18,7 @@ import type { FomodEntry } from './types'
 const RETRY_DELAY_MS = 2000
 
 export default function LibraryPage() {
-  // URL selection owns the shared detail request. keyed views reset record-local state.
+  // URL selection owns the shared detail request. Keyed views reset record-local state.
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
   const selectedName = name ? decodeURIComponent(name) : null
@@ -28,7 +28,7 @@ export default function LibraryPage() {
   const [search, setSearch] = useState('')
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlightRef = useRef(false)
-  // initialize the latest callback before retry setup.
+  // Initialize the latest callback before retry setup.
   const loadListRef = useRef<(force?: boolean) => void>(() => {})
 
   const clearRetryTimer = useCallback(() => {
@@ -41,7 +41,7 @@ export default function LibraryPage() {
   const loadList = useCallback(
     (force = false) => {
       if (inFlightRef.current && !force) return
-      // keep the current list visible during background refresh.
+      // Keep the current list visible during background refresh.
       inFlightRef.current = true
       listFomods()
         .then(data => {
@@ -66,7 +66,7 @@ export default function LibraryPage() {
     [clearRetryTimer],
   )
 
-  // let retry timers use the current loader without resubscribing.
+  // Let retry timers use the current loader without resubscribing.
   useEffect(() => {
     loadListRef.current = loadList
   })
