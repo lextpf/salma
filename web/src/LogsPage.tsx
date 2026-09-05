@@ -19,9 +19,9 @@ import VolumeHistogram from './comps/VolumeHistogram'
 import SubsystemFacets from './comps/SubsystemFacets'
 import LogStreamRow from './comps/LogStreamRow'
 
-// full reads replace the buffer. incremental reads append count deltas.
-// `applyLines` owns line state and progress refs. render code must not mutate those refs.
-// the engine rotates logs at 10 MiB. this separate limit bounds browser memory.
+// Full reads replace the buffer. Incremental reads append count deltas.
+// `applyLines` owns line state and progress refs. Render code must not mutate those refs.
+// The engine rotates logs at 10 MiB. This separate limit bounds browser memory.
 const LINE_LIMIT = 200_000
 const HISTOGRAM_BUCKETS = 30
 const RETRY_DELAY_MS = 2000
@@ -48,7 +48,7 @@ export default function LogsPage() {
   const [retryPending, setRetryPending] = useState(false)
   const [source, setSource] = useState<LogSource>('salma')
   const [logStats, setLogStats] = useState({ errors: 0, warnings: 0, passes: 0 })
-  // progress records render in the footer and do not enter the record stream.
+  // Progress records render in the footer and do not enter the record stream.
   const [progressBars, setProgressBars] = useState<TqdmBar[]>([])
 
   const [textFilter, setTextFilter] = useState('')
@@ -62,14 +62,14 @@ export default function LogsPage() {
   const refreshBusyRef = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
   const offsetRef = useRef<number | undefined>(undefined)
-  // asynchronous appends read the current buffer through this ref.
+  // Asynchronous appends read the current buffer through this ref.
   const linesRef = useRef<string[]>([])
-  // keep progress state after source records leave the bounded buffer.
+  // Keep progress state after source records leave the bounded buffer.
   const cachedScanBarRef = useRef<TqdmBar | null>(null)
   const cachedScanStartTsRef = useRef<number | null>(null)
   const cachedTestStartTsRef = useRef<number | null>(null)
 
-  // update line state and progress refs together.
+  // Update line state and progress refs together.
   const applyLines = useCallback((next: string[], src: LogSource) => {
     linesRef.current = next
     setLines(next)
@@ -143,7 +143,7 @@ export default function LogsPage() {
     }
   }, [source, loadFull, resetScroll])
 
-  // keep retry timers in an effect so cleanup cancels them.
+  // Keep retry timers in an effect so cleanup cancels them.
   useEffect(() => {
     if (!retryPending) return
     const tid = setTimeout(() => {
@@ -411,12 +411,12 @@ export default function LogsPage() {
   )
 }
 
-// solver progress arrives as a preformatted tqdm line instead of counts.
+// Solver progress arrives as a preformatted tqdm line instead of counts.
 const RAW_BAR_RE = /^\s*(\d+)%\|[^|]*\|\s*(.*)$/
 
-// use an indeterminate fill only when neither counts nor a raw percentage exists.
+// Use an indeterminate fill only when neither counts nor a raw percentage exists.
 function SolverDock({ bar }: { bar: TqdmBar }) {
-  // bind the optional counts to consts so `known` and `showTiming` narrow them everywhere.
+  // Bind the optional counts to consts so `known` and `showTiming` narrow them everywhere.
   const { current, total, elapsedS } = bar
   const raw = bar.rawBar ? RAW_BAR_RE.exec(bar.rawBar) : null
   const known = current != null && total != null && total > 0
