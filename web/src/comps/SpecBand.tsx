@@ -4,7 +4,6 @@ interface SpecBandProps {
   diagnostics?: RunDiagnostics
 }
 
-/** One figure and its label. The figure leads; the label explains it. */
 function Figure({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
@@ -36,19 +35,8 @@ function Figure({ label, value, tone }: { label: string; value: string; tone?: s
   )
 }
 
-/**
- * The record's inference result, as one line.
- *
- * Only the figures that decide whether the Diagnostics tab is worth opening:
- * how much reproduced, how many groups the solver had to resolve, and how long
- * it took. The full report belongs in that tab, so resist growing this back
- * into a block of rows.
- *
- * Faults are the exception. `missing` and `extra` print only when non-zero: a
- * row of zeroes trains a reader to stop looking, while a red figure appearing
- * where there was nothing is what gets noticed.
- */
 export default function SpecBand({ diagnostics }: SpecBandProps) {
+  // omit zero fault counts.
   if (!diagnostics) {
     return (
       <div
