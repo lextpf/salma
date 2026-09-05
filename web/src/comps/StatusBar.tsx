@@ -17,12 +17,6 @@ interface IndicatorProps {
   tone: 'on' | 'off' | 'error'
 }
 
-/**
- * A connection LED: a flat filled dot in the semantic colour, then a label and
- * a value. The off state sits on --ink-5 rather than a ghost tone, because it
- * is the only mark that reports "not connected" and has to read as clearly as
- * text.
- */
 function Indicator({ label, value, tone }: IndicatorProps) {
   const dot = tone === 'on' ? 'var(--moss)' : tone === 'error' ? 'var(--danger)' : 'var(--ink-5)'
 
@@ -56,13 +50,6 @@ function Indicator({ label, value, tone }: IndicatorProps) {
   )
 }
 
-/**
- * The 32px bottom status bar: connection LEDs for MO2, the server and the
- * bridge DLL, then the active instance and a clock.
- *
- * No fill and no rule of its own, so it sits on the same plane as the content
- * above it. Nothing here is lit or raised.
- */
 function StatusBar({
   mo2On,
   serverOn,

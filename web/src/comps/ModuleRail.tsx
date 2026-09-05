@@ -11,13 +11,9 @@ interface Module {
   end?: boolean
 }
 
-// Material Symbols ligatures. The active item renders the filled variant, which
-// is how the rail says "you are here" without spending a second colour.
 const MODULES: Module[] = [
   { to: '/', num: '01', label: 'Install', icon: 'cloud_upload', end: true },
   { to: '/fomods', num: '02', label: 'Library', icon: 'inventory_2' },
-  // receipt_long, not terminal: JobLine already uses it for "view log", so the
-  // two places that mean "the log" say it with one glyph.
   { to: '/logs', num: '03', label: 'Logs', icon: 'receipt_long' },
   { to: '/settings', num: '04', label: 'Settings', icon: 'settings' },
 ]
@@ -27,7 +23,6 @@ interface ModuleRailProps {
   modCount: number
   partialCount: number | null
   modsPath?: string
-  /** Folded to a 62px icon spine. */
   collapsed?: boolean
   onToggle?: () => void
 }
@@ -41,7 +36,6 @@ const sectionLabel: React.CSSProperties = {
   color: 'var(--ink-faint)',
 }
 
-/** One label/value line in the rail foot. Mono, tracked label, tabular value. */
 function MetaRow({ label, value }: { label: string; value: string }) {
   return (
     <div
@@ -71,21 +65,8 @@ function MetaRow({ label, value }: { label: string; value: string }) {
   )
 }
 
-/**
- * The 216px left rail: numbered module links above a persistent status foot.
- * Library stays active on its detail route, through end=false.
- *
- * No fill and no edge rule, so the rail sits on the same plane as the module
- * beside it. The active module wears the app-wide selection treatment: a
- * --sel-bg wash with a square 2px --sel-edge on the leading side.
- *
- * The foot is an unruled band, and the one thing on screen at all times, so it
- * carries the app's hero numeral and the live library figures. The gap above it
- * is a bare flex spacer and stays bare; a texture field there is exactly what
- * rule 5 in index.css rules out.
- *
- * Memoized, because Layout re-renders once a second for the clock.
- */
+// `Library` stays active on detail routes because its link does not require an exact match.
+// the status clock updates once per second. memoization keeps this rail stable.
 function ModuleRail({ inferredCount, modCount, partialCount, modsPath, collapsed = false, onToggle }: ModuleRailProps) {
   const resolved = modCount > 0 ? Math.min(100, Math.round((inferredCount / modCount) * 100)) : 0
 
@@ -214,9 +195,6 @@ function ModuleRail({ inferredCount, modCount, partialCount, modsPath, collapsed
 
       <div aria-hidden="true" style={{ flex: 1, minHeight: 20 }} />
 
-      {/* Folded, the foot keeps the one figure the whole app is about and drops
-          the rest: a 62px column cannot hold a path or a labelled tally without
-          truncating both into noise. */}
       {collapsed ? (
         <div
           className="tabular-nums"

@@ -16,23 +16,7 @@ interface TopBarProps {
   instance: string
 }
 
-/**
- * The 56px top bar: layered-square mark and wordmark, the MO2 instance chip,
- * and the live engine LED.
- *
- * No fill and no rule of its own, so it sits on the same plane as the content
- * below it. The engine LED is a flat filled dot that blinks while the engine is
- * busy; there is no gradient, shadow or glow anywhere in the bar.
- *
- * "Instance" rather than "profile" is Mod Organizer 2's own word for what this
- * value names, and salma borrows MO2's vocabulary.
- *
- * The filled square in the mark is the only branded use of the accent in the
- * app. Everywhere else, signal means live, selected or primary.
- *
- * Memoized, because Layout re-renders every second for the status-bar clock and
- * nothing here changes at that rate.
- */
+// the status clock updates once per second. memoization keeps this header stable.
 function TopBar({ engineState, instance }: TopBarProps) {
   const { theme, toggleTheme } = useTheme()
   const running = engineState !== 'idle'
@@ -162,11 +146,6 @@ function TopBar({ engineState, instance }: TopBarProps) {
 
       <div style={{ flex: 1 }} />
 
-      {/* The engine readout. It only spends accent while the engine is actually
-          doing something: an idle engine is the resting state of the app, and
-          accenting it burns the signal budget on "nothing is happening". The
-          dot, the border and the value all switch together, so the chip reads
-          as live or quiet at a glance rather than always looking live. */}
       <span
         style={{
           display: 'inline-flex',
