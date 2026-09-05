@@ -8,7 +8,6 @@ import { HRule } from './Rule'
 interface WhyPanelProps {
   confidence?: ConfidenceScore
   reasons?: FomodReason[]
-  /** Optional context label rendered as the panel header (e.g. "Why CBBE?"). */
   title?: string
 }
 
@@ -39,11 +38,6 @@ const REASON_COLOR: Record<string, string> = {
   IMPLICIT_DEFAULT: 'var(--ink-4)',
 }
 
-/**
- * The reason code as a legend entry rather than a chip: a coloured status dot
- * and the tracked mono code. A box here would be a second frame inside the
- * panel's own, to say one word.
- */
 function CodeChip({ code }: { code: string }) {
   const color = REASON_COLOR[code] ?? 'var(--ink-3)'
   return (
@@ -74,11 +68,6 @@ function CodeChip({ code }: { code: string }) {
   )
 }
 
-/**
- * The payload as plain preformatted text, no fill and no border: it sits on the
- * same plane as the reason above it, so a frame here would be nesting for its
- * own sake.
- */
 function DetailBlock({ detail }: { detail: Record<string, unknown> }) {
   const text = JSON.stringify(detail, null, 2)
   return (
@@ -101,14 +90,6 @@ function DetailBlock({ detail }: { detail: Record<string, unknown> }) {
   )
 }
 
-/**
- * The inference decision log, disclosed under a ghost toggle.
- *
- * Everything below the toggle is stacked bands on the plane the panel already
- * sits on: a legend row with the reason count, one band per reason, and a final
- * band for the confidence breakdown. Nothing here is boxed. This tab already
- * sits inside a pane, so a card here starts a chain of nested frames.
- */
 export default function WhyPanel({ confidence, reasons, title }: WhyPanelProps) {
   const [open, setOpen] = useState(false)
   const hasContent = (reasons && reasons.length > 0) || !!confidence
@@ -150,7 +131,6 @@ export default function WhyPanel({ confidence, reasons, title }: WhyPanelProps) 
         </span>
       </button>
       {open && (
-        // A band on the plane it already sits on, not a card.
         <div style={{ marginTop: 10, paddingTop: 9 }}>
           <div
             className="flex items-center"
@@ -162,8 +142,6 @@ export default function WhyPanel({ confidence, reasons, title }: WhyPanelProps) 
               fontWeight: 600,
               textTransform: 'uppercase',
               letterSpacing: 'var(--tr-kicker)',
-              // --ink-5, not --ink-faint: the row carries a real value (the
-              // reason count), and it matches the breakdown legend below it.
               color: 'var(--ink-5)',
             }}
           >
