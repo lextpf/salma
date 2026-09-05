@@ -1,30 +1,23 @@
 import type { ConfidenceScore, FomodEntry, RunDiagnostics } from './types'
 
-// The one place a confidence tier is decided. The Library reads it for row
-// meters and for the spec rail's dial and pill.
-//
-// `EXACT` comes from the backend's exact_match flag, meaning the inferred
-// selection reproduced the installed mod exactly. The other three bucket the
-// 0..1 composite: >= 0.85 is `HIGH`, >= 0.6 is `PARTIAL`, anything lower is
-// `LOW`. Those cuts are not the engine's own `ConfidenceBand` cuts in types.ts.
-//
-// `hasData` is false when there is neither a composite nor an exact match, so a
-// record with no score renders as a neutral meter with no pill instead of a
-// false `LOW`.
-//
-// Colors are CSS var names, resolved per theme in index.css.
-
+/**
+ * @brief classify confidence for dashboard display.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * thresholds differ from serialized engine bands. missing data uses `LOW`
+ * metadata with `hasData` false.
+ */
 export type Tier = 'EXACT' | 'HIGH' | 'PARTIAL' | 'LOW'
 
 export interface TierInfo {
   tier: Tier
   label: Tier
-  pct: number // rounded 0..100
-  rank: 1 | 2 | 3 | 4 // ordinal, EXACT highest
-  grade: 'A' | 'B' | 'C' | 'D' // the letter the meter shows, EXACT = A
-  bars: 1 | 3 | 4 | 5 // number of filled SignalMeter bars (of five)
-  color: string // CSS var for the tier's primary color (dial ring, meter fill)
-  hasData: boolean // false -> render a neutral meter and no pill (never a false LOW)
+  pct: number
+  rank: 1 | 2 | 3 | 4
+  grade: 'A' | 'B' | 'C' | 'D'
+  bars: 1 | 3 | 4 | 5
+  color: string
+  hasData: boolean
   pill: { fg: string; bg: string; bd: string }
 }
 

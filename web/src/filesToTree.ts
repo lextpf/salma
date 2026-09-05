@@ -1,7 +1,5 @@
 import { FAULT_RANK, type FaultKind, type FomodFileEntry } from './types'
 
-// A node in the inferred virtual output tree. Directory nodes carry no size and
-// hold children; file nodes are leaves with a size (and optional source path).
 export interface TreeNode {
   name: string
   path: string
@@ -9,32 +7,18 @@ export interface TreeNode {
   source?: string
   isDir: boolean
   children: TreeNode[]
-  /** How this file diverged from the installed mod, if it did. Files only. */
   fault?: FaultKind
-  /**
-   * The worst fault anywhere beneath a directory, so a collapsed folder still
-   * shows that something inside it is wrong. Directories only.
-   */
   worstFault?: FaultKind
-  /**
-   * True for a row the inferred selection does not produce: the file exists in
-   * the installed mod and the simulation never wrote it. Such a row has no size
-   * and no source, because no simulated file stands behind it.
-   */
   absent?: boolean
 }
 
-/** The worse of two faults, either possibly undefined. */
 function worseFault(a?: FaultKind, b?: FaultKind): FaultKind | undefined {
   if (!a) return b
   if (!b) return a
   return FAULT_RANK[a] <= FAULT_RANK[b] ? a : b
 }
 
-/**
- * Push each directory's worst descendant fault up the tree, so a fault stays
- * visible when the folder holding it is collapsed. Returns the subtree's worst.
- */
+// propagate the worst descendant fault to each directory.
 function rollUpFaults(nodes: TreeNode[]): FaultKind | undefined {
   let worst: FaultKind | undefined
   for (const node of nodes) {
@@ -62,15 +46,14 @@ function sortNodes(nodes: TreeNode[]): void {
   }
 }
 
-// Split each flat "a/b/c.dds" output entry into nested {name,path,...} nodes,
-// folding shared prefixes into shared directory nodes. Directories sort before
-// files, then alphabetically, so the tree is stable regardless of input order.
-//
-// `faults` marks the rows that diverged from the installed mod. Its `missing`
-// entries are a special case: those files exist in the mod but the inferred
-// selection never produces them, so they have no `outputTree` entry and are
-// grafted in as `absent` leaves. Without that, the one fault a reader most
-// wants to see would be the one with no row to look at.
+/**
+ * @fn filesToTree(entries?: FomodFileEntry[], faults?: ReadonlyMap<string, FaultKind>): TreeNode[]
+ * @brief include installed-only faults in the simulated output hierarchy.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * missing installed paths become absent leaves. directories retain their worst
+ * descendant fault for collapsed display.
+ */
 export function filesToTree(
   entries?: FomodFileEntry[],
   faults?: ReadonlyMap<string, FaultKind>,
@@ -79,8 +62,7 @@ export function filesToTree(
   const dirIndex = new Map<string, TreeNode>()
   const seen = new Set<string>()
 
-  // Walk a path down the tree, creating directories as needed, and return the
-  // sibling list its leaf belongs in (or null if the path is unusable).
+  // return the leaf container, or null for an unusable path.
   const descend = (path: string): { siblings: TreeNode[]; leaf: string } | null => {
     const parts = path.split('/').filter(Boolean)
     if (parts.length === 0) {
@@ -147,9 +129,6 @@ export function filesToTree(
   return roots
 }
 
-// Depth-first flatten honouring a collapsed-folder set, so a virtualized list
-// can render only the currently visible rows. Each row carries its depth for
-// indentation.
 export interface FlatNode {
   node: TreeNode
   depth: number
