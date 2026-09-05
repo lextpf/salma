@@ -1,7 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 
 interface UseFileDropOptions {
-  // Called with the selected/dropped files. No-op while disabled.
   onFiles: (files: FileList) => void
   disabled?: boolean
 }
@@ -16,9 +15,13 @@ export interface FileDrop {
   onDrop: (e: React.DragEvent) => void
 }
 
-// Drag-and-drop plus hidden-file-input wiring, in one place so every intake
-// surface behaves the same. The caller owns the markup and has to render
-// <input ref={inputRef} onChange={onInputChange} />.
+/**
+ * @fn useFileDrop({ onFiles, disabled = false }: UseFileDropOptions): FileDrop
+ * @brief combine picker and drag input without hiding repeated selections.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * callers must attach `inputRef` and `onInputChange` to one file input.
+ */
 export function useFileDrop({ onFiles, disabled = false }: UseFileDropOptions): FileDrop {
   const inputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -31,7 +34,7 @@ export function useFileDrop({ onFiles, disabled = false }: UseFileDropOptions): 
     if (disabled) return
     const files = e.target.files
     if (files && files.length > 0) onFiles(files)
-    // Reset so picking the same file twice still fires onChange.
+    // allow the same file to trigger a later change event.
     e.target.value = ''
   }, [disabled, onFiles])
 
