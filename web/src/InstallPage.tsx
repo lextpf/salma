@@ -16,7 +16,7 @@ import { usePluginAction } from './usePluginAction'
 import { useContentBreakpoints } from './useViewportNarrow'
 
 export default function InstallPage() {
-  // share one page poller across install views.
+  // Share one page poller across install views.
   const { status, config, loading: statusLoading, refreshRef } = useSystemStatus()
 
   const pluginInstalled = status?.pluginInstalled === true
@@ -33,16 +33,16 @@ export default function InstallPage() {
   const { pluginActionRunning, pluginActionError, handleDeployPlugin, handlePurgePlugin } =
     usePluginAction(onPluginActionComplete)
 
-  // lock intake while unavailable, purged, or installing.
+  // Lock intake while unavailable, purged, or installing.
   const locked = !pluginInstalled || systemUnavailable || isInstalling
 
-  // useFileDrop expects a void callback, so drop the install promise here.
+  // The useFileDrop hook expects a void callback, so drop the install promise here.
   const onFiles = useCallback((files: FileList) => { void handleFileSelect(files); }, [handleFileSelect])
 
   const { isDragging, inputRef, openPicker, onInputChange, onDragOver, onDragLeave, onDrop } =
     useFileDrop({ onFiles, disabled: locked })
 
-  // installs run sequentially. the first non-terminal job is active.
+  // Installs run sequentially. The first non-terminal job is active.
   const active = (() => {
     for (let i = 0; i < jobs.length; i++) {
       const s = jobs[i].status
@@ -53,13 +53,13 @@ export default function InstallPage() {
     return null
   })()
 
-  // share one console poll between the active card and ribbon.
+  // Share one console poll between the active card and ribbon.
   const { lines, rawLines } = useInstallConsole(active?.job.id ?? null, isInstalling)
 
   const queuedCount = jobs.filter(j => j.status === 'pending').length
   const errorBanner = testError || pluginActionError
 
-  // unavailable state takes priority because plugin state is then unknown.
+  // Unavailable state takes priority because plugin state is then unknown.
   const dropVariant: DropPromptVariant | null = systemUnavailable
     ? 'unavailable'
     : pluginPurged
