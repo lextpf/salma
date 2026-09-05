@@ -1,20 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 
-/** Default row height in CSS pixels when the caller passes none. Same value as ROW_LOG. */
 const LINE_HEIGHT = 26
-/** Extra rows rendered above and below the window, so a fast scroll shows no gap. */
 const OVERSCAN = 20
 
-/**
- * Fixed row heights in CSS pixels, and the only source of truth for them.
- *
- * The scroll arithmetic below multiplies these, so it cannot read a custom
- * property. index.css declares similarly named --h-logrow, --h-record and
- * --h-sep tokens, but nothing reads those and their values differ (24, 32, 22).
- * The two sets are unrelated; do not change either to match the other. Render a
- * row at exactly the constant used here, or the spacers drift and the list
- * slips as it scrolls.
- */
 export const ROW_LOG = 26
 export const ROW_RECORD = 34
 export const ROW_SEP = 24
@@ -25,17 +13,13 @@ export interface VirtualScrollState {
   handleScroll: () => void
   isAtBottomRef: React.MutableRefObject<boolean>
   resetScroll: () => void
-  /** Pin the viewport to the tail, unless the user has scrolled away from it. */
   stickToBottom: () => void
   startIdx: (totalItems: number) => number
   endIdx: (totalItems: number) => number
-  /** Pixel offset of row `i` from the top of the content. */
   offsetOf: (i: number) => number
-  /** Total content height for `totalItems` rows. */
   totalHeight: (totalItems: number) => number
 }
 
-/** Index of the last offset <= y. Offsets are ascending, so binary search. */
 function indexAt(prefix: number[], y: number): number {
   let lo = 0
   let hi = prefix.length - 1
@@ -48,14 +32,19 @@ function indexAt(prefix: number[], y: number): number {
 }
 
 /**
- * Windowed scrolling for long lists.
+ * @fn useVirtualScroll(rows: number | number[] = LINE_HEIGHT): VirtualScrollState
+ * @brief keep large row sets within the visible scroll window.
+ * @author Alex (https://github.com/lextpf)
  *
- * `rows` is either a single row height (the common case) or a per-row height
- * array. The array form exists because the records list interleaves 34px mod
- * rows with 24px separator bands: a single fixed height would make every
- * spacer and every index-to-offset mapping wrong, and the list would drift as
- * you scroll. Pass a memoized array - a fresh one each render rebuilds the
- * prefix sums.
+ * ### :material-ruler: coordinates
+ *
+ * row heights and offsets are CSS pixels. exported row heights must match rendered CSS dimensions.
+ * `startIdx` is inclusive and `endIdx` is exclusive. `offsetOf` is relative to the full row set.
+ *
+ * ### :material-refresh: prefix sums
+ *
+ * pass one height for uniform rows or one height per row.
+ * pass a memoized array to reuse prefix sums.
  */
 export function useVirtualScroll(rows: number | number[] = LINE_HEIGHT): VirtualScrollState {
   const elRef = useRef<HTMLDivElement | null>(null)
@@ -67,7 +56,7 @@ export function useVirtualScroll(rows: number | number[] = LINE_HEIGHT): Virtual
 
   const uniform = typeof rows === 'number' ? rows : null
 
-  // prefix[i] is the offset of row i; prefix[n] is the total height.
+  // `prefix[i]` is the row offset. the final entry is the total height.
   const prefix = useMemo(() => {
     if (typeof rows === 'number') return null
     const acc = new Array<number>(rows.length + 1)
@@ -78,12 +67,9 @@ export function useVirtualScroll(rows: number | number[] = LINE_HEIGHT): Virtual
     return acc
   }, [rows])
 
-  // A callback ref fires on every attach and detach, so the ResizeObserver
-  // stays connected even when the element is conditionally rendered, such as
-  // while a loading skeleton stands in for it.
+  // reconnect the observer when a conditional scroll element changes.
   const scrollRef = useCallback((node: HTMLDivElement | null) => {
     if (elRef.current === node) return
-    // Tear down the observer on the previous node.
     if (obsRef.current) { obsRef.current.disconnect(); obsRef.current = null }
     elRef.current = node
     if (!node) return
@@ -93,7 +79,6 @@ export function useVirtualScroll(rows: number | number[] = LINE_HEIGHT): Virtual
     obsRef.current = obs
   }, [])
 
-  // Disconnect on unmount.
   useEffect(() => () => { obsRef.current?.disconnect() }, [])
 
   useEffect(() => () => {
@@ -117,9 +102,7 @@ export function useVirtualScroll(rows: number | number[] = LINE_HEIGHT): Virtual
     setScrollTop(0)
   }, [])
 
-  // Owned here rather than at the call site: the scroll element belongs to this
-  // hook, and writing through a ref a hook handed you is what
-  // react-hooks/immutability forbids. Callers only say "stick to the tail".
+  // keep scroll mutation inside the hook that owns the element.
   const stickToBottom = useCallback(() => {
     if (!isAtBottomRef.current) return
     const el = elRef.current
