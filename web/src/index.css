@@ -1,78 +1,17 @@
 @import "tailwindcss";
 
-/* ================================================================
-   salma design tokens, resets and global styles.
-
-   Two themes, one system. Neutral-grey dark and neutral-grey light
-   are mirror images of one structure, not a plain theme and a
-   decorated one.
-
-   Five rules the whole system rests on:
-
-     1. --signal means exactly one thing: live, selected or primary.
-        Budget four to six occurrences per screen. Never decorative.
-     2. One plane. Chrome, panes, cards and content are all the same
-        colour. No region carries a fill of its own and no region
-        carries an edge; space and type are what separate things.
-        There are no cards.
-     3. A border belongs only to something you can click, something
-        you can type into, or something reporting state. Never to an
-        area. To say "this bit is separate", use a gap and a label.
-     4. Every ink level that carries text clears 4.5:1 on every
-        surface it sits on, in both themes. By rule 2 that is one
-        surface per theme (--paper-3 is the only other one and it
-        carries no text). Exactly one level, --ink-ghost, is below
-        4.5:1, and it never carries text.
-     5. Empty space is filled with information or left empty, never
-        with a bloom and never with a texture field. The #root rule
-        below says what that costs.
-
-   The greys are neutral, and their exact values are load-bearing:
-   the contrast figures written into the ink block below are computed
-   against them. Hue belongs only to things that mean something: the
-   signal, the severity levels, the format tiles.
-
-   salma reads as a companion instrument to Mod Organizer 2, so it
-   borrows MO2's *conventions* rather than its look: a priority
-   column, user-style separator bands in the mod list, "instance"
-   vocabulary, and install destinations written as mods/<name>.
-
-   Component styling lives in inline style objects in the TSX. This
-   file owns tokens, resets, and the interaction states inline styles
-   cannot express (:hover, :focus-visible, animations).
-
-   Shadow-shaped tokens resolve to a zero-size transparent shadow
-   rather than `none`, so a composed `box-shadow: var(--a), var(--b)`
-   list stays valid wherever one survives.
-   ================================================================ */
+/**
+ * @brief define dashboard tokens, resets, and pseudo-class states.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * chrome and content share one plane. `--signal` means live, selected, or primary.
+ * all text ink except `--ink-ghost` meets a 4.5:1 contrast ratio in both themes.
+ * components own resting styles. this file owns tokens and states that inline styles
+ * cannot express.
+ */
 
 @theme {
-  /* ---------- Surface (light default: neutral paper) ------------
-     One plane. Six of the seven surface tokens hold the same value in
-     each theme, so the top bar, the rail, the status bar, every pane
-     and the content between them are one continuous field:
-
-       | token     | light   | dark    | where it is still used       |
-       |-----------|---------|---------|------------------------------|
-       | --void    | #f2f2f2 | #191919 | body, Layout root, log foot  |
-       | --paper   | #f2f2f2 | #191919 | module plane                 |
-       | --paper-2 | #f2f2f2 | #191919 | no call sites left           |
-       | --sheet   | #f2f2f2 | #191919 | no call sites left           |
-       | --card    | #f2f2f2 | #191919 | dial hub, feed cap           |
-       | --card-2  | #f2f2f2 | #191919 | no call sites left           |
-       | --paper-3 | #ffffff | #232323 | toggle knob, the exception   |
-
-     That table is the invariant. If a change makes two rows of the
-     first six differ, rule 2 is broken, not extended.
-
-     The unused names are kept because they say what a call site
-     means, and because a second plane, if one is ever needed, is then
-     one edit here instead of thirty in the components.
-
-     --paper-3 is not a plane: an affordance you operate has to read
-     as raised, and that is a control, not a region. It carries no
-     text, which is why rule 4 does not apply to it. Text inputs take
-     --input below, for the same reason. */
+  /* keep all surface tokens except `--paper-3` on the same plane. */
   --void:    #f2f2f2;
   --paper:   #f2f2f2;
   --paper-2: #f2f2f2;
@@ -82,56 +21,31 @@
   --card-2:  #f2f2f2;
   --hover:   rgba(26, 26, 26, 0.069);
 
-  /* A well is a region with a fill, which rule 2 forbids, so both
-     resolve to transparent. Kept as tokens so call sites still parse
-     and still read as intent. */
   --well:    transparent;
   --well-2:  transparent;
-  --input:   #ffffff;                 /* text inputs */
-  --seg-bg:  rgba(26, 26, 26, 0.06);  /* segmented-control shell */
-  /* Thin bars follow the hairline reasoning above: a 3px track on
-     paper needs more ink than its dark mirror to read as a bar. */
-  --track:   rgba(26, 26, 26, 0.24);  /* progress track */
+  --input:   #ffffff;
+  --seg-bg:  rgba(26, 26, 26, 0.06);
+  --track:   rgba(26, 26, 26, 0.24);
   --track-2: rgba(26, 26, 26, 0.24);
-  --tick:    rgba(26, 26, 26, 0.44);  /* lit meter bar, quarter ticks */
-  --btn-bg:  #fcfcfc;                 /* ghost button fill */
+  --tick:    rgba(26, 26, 26, 0.44);
+  --btn-bg:  #fcfcfc;
   --chip-bg: rgba(26, 26, 26, 0.069);
-  --chip-quiet: #fafafa;              /* instance chip, quiet raised surfaces */
-  --sep-bg:  rgba(26, 26, 26, 0.069); /* mod-list separator band */
+  --chip-quiet: #fafafa;
+  --sep-bg:  rgba(26, 26, 26, 0.069);
   --tog-off: rgba(26, 26, 26, 0.30);
-  --ghost-c: rgba(26, 26, 26, 0.068);  /* the 210px watermark numeral */
-  --crop-c:  rgba(12, 107, 117, 0.55);/* feed corner ticks */
+  --ghost-c: rgba(26, 26, 26, 0.068);
+  --crop-c:  rgba(12, 107, 117, 0.55);
 
-  /* ---------- Ink -----------------------------------------------
-     One ratio per level. --void and --paper are the same colour, so a
-     level cannot read differently on the two and one column of
-     figures covers both: WCAG 2.x contrast ratios against #f2f2f2,
-     rounded to two decimals.
-
-     ink through ink-faint all clear 4.5:1, which is rule 4.
-     --ink-ghost is the single sub-AA level, for marks and rules only.
-
-     ink-faint sits close to ink-6 on purpose. Holding it at AA costs
-     the visible gap between the bottom two steps, and legibility of
-     section labels is worth more than hierarchy at the bottom of the
-     ramp. Lightening it to restore that gap puts it below AA.
-
-     Recompute these figures if a surface token moves. They are the
-     only place the contrast claim is written down, and a stale one is
-     how a level drops below AA unnoticed. */
+  /* WCAG ratios against `#f2f2f2`. `--ink-ghost` is for non-text marks only. */
   --ink:       #121212;  /* 16.73 */
   --ink-2:     #242424;  /* 13.87 */
   --ink-3:     #373737;  /* 10.63 */
   --ink-4:     #4a4a4a;  /*  7.92 */
   --ink-5:     #5d5d5d;  /*  5.88 */
   --ink-6:     #656565;  /*  5.21 */
-  --ink-faint: #676767;  /*  5.05 - section labels */
-  --ink-ghost: #7e7e7e;  /*  3.63 - marks and rules only */
+  --ink-faint: #676767;  /*  5.05 */
+  --ink-ghost: #7e7e7e;  /*  3.63 */
 
-  /* ---------- Signal: the one accent ---------------------------
-     Darkened on paper so it can carry text and still read as the
-     accent. Accent *text* darkens further rather than lightening,
-     the opposite of the dark theme's direction. */
   --signal:      #0c6b75;
   --signal-2:    #0b5f68;
   --signal-3:    #084b53;
@@ -147,14 +61,11 @@
   --signal-bd-dash:    rgba(12, 107, 117, 0.654);
   --signal-bd-soft:    rgba(12, 107, 117, 0.32);
 
-  /* Selection: one flat treatment everywhere. A 2px solid edge, a
-     flat wash, and an ink shift. No fading gradient, no glow. */
   --sel-bg:   rgba(12, 107, 117, 0.141);
   --sel-edge: #0c6b75;
 
-  /* ---------- Semantic - deepened for AA on paper --------------- */
   --brass:     #8a5c1c;
-  --ochre:     var(--brass);   /* alias for --brass; no call sites left */
+  --ochre:     var(--brass);
   --warn-text: #6f4a15;
   --danger:    #a83a28;
   --danger-2:  #862c1d;
@@ -164,18 +75,7 @@
   --ok-bg:       rgba(79, 97, 41, 0.167);
   --ok-bd:       rgba(79, 97, 41, 0.40);
 
-  /* ---------- Hairlines ----------------------------------------
-     Depth is drawn with these, so they have to be visible.
-
-     They are deliberately heavier than the dark ramp's mirror image.
-     Matching the two by contrast ratio or by CIE L* delta is the
-     wrong target: a 1px line is a high-frequency feature and the two
-     planes are not symmetric for those. 12% white on #191919 is a
-     +260% luminance jump, while 17% black on #f2f2f2 is a -31% dip,
-     so equal L* still reads as a much fainter line on paper, and the
-     bright surround adds veiling glare on top. These values were set
-     by eye at 1px on a bright screen. Do not "correct" them down to
-     numeric parity with the dark ramp. */
+  /* tune one-pixel light-theme rules independently from the dark ramp. */
   --rule-faint:  rgba(26, 26, 26, 0.14);
   --rule-soft:   rgba(26, 26, 26, 0.20);
   --rule:        rgba(26, 26, 26, 0.26);
@@ -183,10 +83,7 @@
   --rule-strong: rgba(26, 26, 26, 0.40);
   --rule-hover:  rgba(26, 26, 26, 0.55);
 
-  /* ---------- Elevation ----------------------------------------
-     There is no elevation. Surfaces separate with a hairline and one
-     fill step, so every token here is a zero-size transparent shadow.
-     The names are kept because they read as intent at the call site. */
+  /* transparent values keep composed `box-shadow` lists valid. */
   --elev-raised: 0 0 0 0 rgba(0, 0, 0, 0);
   --elev-chrome: 0 0 0 0 rgba(0, 0, 0, 0);
   --elev-header: 0 0 0 0 rgba(0, 0, 0, 0);
@@ -205,7 +102,6 @@
   --fill-lip:    0 0 0 0 rgba(0, 0, 0, 0);
   --btn-lip:     0 0 0 0 rgba(0, 0, 0, 0);
 
-  /* ---------- Operational colour -------------------------------- */
   --log-info:  #1c6690;
   --log-debug: #615d53;
   --log-warn:  #8a5c1c;
@@ -231,14 +127,10 @@
   --format-rar:   #9c4d1e;
   --format-fomod: #4f6129;
   --format-json:  #8a5c1c;
-  /* Anything the accepted list does not name. The engine still tries it
-     (format_of falls through to the zip backend), so it gets a tile. */
+  /* unknown formats use the zip backend and still need a tile. */
   --format-other: #4a5665;
 
-  /* ---------- Stage / segment meter -----------------------------
-     The install progress instrument. A segment is done, live or
-     pending; nothing about it is lit. */
-  --stage-done:    #0b5f68;  /* history reads deeper than the present */
+  --stage-done:    #0b5f68;
   --stage-live:    #0c6b75;
   --stage-todo:    rgba(26, 26, 26, 0.10);
   --stage-todo-bd: rgba(26, 26, 26, 0.20);
@@ -247,10 +139,6 @@
   --stage-rail-on:  rgba(12, 107, 117, 0.55);
   --stage-rail-off: rgba(26, 26, 26, 0.14);
 
-  /* ---------- Confidence tiers ---------------------------------
-     The tier colour is also the pill's text colour: these are
-     outline pills over a wash, not filled chips. --tier-*-on is the
-     text for the one place a tier is used as a solid fill. */
   --tier-exact:      #0c6b75;
   --tier-exact-bg:   rgba(12, 107, 117, 0.141);
   --tier-exact-bd:   rgba(12, 107, 117, 0.553);
@@ -265,12 +153,6 @@
   --tier-low-bg:     rgba(168, 58, 40, 0.149);
   --tier-low-bd:     rgba(168, 58, 40, 0.476);
 
-  /* ---------- Reproduction faults (virtual output tree) ---------
-     A highlighter, not a tint. These are far stronger than the *-wash
-     and level-chip fills, and they can be: those sit under text of
-     their own hue, which caps how dark they can go. A faulted tree
-     row keeps its normal ink and tones only the glyph, so the fill is
-     free to read as a marked row. */
   --fault-bg-danger: rgba(168, 58, 40, 0.30);
   --fault-bg-warn:   rgba(138, 92, 28, 0.34);
 
@@ -278,40 +160,32 @@
   --meter-bar:   rgba(26, 26, 26, 0.42);
   --mini-track:  rgba(26, 26, 26, 0.20);
 
-  /* ---------- Typography ---------------------------------------
-     Families are fixed: Hanken Grotesk for UI, JetBrains Mono for
-     data, labels and numerals. */
   --font-display: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
   --font-body:    'Hanken Grotesk', system-ui, -apple-system, sans-serif;
   --font-mono:    'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
   --font-sans:    'Hanken Grotesk', system-ui, -apple-system, sans-serif;
   --font-serif:   'Hanken Grotesk', system-ui, -apple-system, sans-serif;
 
-  /* ---------- Type scale ---------------------------------------
-     The only sanctioned font sizes for rendered text. Inline styles
-     reference these as fontSize: 'var(--fs-body)'; raw numeric
-     fontSize values are banned outside MIcon's icon box. Sizes below
-     10px are reserved for tracked uppercase mono. */
-  --fs-nano:    9px;    /* dial sub-label only */
-  --fs-micro:   10px;   /* kickers, mono labels, LED text, tallies */
-  --fs-meta:    10.5px; /* status bar, ribbon meta */
-  --fs-label:   11px;   /* mono chips, facet counts, tabs */
-  --fs-mono:    11.5px; /* console lines, log rows, tree rows, inputs */
-  --fs-sm:      12px;   /* setting descriptions, kicker numerals, Cancel */
-  --fs-body:    12.5px; /* data rows, mod names, buttons */
-  --fs-title:   13px;   /* card titles, settings labels */
-  --fs-head:    14.5px; /* active job filename */
-  --fs-lg:      17px;   /* the dial's degraded chip numeral */
-  --fs-lede:    20px;   /* salma wordmark */
-  --fs-h1:      25px;   /* inspector record title */
-  --fs-empty:   24px;   /* empty-state headline */
-  --fs-hero-sm: 30px;   /* dial numeral, logs record count */
-  --fs-hero:    40px;   /* install percent, rail inferred count */
-  --fs-ghost:   210px;  /* watermark module numeral */
-  --fs-display: 26px;   /* alias; no call sites left */
+  /* rendered text uses this scale. numeric TSX sizes are reserved for icon boxes. */
+  --fs-nano:    9px;
+  --fs-micro:   10px;
+  --fs-meta:    10.5px;
+  --fs-label:   11px;
+  --fs-mono:    11.5px;
+  --fs-sm:      12px;
+  --fs-body:    12.5px;
+  --fs-title:   13px;
+  --fs-head:    14.5px;
+  --fs-lg:      17px;
+  --fs-lede:    20px;
+  --fs-h1:      25px;
+  --fs-empty:   24px;
+  --fs-hero-sm: 30px;
+  --fs-hero:    40px;
+  --fs-ghost:   210px;
+  --fs-display: 26px;
   --lh-body:    1.6;
 
-  /* Tracking - most of the crafted feeling lives here. */
   --tr-lockup: 0.24em;
   --tr-kicker: 0.18em;
   --tr-chip:   0.12em;
@@ -319,10 +193,6 @@
   --tr-tight:  -0.035em;
   --tr-hero:   -0.04em;
 
-  /* ---------- Shape --------------------------------------------
-     Small and consistent. A 12px radius reads as a consumer app and
-     4px reads as an instrument panel; nothing is fully square, which
-     would read as an unstyled document. */
   --radius-chip:  2px;
   --radius-seg:   3px;
   --radius-ctrl:  4px;
@@ -333,22 +203,13 @@
   --radius-card:  4px;
   --radius-plate: 6px;
   --radius-full:  999px;
-  /* Generic scale. No call sites left; kept so a --radius-md still resolves. */
   --radius-xs: 2px;
   --radius-sm: 3px;
   --radius-md: 4px;
   --radius-lg: 4px;
   --radius-xl: 6px;
 
-  /* ---------- Chrome metrics ------------------------------------
-     Reference only. No component reads any of these: component sizing
-     lives in inline style objects in the TSX, and the two virtualised
-     lists need plain numbers for their scroll arithmetic, which a
-     custom property cannot supply. Several have already drifted from
-     what the components use (ModuleHeader is 52px, not --h-header's
-     46px; the list rows are 26/34/24, not --h-logrow/--h-record/
-     --h-sep). The TSX and useVirtualScroll.ts are authoritative. Do
-     not "sync" a component to a value here. */
+  /* reference only. TSX and `useVirtualScroll.ts` own rendered dimensions. */
   --h-topbar:    52px;
   --h-header:    46px;
   --h-status:    30px;
@@ -361,7 +222,6 @@
   --w-rail:      216px;
   --w-rail-icon: 62px;
 
-  /* ---------- Motion -------------------------------------------- */
   --ease: cubic-bezier(0.21, 0.9, 0.3, 1);
 
   @keyframes m-spin {
@@ -387,19 +247,11 @@
     0%   { background-position: 200% 0; }
     100% { background-position: -200% 0; }
   }
-  /* The segment meter's live cell: a flat opacity breath, no bloom. */
   @keyframes segLive {
     0%, 100% { opacity: 1; }
     50%      { opacity: 0.55; }
   }
 }
-
-/* ================================================================
-   Dark theme: the same structure, inverted. Neutral near-blacks, a
-   cool signal cyan, and an ink ramp whose contrast ratios match
-   light's step for step. Only token values change here; every rule
-   at the top of this file still holds.
-   ================================================================ */
 
 [data-theme="dark"] {
   --void:    #191919;
@@ -426,18 +278,15 @@
   --ghost-c: rgba(255, 255, 255, 0.045);
   --crop-c:  rgba(92, 210, 222, 0.55);
 
-  /* Ratios against #191919, the one dark plane. Every step lands
-     within 0.7 of the light ramp's matching step, which is what keeps
-     the two themes one system rather than two designs. Recompute
-     these if --void or --paper moves in this block. */
+  /* WCAG ratios against `#191919`. `--ink-ghost` is for non-text marks only. */
   --ink:       #f5f5f5;  /* 16.13 */
   --ink-2:     #e4e4e4;  /* 13.83 */
   --ink-3:     #c7c7c7;  /* 10.40 */
   --ink-4:     #a6a6a6;  /*  7.22 */
   --ink-5:     #8f8f8f;  /*  5.44 */
   --ink-6:     #868686;  /*  4.83 */
-  --ink-faint: #818181;  /*  4.51 - section labels, the tightest pass */
-  --ink-ghost: #6c6c6c;  /*  3.35 - marks and rules only */
+  --ink-faint: #818181;  /*  4.51 */
+  --ink-ghost: #6c6c6c;  /*  3.35 */
 
   --signal:      #5cd2de;
   --signal-2:    #9ae2ea;
@@ -474,9 +323,6 @@
   --rule-strong: rgba(255, 255, 255, 0.24);
   --rule-hover:  rgba(255, 255, 255, 0.40);
 
-  /* Elevation stays zero here too. Both themes separate surfaces the
-     same way, with a hairline and one fill step. */
-
   --log-info:  #7cc6ec;
   --log-debug: #948f85;
   --log-warn:  #dfae67;
@@ -504,7 +350,7 @@
   --format-json:  #dfae67;
   --format-other: #a3adba;
 
-  --stage-done:    #2f8f99;  /* history reads deeper than the present */
+  --stage-done:    #2f8f99;
   --stage-live:    #5cd2de;
   --stage-todo:    rgba(255, 255, 255, 0.09);
   --stage-todo-bd: rgba(255, 255, 255, 0.19);
@@ -527,8 +373,6 @@
   --tier-low-bg:     rgba(236, 133, 113, 0.15);
   --tier-low-bd:     rgba(236, 133, 113, 0.44);
 
-  /* Lower alpha than the light theme: on a near-black plane a tinted
-     overlay lifts luminance fast, and the ink sitting on it is light. */
   --fault-bg-danger: rgba(236, 133, 113, 0.22);
   --fault-bg-warn:   rgba(223, 174, 103, 0.22);
 
@@ -536,10 +380,6 @@
   --meter-bar:   rgba(255, 255, 255, 0.34);
   --mini-track:  rgba(255, 255, 255, 0.08);
 }
-
-/* ================================================================
-   Base
-   ================================================================ */
 
 @layer base {
   *, *::before, *::after { box-sizing: border-box; }
@@ -562,10 +402,6 @@
     min-height: 100vh;
   }
 
-  /* Nothing is painted over the app: no grain sheet, no vignette, no
-     dot or grid field, per-pane or full-screen. Each of those costs
-     contrast on every surface underneath in order to decorate the few
-     panes that are empty. An empty pane gets content or nothing. */
   #root {
     position: relative;
     z-index: 1;
@@ -591,17 +427,11 @@
     color: var(--ink);
   }
 
-  /* Two solid pixels, not a glow. Visible on every plane in both
-     themes without depending on a shadow. */
   :focus-visible {
     outline: 2px solid var(--signal);
     outline-offset: 1px;
     border-radius: var(--radius-chip);
   }
-
-  /* ============================================================
-     Icons
-     ============================================================ */
 
   .m-icon {
     display: inline-block;
@@ -613,10 +443,6 @@
   }
 
   .m-spin { animation: m-spin 1s linear infinite; }
-
-  /* ============================================================
-     Scrollbars
-     ============================================================ */
 
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -647,26 +473,12 @@
 
   .scroll-pane { overscroll-behavior: contain; }
 
-  /* ============================================================
-     Interaction states: the parts inline styles cannot express.
-     Resting appearance is set inline on the element and wins on
-     specificity; these rules paint hover, focus and motion only.
-
-     Every interactive state here is a fill or a border change. None
-     of them depend on a shadow, so they survive the flat pass and
-     read at the same strength in both themes.
-     ============================================================ */
-
   .rail-item { transition: background-color 160ms var(--ease), color 160ms var(--ease); }
   .rail-item:not([aria-current="page"]):hover { background: var(--hover); color: var(--ink-2); }
 
-  /* Generic interactive row: records, tree, facets, files, jobs. */
   .fm-row { transition: background-color 160ms var(--ease); }
   .fm-row:not([data-selected="true"]):hover { background: var(--hover); }
 
-  /* Ghost controls raise border and fill together on hover. With no
-     shadow anywhere in the system, a border-only change is too quiet
-     to register. */
   .btn { transition: background-color 160ms var(--ease), border-color 160ms var(--ease), color 160ms var(--ease); }
   .btn:not(:disabled):hover { border-color: var(--rule-hover); background: var(--hover); color: var(--ink); }
   .btn:not(:disabled):active { background: var(--seg-bg); }
@@ -676,8 +488,7 @@
   .seg-item { transition: background-color 160ms var(--ease), color 160ms var(--ease); }
   .seg-item:not([aria-selected="true"]):hover { color: var(--ink-3); background: var(--hover); }
 
-  /* Indeterminate fill, used when no percentage is parseable. A flat
-     two-tone hatch that scrolls; no gradient, no sheen. */
+  /* use the animated hatch only when no percentage is available. */
   .fm-stripe {
     background-image: repeating-linear-gradient(
       45deg,
@@ -695,10 +506,6 @@
   .rise     { animation: rise 0.28s var(--ease) both; }
   .seg-live { animation: segLive 1.4s var(--ease) infinite; }
 
-  /* ============================================================
-     Skeletons
-     ============================================================ */
-
   .skeleton-line {
     border-radius: var(--radius-chip);
     background: linear-gradient(90deg,
@@ -708,10 +515,6 @@
     background-size: 200% 100%;
     animation: skeleton-shimmer 1.4s linear infinite;
   }
-
-  /* ============================================================
-     Log stream
-     ============================================================ */
 
   .log-viewer {
     font-family: var(--font-mono);
@@ -724,8 +527,6 @@
   .log-stream-row { transition: background-color 160ms var(--ease); }
   .log-stream-row:hover { background: var(--hover); }
 
-  /* Severity is readable down the left edge while scanning: a flat
-     2px inner bar plus a flat wash across the row. */
   .log-stream-row[data-level="WARN"] {
     box-shadow: inset 2px 0 0 var(--log-warn);
     background: var(--warn-wash);
@@ -737,18 +538,7 @@
   .log-stream-row[data-level="WARN"]:hover,
   .log-stream-row[data-level="ERROR"]:hover { filter: brightness(1.06); }
 
-  /* ============================================================
-     Virtual output tree: reproduction faults
-     ============================================================ */
-
-  /* A faulted row is highlighted across its whole width, like a marker drawn
-     over it. The question a reader brings to this tree is "which files went
-     wrong", and a 2px left rule answers that only for someone who already knows
-     to look at the margin. The fill carries the answer; the edge stays because
-     it still helps a scan down the margin.
-
-     These belong here, not inline, so :hover still composes. An inline
-     background outranks the .fm-row hover rule and freezes the row. */
+  /* keep fault backgrounds here so hover can override them. */
   .fm-row[data-fault] { transition: background-color 160ms var(--ease); }
 
   .fm-row[data-fault="missing"] {
@@ -763,16 +553,11 @@
   }
   .fm-row[data-fault]:hover { filter: brightness(1.04); }
 
-  /* Column widths are cut to what the content needs: a level label is five
-     characters at --fs-micro, a subsystem tag is one short word. Slack in these
-     two columns comes straight out of the message column. */
   .log-stream-time      { flex-shrink: 0; color: var(--ink-faint); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
   .log-stream-level     { width: 46px; flex-shrink: 0; text-align: center; }
   .log-stream-subsystem { width: 68px; flex-shrink: 0; color: var(--ink-5); }
 
-  /* Docked under a scrolling stream, so it keeps an opaque fill - lines
-     have to disappear behind it rather than show through. Same colour
-     as the plane, so there is no visible seam and no rule. */
+  /* the opaque footer hides records that scroll behind it. */
   .log-progress-footer {
     flex-shrink: 0;
     padding: 9px 18px;
@@ -787,10 +572,6 @@
     white-space: pre;
     color: var(--ink-3);
   }
-
-  /* ============================================================
-     Syntax highlighting: JSON and log lines
-     ============================================================ */
 
   .json-key     { color: var(--signal-2); }
   .json-string  { color: var(--moss); }
@@ -820,10 +601,6 @@
   .log-operator      { color: var(--ink-5); }
   .log-ip            { color: var(--ink-5); }
   .log-guid          { color: var(--ink-5); font-style: italic; }
-
-  /* ============================================================
-     Reduced motion: drop the ambient loops, keep state changes.
-     ============================================================ */
 
   @media (prefers-reduced-motion: reduce) {
     .blink, .caret, .fm-stripe, .seg-live, .m-spin, .skeleton-line {
