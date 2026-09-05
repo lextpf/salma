@@ -14,7 +14,6 @@ interface SessionFeedProps {
   jobs: InstallationJob[]
   active: { job: InstallationJob; index: number } | null
   isInstalling: boolean
-  // Intake disabled (purged / unavailable / installing). Drives click-to-browse.
   locked: boolean
   purged: boolean
   consoleLines: ConsoleLine[]
@@ -26,16 +25,16 @@ interface SessionFeedProps {
   onDragOver: (e: React.DragEvent) => void
   onDragLeave: (e: React.DragEvent) => void
   onDrop: (e: React.DragEvent) => void
-  // Best-effort names of the dragged files (usually empty: browsers hide the
-  // drag payload during dragover).
+  /**
+   * @brief file names visible during dragover.
+   *
+   * browsers can return an empty list.
+   */
   dragFileNames: string[]
-  /** Library tallies, printed in the idle panel's bottom band. */
   stats?: { inferred: number; mods: number }
-  /** MO2 mods directory, printed as the intake destination. */
   destPath?: string
 }
 
-/** One dotted tally in the session rule line. */
 function Tally({ text, dot, fg }: { text: string; dot: string; fg: string }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -45,61 +44,35 @@ function Tally({ text, dot, fg }: { text: string; dot: string; fg: string }) {
   )
 }
 
-// The rail's four columns. The spine line sits at NUM_W + LINE_X, and
-// everything that has to touch it (the stem under the slot, the slot's own
-// glyph, the node icons) is positioned from these numbers rather than from a
-// second set of guesses.
+// derive every spine-aligned position from these column constants.
 const NUM_W = 26
 const SPINE_W = 22
 const LINE_X = 10
 const SPINE_X = NUM_W + LINE_X + 0.5
 
-/**
- * What each stage does to the archive, as a glyph. These ride on the spine in
- * place of a plain node mark: a node has to be there anyway to say "a stage
- * happens here", so it may as well say which one.
- *
- * Indexed against STAGES, so the two have to stay in step.
- */
+// keep this index order synchronized with `STAGES`.
 const STAGE_ICONS = ['shield', 'unarchive', 'manage_search', 'account_tree', 'psychology', 'drive_file_move']
 
-/**
- * Vertical rhythm, in two sizes.
- *
- * The rail is 393px tall at its comfortable spacing, which is fine on a desktop
- * pane and too tall for a phone held sideways: an iPhone 16 Pro Max in landscape
- * is 440px, of which the top bar, module header and status bar take 140, leaving
- * a 300px feed. Rather than let a third of the pipeline sit below the fold, the
- * spacing tightens until it fits. Nothing is removed and no font shrinks - only
- * the air between the rows.
- */
+// compact spacing preserves all stages in short viewports.
 interface Rhythm {
   slotPadY: number
   stem: number
   rowGap: number
   headGap: number
   footGap: number
-  /** Below this, the slot's invitation folds onto one line. */
   oneLineSlot: boolean
-  /** Outer padding of the scrolling column. */
   pad: string
-  /** Whether the two secondary explanation lines are shown. */
   detail: boolean
 }
 const ROOMY: Rhythm = {
   slotPadY: 15, stem: 18, rowGap: 15, headGap: 14, footGap: 20,
   oneLineSlot: false, pad: '22px 30px 26px', detail: true,
 }
-// `detail: false` drops the two secondary lines, PARSE's no-fomod branch and
-// INFER's fallback. They earn their space on a desktop pane and are the first
-// thing to go when the choice is between them and seeing the last stage at all:
-// the six stages are the content, those two sentences are footnotes.
 const TIGHT: Rhythm = {
   slotPadY: 8, stem: 10, rowGap: 7, headGap: 8, footGap: 10,
   oneLineSlot: true, pad: '10px 16px 12px', detail: false,
 }
 
-/** The 1px vertical line, drawn at the spine's x for whatever height it is given. */
 function SpineLine({ height }: { height?: number }) {
   return (
     <span
@@ -117,15 +90,7 @@ function SpineLine({ height }: { height?: number }) {
   )
 }
 
-/**
- * One stage of the install pipeline: its ordinal, its glyph riding on the spine,
- * its name, and what it does to the archive.
- *
- * `last` stops the line at the node instead of running it to the row's floor -
- * the pipeline ends at WRITE, and a line continuing past it would promise a
- * seventh stage. The node sits on a plane-coloured pad so the spine passes
- * behind it cleanly rather than striking through the glyph.
- */
+// `last` stops the spine at the final stage.
 function StageRow({
   num,
   name,
@@ -137,7 +102,6 @@ function StageRow({
   num: number
   name: string
   icon: string
-  /** Space under the row; tightens on a short viewport. */
   gap: number
   children: React.ReactNode
   last?: boolean
@@ -214,13 +178,6 @@ function StageRow({
   )
 }
 
-/**
- * A stage's facts, each led by its own glyph.
- *
- * A glyph per fact gives the eye an anchor and says what kind of fact it is (a
- * limit, a destination, an ordering) before the words are read. Run together
- * with middots instead, the same facts read as one grey string.
- */
 function Facts({ items }: { items: { icon: string; text: string }[] }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
@@ -234,7 +191,6 @@ function Facts({ items }: { items: { icon: string; text: string }[] }) {
   )
 }
 
-/** A format tile with its extension beside it, as the rail spells a format. */
 function RouteTile({ spec }: { spec: FormatSpec }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
@@ -275,9 +231,7 @@ export default function SessionFeed(props: SessionFeedProps) {
 
   const isEmpty = jobs.length === 0
 
-  // 620 rather than the hook's 760 default: the rail only needs to tighten when
-  // the feed pane itself is short, and 760 would compact ordinary laptop panes
-  // that have room to spare.
+  // compact this pane below 620 CSS pixels.
   const r: Rhythm = useViewportShort(620) ? TIGHT : ROOMY
 
   const browse = (e: React.MouseEvent | React.KeyboardEvent) => {
@@ -292,8 +246,6 @@ export default function SessionFeed(props: SessionFeedProps) {
     }
   }
 
-  // Each tally carries its own dot colour so the state of the session reads at
-  // a glance instead of as one grey run of numbers.
   const ruleLine = (
     <div
       style={{
@@ -376,40 +328,11 @@ export default function SessionFeed(props: SessionFeedProps) {
     color: 'var(--ink-faint)',
   }
 
-  // The idle state draws the install pipeline as a rail with the drop slot at
-  // its head: the same six stages the live StageMeter fills, in the same order
-  // and under the same names, plus what each one does to the archive. Idle and
-  // running describe one machine, not two screens.
-  //
-  // The format tiles sit at the extract stage rather than in a legend, because
-  // that is where the extension decides something (`format_of` in
-  // archive_service.rs), and a tile is how a format is spelled everywhere else
-  // in salma. Which of the three readers opens which is engine detail and is
-  // deliberately not printed. At the parse stage a missing fomod/ folder leaves
-  // the pipeline for a content-root copy, and that is the one branch the rail
-  // draws.
-  //
-  // Every fact hangs off the stage that enforces it. Plugin state belongs to
-  // the header's state word and session totals to the rule line above, so
-  // neither is repeated here.
-  //
-  // Centred with `margin: auto`, not `justifyContent`. The pane scrolls, and a
-  // centred flex line that outgrows its container is clipped at the top with no
-  // way to scroll back up to it; auto margins collapse to top-aligned instead.
-  //
-  // No top margin either: the auto margins have to own every pixel of slack for
-  // the rail to sit in the true middle of the space under the session rule. A
-  // fixed margin comes out of the top half only, and the panel then reads as
-  // top-hung.
+  // auto margins become top-aligned when the rail exceeds the scroll viewport.
   const emptyIntake = (
     <div
       className="rise"
-      // paddingTop on the container, not marginTop on the block. Auto margins
-      // collapse to zero the moment the rail is taller than the pane, which is
-      // what a short landscape phone hits, and the rail then sits flush against
-      // the session rule. Padding survives that collapse, so there is always air
-      // under the rule, and it only shifts the centred position by half its
-      // value when there is room to centre.
+      // padding remains when auto margins collapse in a short viewport.
       style={{ flex: 1, minHeight: 0, display: 'flex', paddingTop: r.detail ? 14 : 8 }}
     >
       <div style={{ width: '100%', maxWidth: 660, margin: 'auto' }}>
@@ -419,10 +342,7 @@ export default function SessionFeed(props: SessionFeedProps) {
           <span style={{ ...labelStyle, color: intakeTone }}>{intakeState}</span>
         </div>
 
-        {/* The slot is the only interactive part of the rail; everything below
-            it is inert text. Do not put role="button" back on the panel, which
-            announces the whole rail as a single control. Dropping is unaffected
-            either way, because those handlers live on the region. */}
+        {/* keep the panel inert; drop handlers live on the region. */}
         <div
           role={locked ? undefined : 'button'}
           tabIndex={locked ? undefined : 0}
@@ -432,20 +352,14 @@ export default function SessionFeed(props: SessionFeedProps) {
             display: 'flex',
             alignItems: 'center',
             gap: 14,
-            // The glyph lands on the spine's x, so the archive enters the
-            // machine at the top of the line it is about to travel.
             padding: `${r.slotPadY}px 18px ${r.slotPadY}px ${SPINE_X - 11}px`,
-            // Dashed only while a drop would actually be taken; a locked or
-            // offline intake carries a solid hairline so the dashed edge never
-            // invites a refused drop (same rule as DropPromptBar).
+            // use a dashed edge only while the drop target accepts input.
             border: locked ? '1px solid var(--rule-ctrl)' : '1px dashed var(--signal-bd-dash)',
             borderRadius: 'var(--radius-card)',
             cursor: locked ? 'default' : 'pointer',
           }}
         >
           <MIcon name={purged ? 'lock' : 'upload'} size={22} style={{ color: 'var(--ink-4)', flexShrink: 0 }} />
-          {/* Two stacked lines normally; side by side when height is scarce,
-              which buys a row of the pipeline back without dropping a word. */}
           <div
             style={{
               minWidth: 0,
@@ -492,7 +406,6 @@ export default function SessionFeed(props: SessionFeedProps) {
           </div>
         </div>
 
-        {/* The stem, joining the slot to the first stage. */}
         <div aria-hidden="true" style={{ display: 'flex' }}>
           <span style={{ width: NUM_W, flexShrink: 0 }} />
           <span style={{ position: 'relative', width: SPINE_W, flexShrink: 0, height: r.stem }}>
@@ -504,17 +417,12 @@ export default function SessionFeed(props: SessionFeedProps) {
           <Facts
             items={[
               { icon: 'lock', text: 'path safety' },
-              // The server's upload cap: kMaxUploadBytes in
-              // InstallationController.cpp and kStreamThreshold in main.cpp,
-              // both 8 GiB. Nothing serves that number over the API, so moving
-              // it there means moving this string too.
+              // keep 8 GiB synchronized with both server upload limits.
               { icon: 'scale', text: '8 GiB max' },
             ]}
           />
         </StageRow>
 
-        {/* Just what it opens. The tiles are the whole gloss - the stage name
-            and its glyph already say what happens to them. */}
         <StageRow num={2} name={STAGES[1]} icon={STAGE_ICONS[1]} gap={r.rowGap}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             {ARCHIVE_FORMATS.map(f => (
@@ -524,10 +432,6 @@ export default function SessionFeed(props: SessionFeedProps) {
         </StageRow>
 
         <StageRow num={3} name={STAGES[2]} icon={STAGE_ICONS[2]} gap={r.rowGap}>
-          {/* The engine's 256 MiB per-entry cap is deliberately not printed
-              here. It is an anti-zip-bomb guard on one file's declared size, a
-              defence against forged archives rather than a limit a real install
-              approaches, and in three words it reads like one. */}
           <Facts items={[{ icon: 'format_list_bulleted', text: 'file list + sizes' }]} />
         </StageRow>
 
@@ -535,8 +439,6 @@ export default function SessionFeed(props: SessionFeedProps) {
           fomod/ModuleConfig.xml: steps &middot; groups &middot; plugins
           {r.detail && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 4, color: 'var(--ink-faint)' }}>
-              {/* alt_route, not an arrow: this is the fork where a missing fomod
-                  folder leaves the pipeline, and the glyph says fork. */}
               <MIcon name="alt_route" size={13} style={{ flexShrink: 0 }} />
               <span>no fomod: content root copied</span>
             </div>
@@ -677,8 +579,6 @@ export default function SessionFeed(props: SessionFeedProps) {
         >
           {ruleLine}
           {isEmpty ? emptyIntake : history}
-          {/* The idle panel already carries the invitation; a caret line under
-              it would read as a second, competing one. */}
           {!isEmpty && !isInstalling && caret}
         </div>
       </div>

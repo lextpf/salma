@@ -11,16 +11,11 @@ interface State {
 }
 
 /**
- * Last-resort fault screen.
+ * @class ErrorBoundary
+ * @brief isolate render failures from the dashboard shell.
+ * @author Alex (https://github.com/lextpf)
  *
- * Stacked bands on the bare plane rather than a centred card: a legend, the
- * headline, the raw message, then the recovery control beside a line of
- * metadata. Nothing is boxed and nothing is painted, so the fault reads as part
- * of the instrument instead of a modal dropped on top of it.
- *
- * Catches render-phase errors only. An error thrown in an event handler, in a
- * promise or in a polling hook never reaches here; the page that owns it
- * reports it instead.
+ * pages handle asynchronous and event errors.
  */
 export default class ErrorBoundary extends Component<Props, State> {
   state: State = { hasError: false, error: null }
@@ -41,8 +36,6 @@ export default class ErrorBoundary extends Component<Props, State> {
           style={{ minHeight: '60vh', padding: 24 }}
         >
           <div style={{ width: '100%', maxWidth: 560 }}>
-            {/* Section label, not a badge: the same tracked mono legend every
-                other band in the app opens with. */}
             <div
               className="flex items-center"
               style={{
@@ -102,8 +95,6 @@ export default class ErrorBoundary extends Component<Props, State> {
                 style={{
                   fontFamily: 'var(--font-mono)',
                   fontSize: 'var(--fs-meta)',
-                  // The only instruction on the screen, so it holds a text
-                  // ink level rather than the meta floor.
                   color: 'var(--ink-5)',
                 }}
               >
