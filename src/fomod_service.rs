@@ -1,46 +1,18 @@
-//! FOMOD install replay.
-//!
-//! Interprets a parsed [`FomodInstaller`] IR together with a JSON selections
-//! document and produces the ordered [`FileOperation`] queue that realizes the
-//! install. [`crate::installation_service`] drives the stages in this order:
-//!
-//! 1. [`FomodService::check_module_dependencies`] - gate on `<moduleDependencies>`.
-//! 2. [`FomodService::validate_json_selections`] - group cardinality check.
-//! 3. [`FomodService::process_required_files`] - `<requiredInstallFiles>`.
-//! 4. [`FomodService::process_optional_files`] - selected plugins, flags,
-//!    Required auto-install, and the alwaysInstall/installIfUsable pass.
-//! 5. [`FomodService::process_conditional_files`] - `<conditionalFileInstalls>`.
-//! 6. [`execute_file_operations`] - stable sort by `(priority, document_order)`,
-//!    then copy.
-//!
-//! Stages 3 to 5 append to one `Vec<FileOperation>` and share one document-order
-//! counter, so stage 6 orders the whole install with a single sort and the
-//! operation copied last wins at a shared destination.
-//! [`crate::fomod_forward_simulator`] scores candidate selections against the
-//! same priority rule, but substitutes its own application order for
-//! `document_order`, so the two can pick different winners when priorities tie.
-//! That module's "Where the simulator and the installer diverge" section is the
-//! authoritative list; [`execute_file_operations`] points at it.
-//!
-//! ## Constraints to know before changing replay behavior
-//!
-//! - **A malformed step or group `name` fails the whole install.** Both
-//!   [`FomodService::validate_json_selections`] and
-//!   [`FomodService::process_optional_files`] return
-//!   [`SelectionsError::NameTypeError`] when a `steps[]` or `groups[]` element
-//!   is not an object or carries a non-string `name`, and `capi::install`
-//!   aborts on it. Plugin entries stay tolerant by contrast: `read_plugin_name`
-//!   accepts both selection schemas and skips anything else.
-//! - **`enqueue_entry`, `enqueue_plugin_files` and `make_plugin_key` are free
-//!   functions**, not methods. None of them touches instance state, and free
-//!   functions let [`FomodService::process_optional_files`] split-borrow
-//!   `installer` against `plugin_flags`.
-//! - **[`execute_file_operations`] can never report a failure.**
-//!   [`FileOperations::copy_file`] and [`FileOperations::copy_folder`] absorb
-//!   every I/O error, so the returned count is always 0. The counting stays
-//!   because the value is observable to the caller.
-//!
-//! See PARITY-NOTES.md before changing what this module installs.
+/*!
+ * @brief replays a parsed FOMOD selection into file operations.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * required, selected, automatic, and conditional passes append to one queue. execution sorts by
+ * priority and document order, so the last write wins.
+ *
+ * ### :material-alert-circle-outline: failure handling
+ *
+ * malformed step or group names fail the install. plugin entries accept both supported selection
+ * schemas. copy errors are logged and do not propagate.
+ *
+ * @warning destination screening normalizes the path before the raw Path::join. a rooted
+ * destination can replace the installation base.
+ */
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -56,15 +28,16 @@ use crate::logger::Logger;
 use crate::types::{FileOpType, FileOperation, FomodDependencyContext, PluginType};
 use crate::utils::{is_safe_destination, to_lower};
 
-/// The one malformed-input condition that aborts a selections walk.
-///
-/// An unusable step or group `name` is an error rather than an empty name,
-/// because it fails the whole install: `capi::install` propagates it. An absent
-/// `name` is not an error and reads as `""`.
+/**
+ * @enum SelectionsError
+ * @brief the one malformed-input condition that aborts a selections walk.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * an unusable step or group `name` is an error rather than an empty name, because it fails the
+ * whole install: `capi::install` propagates it.
+ */
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionsError {
-    /// A `steps[]` or `groups[]` element was not an object, or carried a
-    /// present-but-non-string `name`.
     NameTypeError,
 }
 
@@ -80,57 +53,70 @@ impl std::fmt::Display for SelectionsError {
 
 impl std::error::Error for SelectionsError {}
 
-/// FOMOD processing, install replay, and plugin flag evaluation.
-///
-/// Holds the parsed IR plus the condition flags accumulated while walking the
-/// selections. Not thread-safe by design; use one instance per installation,
-/// and see [`FomodService::process_optional_files`] for why an instance must
-/// not be reused after an error.
+/**
+ * @struct FomodService
+ * @brief FOMOD processing, install replay, and plugin flag evaluation.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * not thread-safe; use one instance per installation. discard it after an optional-selection error
+ * because plugin flags do not roll back.
+ *
+ * | pass | source                    | queued entries                         |
+ * |------|---------------------------|----------------------------------------|
+ * | 1    | bound JSON plugins        | all entries after dependency checks    |
+ * | 1b   | bound IR groups           | required plugins not handled by pass 1 |
+ * | 2    | IR steps absent from JSON | remaining required plugins             |
+ * | 3    | all IR steps              | remaining automatic or usable entries  |
+ *
+ * each pass sees flags written by earlier passes. an error rolls back queued operations and
+ * document order, but not plugin flags.
+ */
 #[derive(Debug, Clone, Default)]
 pub struct FomodService {
-    /// Parsed FOMOD IR (set by [`FomodService::set_installer`]).
     installer: FomodInstaller,
-    /// Accumulated condition flags from processed plugins.
     plugin_flags: HashMap<String, String>,
 }
 
 impl FomodService {
-    /// Construct a service with an empty IR and no flags.
     pub fn new() -> Self {
         FomodService::default()
     }
 
-    /// Set the parsed FOMOD IR for this installation.
-    ///
-    /// Must be called before any other method. The caller parses the XML with
-    /// [`crate::fomod_ir_parser::parse_module_config`] and passes the result.
+    /**
+     * @fn set_installer(&mut self, FomodInstaller)
+     * @brief establish the IR required by later processing methods.
+     * @author Alex (https://github.com/lextpf)
+     *
+     * must be called before any other method.
+     */
     pub fn set_installer(&mut self, installer: FomodInstaller) {
         self.installer = installer;
     }
 
-    /// Borrow the IR this service is replaying.
     pub fn installer(&self) -> &FomodInstaller {
         &self.installer
     }
 
-    /// Borrow the condition flags accumulated so far, read-only, so callers and
-    /// tests can observe flag propagation.
     pub fn plugin_flags(&self) -> &HashMap<String, String> {
         &self.plugin_flags
     }
 
-    /// Evaluate top-level `<moduleDependencies>`.
-    ///
-    /// Returns `true` when the dependencies are met or absent. Never fails: the
-    /// dependency evaluator is total.
+    /**
+     * @fn check_module_dependencies(&self, Option<&FomodDependencyContext>) -> bool
+     * @brief treat absent module dependencies as satisfied.
+     * @author Alex (https://github.com/lextpf)
+     *
+     * never fails: the dependency evaluator is total.
+     * @return `true` when the dependencies are met or absent.
+     */
     pub fn check_module_dependencies(&self, context: Option<&FomodDependencyContext>) -> bool {
         let Some(condition) = &self.installer.module_dependencies else {
             Logger::instance().log("[fomod] No module-level dependencies found");
             return true;
         };
 
-        // The unmet line goes through `log` with an "ERROR:" prefix in its
-        // text, not through `log_error`, so it stays at info level.
+        // the unmet line goes through `log` with an "ERROR:" prefix in its text, not through
+        // `log_error`, so it stays at info level.
         Logger::instance().log("[fomod] Checking module-level dependencies...");
         let met = evaluate_condition(condition, &self.plugin_flags, context);
 
@@ -145,11 +131,14 @@ impl FomodService {
         true
     }
 
-    /// Enqueue files from `<requiredInstallFiles>`.
-    ///
-    /// These install regardless of user selections. Unsafe destinations are
-    /// skipped by `enqueue_entry`, and `next_doc_order` advances once per
-    /// enqueued operation.
+    /**
+     * @fn process_required_files(&self, &str, &str, &mut Vec<FileOperation>, &mut i32)
+     * @brief skip unsafe destinations and advance order only for queued operations.
+     * @author Alex (https://github.com/lextpf)
+     *
+     * unsafe destinations are skipped by `enqueue_entry`, and `next_doc_order` advances once per
+     * enqueued operation.
+     */
     pub fn process_required_files(
         &self,
         src_base: &str,
@@ -167,8 +156,8 @@ impl FomodService {
             self.installer.required_files.len()
         ));
 
-        // The tallies exist only for the log line below; an entry counts only
-        // when it actually produced an operation.
+        // the tallies exist only for the log line below; an entry counts only when it actually
+        // produced an operation.
         let mut file_count = 0;
         let mut folder_count = 0;
         for entry in &self.installer.required_files {
@@ -188,15 +177,14 @@ impl FomodService {
         ));
     }
 
-    /// Validate JSON selections against the IR's group cardinality constraints.
-    ///
-    /// Returns `Ok(false)` when any group violates its constraint. Validation
-    /// never stops early, so the log lists every violation. Returns `Ok(true)`
-    /// otherwise, including when the document has no `steps` array, and
-    /// `Err(SelectionsError::NameTypeError)` for an unusable step or group
-    /// `name`, which fails the install.
-    ///
-    /// The result is advisory: the caller logs a warning and installs anyway.
+    /**
+     * @fn validate_json_selections(&self, &Value) -> Result<bool, SelectionsError>
+     * @brief report every violation and treat a missing steps array as valid.
+     * @author Alex (https://github.com/lextpf)
+     *
+     * validation never stops early, so the log lists every violation.
+     * @return `Ok(false)` when any group violates its constraint.
+     */
     pub fn validate_json_selections(&self, config_json: &Value) -> Result<bool, SelectionsError> {
         let Some(steps) = config_json.get("steps").filter(|s| s.is_array()) else {
             Logger::instance().log("[fomod] No steps in JSON - validation skipped");
@@ -205,9 +193,9 @@ impl FomodService {
 
         Logger::instance().log("[fomod] Validating JSON selections against FOMOD schema...");
 
-        // Build step -> group -> set(plugin name) from the JSON. A nested entry
-        // appears only once a readable plugin name lands in it, so a group with
-        // no readable plugins is never validated at all.
+        // build step -> group -> set(plugin name) from the JSON. a nested entry appears only once a
+        // readable plugin name lands in it, so a group with no readable plugins is never validated
+        // at all.
         let mut selected_plugins: HashMap<String, HashMap<String, HashSet<String>>> =
             HashMap::new();
 
@@ -244,9 +232,9 @@ impl FomodService {
             }
         }
 
-        // Validate against the IR. Lookups are by name only: unlike
-        // process_optional_files there is no occurrence matching here, so two
-        // IR steps sharing a name both see the same selection set.
+        // validate against the IR. lookups are by name only: unlike process_optional_files there is
+        // no occurrence matching here, so two IR steps sharing a name both see the same selection
+        // set.
         let mut all_valid = true;
         for step in &self.installer.steps {
             let Some(step_sel) = selected_plugins.get(&step.name) else {
@@ -263,9 +251,9 @@ impl FomodService {
                     .filter(|plugin| sel.contains(&plugin.name))
                     .count() as i32;
 
-                // Warn about selections the IR group does not contain. Log-only:
-                // it has no effect on the return value, and the warning order is
-                // unspecified because `sel` is a hash set.
+                // warn about selections the IR group does not contain. log-only: it has no effect
+                // on the return value, and the warning order is unspecified because `sel` is a hash
+                // set.
                 for sel_name in sel {
                     if !group.plugins.iter().any(|plugin| &plugin.name == sel_name) {
                         Logger::instance().log_warning(&format!(
@@ -308,44 +296,6 @@ impl FomodService {
         Ok(all_valid)
     }
 
-    /// Process selected plugins: accumulate flags and enqueue file operations.
-    ///
-    /// Walks the JSON `step -> group -> plugin` selections and binds each JSON
-    /// name to the IR node of the same name by occurrence: the Nth JSON
-    /// occurrence of a name binds to the Nth IR node carrying it. Four passes
-    /// run in this order:
-    ///
-    /// ```text
-    ///  pass | scope                          | fires when                       | enqueues
-    ///  -----+--------------------------------+----------------------------------+-----------------------------
-    ///   1   | JSON steps > groups > plugins, | IR step visible, IR node bound,  | every file entry of the
-    ///       | bound to the IR by occurrence  | plugin dependencies met          | selected plugin
-    ///   1b  | IR groups of the step bound in | key unprocessed and effective    | every file entry of the
-    ///       | pass 1 (runs inside that loop) | plugin type is Required          | plugin
-    ///   2   | IR steps named by no JSON step | step visible, key unprocessed,   | every file entry of the
-    ///       |                                | effective plugin type Required   | plugin
-    ///   3   | every IR step                  | step visible, key unprocessed,   | only alwaysInstall entries,
-    ///       |                                | effective type not Required      | plus installIfUsable when
-    ///       |                                |                                  | the type is not NotUsable
-    /// ```
-    ///
-    /// The "key" is the `make_plugin_key` triple. Passes 1 and 1b build it from
-    /// the JSON step name plus, respectively, the JSON or the IR group and
-    /// plugin names; pass 2 builds it from IR names only. Pass 3 reads the key
-    /// but never writes one, so it cannot suppress anything downstream.
-    ///
-    /// Flags written by an earlier pass are visible to every later one: each
-    /// pass re-evaluates step visibility, plugin dependencies and effective
-    /// plugin types against the flag map as it stands at that moment.
-    ///
-    /// **Rollback on `Err`.** `ops` is truncated back to its length on entry
-    /// and `next_doc_order` is restored. `plugin_flags` is not rolled back.
-    /// That is safe only because `capi::install` aborts the whole install on
-    /// this error, so the shipping path never retries. Any other caller must
-    /// retry from a freshly constructed `FomodService`: the surviving flags
-    /// feed step visibility, plugin dependency evaluation and effective plugin
-    /// types, so a second call on the same instance can produce a different
-    /// result. See PARITY-NOTES.md, "Rollback contract".
     pub fn process_optional_files(
         &mut self,
         config_json: &Value,
@@ -358,8 +308,8 @@ impl FomodService {
         let initial_ops_size = ops.len();
         let initial_doc_order = *next_doc_order;
 
-        // No steps array: nothing to do and no rollback to apply. The total line
-        // is still logged on this path.
+        // no steps array: nothing to do and no rollback to apply. the total line is still logged on
+        // this path.
         let Some(steps) = config_json.get("steps").filter(|s| s.is_array()) else {
             Logger::instance().log("[fomod] No valid steps in JSON - optional selections skipped");
             Logger::instance().log(&format!(
@@ -379,13 +329,13 @@ impl FomodService {
         );
 
         if let Err(err) = result {
-            // Roll the whole call back, log, then propagate.
+            // roll the whole call back, log, then propagate.
             ops.truncate(initial_ops_size);
             *next_doc_order = initial_doc_order;
             Logger::instance().log_error(&format!(
                 "[fomod] Exception during optional file processing, rolled back queued operations: {err}"
             ));
-            // The error path skips the total line below.
+            // the error path skips the total line below.
             return Err(err);
         }
 
@@ -396,8 +346,8 @@ impl FomodService {
         result
     }
 
-    /// The guarded body of [`FomodService::process_optional_files`]. Split out
-    /// so the caller can apply the rollback on any `Err` return.
+    // the guarded body of FomodService::process_optional_files.
+    // split out so the caller can apply the rollback on any `Err` return.
     fn process_optional_files_inner(
         &mut self,
         steps: &Value,
@@ -407,7 +357,6 @@ impl FomodService {
         ops: &mut Vec<FileOperation>,
         next_doc_order: &mut i32,
     ) -> Result<(), SelectionsError> {
-        // Split-borrow: the IR is read while the flag map is written.
         let FomodService {
             installer,
             plugin_flags,
@@ -420,7 +369,6 @@ impl FomodService {
             array_items(Some(steps)).len()
         ));
 
-        // Map IR steps by name for occurrence-based matching.
         let mut ir_steps_by_name: HashMap<&str, Vec<usize>> = HashMap::new();
         for (si, step) in installer.steps.iter().enumerate() {
             ir_steps_by_name
@@ -430,7 +378,7 @@ impl FomodService {
         }
         let mut step_occurrence: HashMap<String, usize> = HashMap::new();
 
-        // --- Pass 1: explicit JSON selections ---
+        // pass 1 applies explicit JSON selections.
         for json_step in array_items(Some(steps)) {
             let Some(step_name) = name_field(json_step) else {
                 return Err(SelectionsError::NameTypeError);
@@ -438,8 +386,7 @@ impl FomodService {
             let step_name = step_name.to_string();
             Logger::instance().log(&format!("[fomod] Processing step: \"{step_name}\""));
 
-            // A step with no groups array still consumes an occurrence of its
-            // name before skipping.
+            // a step with no groups array still consumes an occurrence of its name before skipping.
             if !json_step.get("groups").is_some_and(Value::is_array) {
                 Logger::instance()
                     .log(&format!("[fomod] Step \"{step_name}\" has no groups array"));
@@ -447,14 +394,14 @@ impl FomodService {
                 continue;
             }
 
-            // Post-increment, then bind to the occ-th IR step of that name.
+            // post-increment, then bind to the occ-th IR step of that name.
             let occ = post_increment(&mut step_occurrence, &step_name);
             let ir_step_idx = ir_steps_by_name
                 .get(step_name.as_str())
                 .and_then(|indices| indices.get(occ))
                 .copied();
 
-            // A missing IR step does not consume a second occurrence.
+            // a missing IR step does not consume a second occurrence.
             let Some(ir_step_idx) = ir_step_idx else {
                 Logger::instance().log_warning(&format!(
                     "[fomod] Could not find IR step \"{step_name}\" occurrence {occ}"
@@ -463,8 +410,8 @@ impl FomodService {
             };
             let ir_step = &installer.steps[ir_step_idx];
 
-            // Step visibility gates everything below, including the per-step
-            // Required auto-install pass.
+            // step visibility gates everything below, including the per-step Required auto-install
+            // pass.
             if step_hidden(&ir_step.visible, plugin_flags, context) {
                 Logger::instance().log(&format!(
                     "[fomod] Skipping step \"{step_name}\" due to unmet visibility dependencies"
@@ -472,7 +419,6 @@ impl FomodService {
                 continue;
             }
 
-            // Map IR groups by name for occurrence-based matching.
             let mut ir_groups_by_name: HashMap<&str, Vec<usize>> = HashMap::new();
             for (gi, group) in ir_step.groups.iter().enumerate() {
                 ir_groups_by_name
@@ -494,8 +440,7 @@ impl FomodService {
                 let group_name = group_name.to_string();
                 Logger::instance().log(&format!("[fomod] Processing group: \"{group_name}\""));
 
-                // Same shape as the step branch: no plugins array still
-                // consumes an occurrence.
+                // same shape as the step branch: no plugins array still consumes an occurrence.
                 if !json_group.get("plugins").is_some_and(Value::is_array) {
                     Logger::instance().log(&format!(
                         "[fomod] Group \"{group_name}\" has no plugins array"
@@ -505,15 +450,15 @@ impl FomodService {
                 }
 
                 let gocc = post_increment(&mut group_occurrence, &group_name);
-                // Unlike a missing IR step, a missing IR group does not skip the
-                // group: the plugin loop still runs and still advances the
-                // plugin occurrence counters, every lookup simply misses.
+                // unlike a missing IR step, a missing IR group does not skip the group: the plugin
+                // loop still runs and still advances the plugin occurrence counters, every lookup
+                // misses.
                 let ir_group = ir_groups_by_name
                     .get(group_name.as_str())
                     .and_then(|indices| indices.get(gocc))
                     .map(|&gi| &ir_step.groups[gi]);
 
-                // Plugin name index for the bound group.
+                // plugin name index for the bound group.
                 let mut ir_plugins_by_name: HashMap<&str, Vec<usize>> = HashMap::new();
                 if let Some(group) = ir_group {
                     for (pi, plugin) in group.plugins.iter().enumerate() {
@@ -531,8 +476,8 @@ impl FomodService {
                 ));
 
                 for json_plugin in array_items(json_group.get("plugins")) {
-                    // Tolerant of both schemas. An unreadable entry is skipped
-                    // before the occurrence counter moves.
+                    // tolerant of both schemas. an unreadable entry is skipped before the
+                    // occurrence counter moves.
                     let plugin_name = read_plugin_name(json_plugin);
                     if plugin_name.is_empty() {
                         Logger::instance()
@@ -552,7 +497,7 @@ impl FomodService {
                             .map(|&pi| &group.plugins[pi])
                     });
 
-                    // A miss is log-only; the loop continues.
+                    // a miss is log-only; the loop continues.
                     let Some(ir_plugin) = ir_plugin else {
                         Logger::instance().log_error(&format!(
                             "[fomod] Could not find plugin \"{plugin_name}\" in step/group IR"
@@ -560,7 +505,7 @@ impl FomodService {
                         continue;
                     };
 
-                    // Plugin-level dependencies gate processing.
+                    // plugin-level dependencies gate processing.
                     if let Some(dependencies) = &ir_plugin.dependencies
                         && !evaluate_condition(dependencies, plugin_flags, context)
                     {
@@ -584,9 +529,9 @@ impl FomodService {
                 }
             }
 
-            // Pass 1b: auto-install Required plugins for this step. The key uses
-            // the JSON step name, which the binding makes identical to the IR
-            // step's name, plus the IR group and plugin names.
+            // pass 1b: auto-install Required plugins for this step. the key uses the JSON step
+            // name, which the binding makes identical to the IR step's name, plus the IR group and
+            // plugin names.
             for group in &ir_step.groups {
                 for plugin in &group.plugins {
                     let key = make_plugin_key(&step_name, &group.name, &plugin.name);
@@ -606,9 +551,8 @@ impl FomodService {
             }
         }
 
-        // --- Pass 2: Required plugins for steps not covered by the JSON.
-        // `covered_steps` holds names, so one JSON step covers every IR step
-        // sharing its name. ---
+        // pass 2 applies Required plugins in steps not covered by the JSON.
+        // covered_steps uses names, so one JSON step covers every same-named IR step.
         let mut covered_steps: HashSet<&str> = HashSet::new();
         for json_step in array_items(Some(steps)) {
             let Some(step_name) = name_field(json_step) else {
@@ -643,9 +587,8 @@ impl FomodService {
             }
         }
 
-        // --- Pass 3: alwaysInstall / installIfUsable from unselected plugins.
-        // Visibility is re-checked here too, against the flags as they stand
-        // after passes 1 and 2. ---
+        // pass 3 applies automatic entries from unselected plugins.
+        // visibility uses the flags produced by passes 1 and 2.
         let mut auto_file_count = 0;
         for step in &installer.steps {
             if step_hidden(&step.visible, plugin_flags, context) {
@@ -659,7 +602,7 @@ impl FomodService {
                     }
 
                     let eff_type = evaluate_plugin_type(plugin, plugin_flags, context);
-                    // Required plugins were installed whole by passes 1 and 2.
+                    // required plugins were installed whole by passes 1 and 2.
                     if eff_type == PluginType::Required {
                         continue;
                     }
@@ -670,8 +613,7 @@ impl FomodService {
                         if !should_install {
                             continue;
                         }
-                        // An entry counts, and logs, only when it actually
-                        // produced an operation.
+                        // an entry counts, and logs, only when it actually produced an operation.
                         let before = ops.len();
                         enqueue_entry(entry, src_base, dst_base, ops, next_doc_order);
                         if ops.len() > before {
@@ -702,11 +644,6 @@ impl FomodService {
         Ok(())
     }
 
-    /// Evaluate `<conditionalFileInstalls>` patterns against the current flag
-    /// state and enqueue the files of every matching pattern.
-    ///
-    /// Runs after [`FomodService::process_optional_files`], so it sees the flags
-    /// every selected plugin set.
     pub fn process_conditional_files(
         &self,
         src_base: &str,
@@ -725,9 +662,9 @@ impl FomodService {
             "[fomod] Processing {total} conditional file install patterns..."
         ));
 
-        // The tallies exist only to be logged. `processed` is incremented before
-        // the per-pattern line, so it reads as a 1-based "N of total" counter
-        // over the patterns that actually matched.
+        // the tallies exist only to be logged. `processed` is incremented before the per-pattern
+        // line, so it reads as a 1-based "N of total" counter over the patterns that actually
+        // matched.
         let mut processed = 0;
         let mut skipped = 0;
         for pattern in &self.installer.conditional_patterns {
@@ -753,21 +690,8 @@ impl FomodService {
     }
 }
 
-/// Convert an IR file entry into a [`FileOperation`] with absolute paths.
-///
-/// - an empty `source` enqueues nothing;
-/// - a destination rejected by [`is_safe_destination`] enqueues nothing and logs
-///   a warning;
-/// - otherwise `src_base/source` and `dst_base/destination` are joined and
-///   `next_doc_order` is post-incremented into the new operation.
-///
-/// The guard checks the normalized destination while the join uses the raw one,
-/// so a rooted destination such as `/etc/passwd` passes (normalization strips
-/// the leading slash) and then replaces the base during the join, because a
-/// root component wins in `Path::join`. That hole is reproduced deliberately
-/// rather than fixed, and
-/// `enqueue_entry_reproduces_the_rooted_destination_hole` pins it. See
-/// PARITY-NOTES.md.
+// empty sources and destinations rejected by the string screen enqueue nothing.
+// the raw destination is joined after screening; a rooted path can replace the base.
 fn enqueue_entry(
     entry: &FomodFileEntry,
     src_base: &str,
@@ -805,7 +729,7 @@ fn enqueue_entry(
     *next_doc_order += 1;
 }
 
-/// Enqueue every file entry of a plugin, in document order.
+// enqueue every file entry of a plugin, in document order.
 fn enqueue_plugin_files(
     plugin: &FomodPlugin,
     src_base: &str,
@@ -818,18 +742,9 @@ fn enqueue_plugin_files(
     }
 }
 
-/// Build the composite dedup key for a plugin: `to_lower(step) + "\x1f" +
-/// to_lower(group) + "\x1f" + to_lower(plugin)`.
-///
-/// The separator is ASCII Unit Separator (0x1F). XML text content cannot carry
-/// that byte, so no IR name holds a separator and no two distinct
-/// `(step, group, plugin)` triples from the IR can produce one key.
-///
-/// Names taken from the selections JSON carry no such guarantee: a JSON string
-/// may legally contain U+001F. Two different triples can then collide onto one
-/// key, which marks a plugin as already processed and suppresses the Required
-/// auto-install that pass 1b or pass 2 would otherwise perform. Selections
-/// documents are therefore trusted input, not attacker-controlled input.
+// build the composite dedup key for a plugin: to_lower(step) + "\x1f" + to_lower(group) + "\x1f" +
+// to_lower(plugin).
+// the separator is ASCII Unit Separator (0x1F).
 fn make_plugin_key(step: &str, group: &str, plugin: &str) -> String {
     format!(
         "{}\x1f{}\x1f{}",
@@ -839,8 +754,8 @@ fn make_plugin_key(step: &str, group: &str, plugin: &str) -> String {
     )
 }
 
-/// Copy a plugin's `<conditionFlags>` into the flag map, skipping entries whose
-/// flag name is empty. Called from passes 1, 1b and 2, never from pass 3.
+// copy a plugin's conditionFlags into the flag map, skipping entries whose flag name is empty.
+// called from passes 1, 1b and 2, never from pass 3.
 fn apply_condition_flags(plugin: &FomodPlugin, flags: &mut HashMap<String, String>) {
     for (name, value) in &plugin.condition_flags {
         if !name.is_empty() {
@@ -849,8 +764,6 @@ fn apply_condition_flags(plugin: &FomodPlugin, flags: &mut HashMap<String, Strin
     }
 }
 
-/// True when a step carries a visibility condition that does not hold. A step
-/// with no condition is always visible.
 fn step_hidden(
     visible: &Option<FomodCondition>,
     flags: &HashMap<String, String>,
@@ -862,8 +775,6 @@ fn step_hidden(
     }
 }
 
-/// Increment the occurrence counter for `name` and return the value it had
-/// before. A name seen for the first time yields 0.
 fn post_increment(counters: &mut HashMap<String, usize>, name: &str) -> usize {
     let slot = counters.entry(name.to_string()).or_insert(0);
     let before = *slot;
@@ -871,34 +782,22 @@ fn post_increment(counters: &mut HashMap<String, usize>, name: &str) -> usize {
     before
 }
 
-/// Schema-tolerant plugin name reader.
-///
-/// Accepts the legacy schema-v1 form (`plugins: ["Name", ...]`) and schema-v2
-/// (`plugins: [{"name": "Name", ...}, ...]`), and returns `""` for anything
-/// else so the caller skips that entry. Unlike a step or group name, an
-/// unreadable plugin entry never fails the install.
+// schema-tolerant plugin name reader.
+// unlike a step or group name, an unreadable plugin entry never fails the install.
 fn read_plugin_name(entry: &Value) -> String {
     if let Some(s) = entry.as_str() {
         return s.to_string();
     }
-    // `Value::get` yields `None` for a non-object, so this one lookup covers the
-    // non-object, missing-key and wrong-type cases alike.
+    // `Value::get` yields `None` for a non-object, so this one lookup covers the non-object,
+    // missing-key and wrong-type cases alike.
     if let Some(name) = entry.get("name").and_then(Value::as_str) {
         return name.to_string();
     }
     String::new()
 }
 
-/// Read a step or group `name`, returning `None` when the value is unusable.
-/// Same tri-state as `fomod_inference_service::name_field`:
-///
-/// - not an object                  -> `None`
-/// - object, no `name`              -> `Some("")`
-/// - object, `name` is a string     -> `Some(s)`
-/// - object, `name` is not a string -> `None`
-///
-/// Every call site turns `None` into [`SelectionsError::NameTypeError`], which
-/// fails the install.
+// read a step or group name, returning None when the value is unusable.
+// every call site turns `None` into `SelectionsError::NameTypeError`, which fails the install.
 fn name_field(src: &Value) -> Option<&str> {
     if !src.is_object() {
         return None;
@@ -909,8 +808,7 @@ fn name_field(src: &Value) -> Option<&str> {
     }
 }
 
-/// Borrow the elements of a JSON array value; an empty slice for anything else
-/// (including `None`).
+// borrow the elements of a JSON array value; an empty slice for anything else (including None).
 fn array_items(value: Option<&Value>) -> &[Value] {
     match value {
         Some(Value::Array(items)) => items,
@@ -918,7 +816,6 @@ fn array_items(value: Option<&Value>) -> &[Value] {
     }
 }
 
-/// Check a group's selection count against its cardinality constraint.
 fn validate_cardinality(group_type: FomodGroupType, selected: i32, total: i32) -> bool {
     match group_type {
         FomodGroupType::SelectExactlyOne => selected == 1,
@@ -929,46 +826,17 @@ fn validate_cardinality(group_type: FomodGroupType, selected: i32, total: i32) -
     }
 }
 
-/// Sort queued operations and execute every copy.
-///
-/// Sorts ascending by `(priority, document_order)` and copies in that order, so
-/// the operation that runs last wins at a shared destination (MO2's
-/// last-write-wins rule):
-///
-/// ```text
-///   sort key         order       survivor at a shared destination
-///   --------------   ---------   ------------------------------------
-///   priority         ascending   the highest priority
-///   document_order   ascending   among equal priorities, the highest
-/// ```
-///
-/// `document_order` is a single sequence over the whole install:
-/// `enqueue_entry` post-increments it once per queued operation while the
-/// required, optional and conditional passes append in that order, so "highest
-/// `document_order`" means "enqueued latest".
-///
-/// The sort is `Vec::sort_by`, which is stable, so equal `(priority,
-/// document_order)` pairs would keep insertion order. No two operations of one
-/// install share a `document_order`, so the key is already a total order and
-/// stability is a formality.
-///
-/// [`crate::fomod_forward_simulator`] scores candidate selections against this
-/// same priority rule stated the other way round: it applies atoms in phase
-/// order and overwrites on `>=` priority. It never sorts on this counter, and
-/// the `document_order` its atoms carry is a separate numbering from
-/// [`crate::fomod_inference_atoms::expand_all_atoms`] that it does not read
-/// either, so the two agree on every conflict priority settles and can pick
-/// different survivors when priorities tie. The known cases are listed in that
-/// module's "Where the simulator and the installer diverge" section, which is
-/// the authoritative one. Keep it accurate when changing this sort: inference
-/// scores candidate selections against what that module predicts, not against
-/// what this function does.
-///
-/// Individual failures are counted, never fatal, and `ops` is cleared
-/// afterwards either way. The returned count is always 0:
-/// [`FileOperations::copy_file`] and [`FileOperations::copy_folder`] absorb
-/// every I/O error internally and cannot report one. The counting stays because
-/// the value is observable to the caller, which logs it.
+/**
+ * @fn execute_file_operations(&mut Vec<FileOperation>) -> i32
+ * @brief resolve conflicts by priority, then by global document order.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * `document_order` is a single sequence over the whole install: `enqueue_entry` post-increments it
+ * once per queued operation while the required, optional and conditional passes append in that
+ * order, so "highest `document_order`" means "enqueued latest".
+ *
+ * @return 0; the copy backend does not expose per-operation failures.
+ */
 pub fn execute_file_operations(ops: &mut Vec<FileOperation>) -> i32 {
     execute_file_operations_with(ops, |op| {
         match op.op_type {
@@ -979,20 +847,20 @@ pub fn execute_file_operations(ops: &mut Vec<FileOperation>) -> i32 {
                 FileOperations::copy_folder(Path::new(&op.source), Path::new(&op.destination));
             }
         }
-        // The copy back end cannot report a failure.
+        // the copy back end cannot report a failure.
         false
     })
 }
 
-/// The sort-execute-clear body of [`execute_file_operations`], with the copy
-/// back end injected (`true` marks a failed operation) so tests can observe the
-/// executed order and the failure counting without touching disk.
+// the sort-execute-clear body of execute_file_operations, with the copy back end injected (true
+// marks a failed operation) so tests can observe the executed order and the failure counting
+// without touching disk.
 fn execute_file_operations_with<F>(ops: &mut Vec<FileOperation>, mut copy: F) -> i32
 where
     F: FnMut(&FileOperation) -> bool,
 {
-    // Priority ascending, then XML document order as the tiebreaker. Higher
-    // priority is copied later and overwrites, which is MO2's rule.
+    // priority ascending, then XML document order as the tiebreaker. higher priority is copied
+    // later and overwrites, which is MO2's rule.
     ops.sort_by(|a, b| {
         a.priority
             .cmp(&b.priority)
@@ -1008,8 +876,8 @@ where
     for op in ops.iter() {
         if copy(op) {
             failed += 1;
-            // The back end reports failure as a bool and carries no message, so
-            // this line names the operation and nothing else.
+            // the back end reports failure as a bool and carries no message, so this line names the
+            // operation and nothing else.
             Logger::instance().log_error(&format!(
                 "[fomod] Failed to execute file operation: {} -> {}",
                 op.source, op.destination
@@ -1017,8 +885,8 @@ where
         }
     }
 
-    // `ops.len()` is read before the clear below, so the warning reports the
-    // batch size rather than 0.
+    // `ops.len()` is read before the clear below, so the warning reports the batch size rather than
+    // 0.
     if failed > 0 {
         Logger::instance().log_warning(&format!(
             "[fomod] {failed} of {} file operations failed",
@@ -1034,8 +902,6 @@ where
 mod tests {
     use super::*;
     use crate::fomod_ir::{FomodConditionType, FomodGroup, FomodStep, FomodTypePattern};
-
-    // --- IR fixture builders ------------------------------------------------
 
     fn entry(source: &str, destination: &str) -> FomodFileEntry {
         FomodFileEntry {
@@ -1085,9 +951,6 @@ mod tests {
         }
     }
 
-    // --- JSON fixture builders ----------------------------------------------
-
-    /// `{"name": <name>, <key>: [<items>]}`.
     fn named(name: &str, key: &str, items: Vec<Value>) -> Value {
         let mut v = Value::object();
         v.insert("name", Value::string(name));
@@ -1103,7 +966,6 @@ mod tests {
         named(name, "plugins", plugins)
     }
 
-    /// schema-v2 plugin entry: `{"name": "..."}`.
     fn json_plugin_v2(name: &str) -> Value {
         let mut v = Value::object();
         v.insert("name", Value::string(name));
@@ -1117,8 +979,6 @@ mod tests {
         v
     }
 
-    /// Run `process_optional_files` over a fresh service, returning that service
-    /// and the queued operations on success.
     fn run_optional(
         ir: FomodInstaller,
         config: &Value,
@@ -1146,8 +1006,6 @@ mod tests {
         Path::new(base).join(rel).to_string_lossy().into_owned()
     }
 
-    // --- make_plugin_key ----------------------------------------------------
-
     #[test]
     fn make_plugin_key_lowercases_every_component() {
         assert_eq!(
@@ -1164,15 +1022,13 @@ mod tests {
     fn make_plugin_key_separator_is_unit_separator() {
         let key = make_plugin_key("a", "b", "c");
         assert_eq!(key, "a\u{1f}b\u{1f}c");
-        // Names containing the ASCII separators FOMOD text can carry (spaces,
-        // slashes) cannot collide across component boundaries.
+        // names containing the ASCII separators FOMOD text can carry (spaces, slashes) cannot
+        // collide across component boundaries.
         assert_ne!(
             make_plugin_key("a b", "c", "d"),
             make_plugin_key("a", "b c", "d")
         );
     }
-
-    // --- enqueue_entry ------------------------------------------------------
 
     #[test]
     fn enqueue_entry_skips_empty_source() {
@@ -1193,7 +1049,6 @@ mod tests {
     fn enqueue_entry_skips_traversal_destination() {
         let mut ops = Vec::new();
         let mut order = 0;
-        // A drive-letter destination survives normalize_path and is rejected.
         enqueue_entry(
             &entry("a.esp", "C:/windows/x"),
             "src",
@@ -1201,8 +1056,6 @@ mod tests {
             &mut ops,
             &mut order,
         );
-        // `..` segments are stripped by normalize_path, so they normalize to a
-        // path inside the mod root and are accepted.
         enqueue_entry(
             &entry("a.esp", "../../escape.esp"),
             "src",
@@ -1217,10 +1070,6 @@ mod tests {
 
     #[test]
     fn enqueue_entry_reproduces_the_rooted_destination_hole() {
-        // is_safe_destination normalizes leading slashes away, so "/etc/passwd"
-        // passes the guard, and the join then uses the raw destination, whose
-        // root component replaces the base. The hole is reproduced on purpose,
-        // not fixed.
         let mut ops = Vec::new();
         let mut order = 0;
         enqueue_entry(
@@ -1262,8 +1111,6 @@ mod tests {
         assert_eq!(ops[1].document_order, 4);
         assert_eq!(order, 5);
     }
-
-    // --- execute_file_operations -------------------------------------------
 
     fn op(priority: i32, document_order: i32, source: &str) -> FileOperation {
         FileOperation {
@@ -1311,9 +1158,8 @@ mod tests {
 
     #[test]
     fn execute_through_the_real_back_end_never_reports_a_failure() {
-        // FileOperations::copy_file absorbs its own I/O errors (a missing source
-        // is a silent skip), so the failure count is 0 even for paths that
-        // cannot possibly be copied.
+        // FileOperations::copy_file absorbs its own I/O errors (a missing source is a silent skip),
+        // so the failure count is 0 even for paths that cannot possibly be copied.
         let mut ops = vec![
             op(0, 0, "no-such-source-file.esp"),
             FileOperation {
@@ -1327,8 +1173,6 @@ mod tests {
         assert_eq!(execute_file_operations(&mut ops), 0);
         assert!(ops.is_empty());
     }
-
-    // --- required and conditional files ------------------------------------
 
     #[test]
     fn required_files_enqueue_in_document_order() {
@@ -1368,7 +1212,6 @@ mod tests {
                 files: vec![entry("off.esp", "off.esp")],
             });
 
-        // No flags set: neither pattern matches.
         let mut service = FomodService::new();
         service.set_installer(ir.clone());
         let mut ops = Vec::new();
@@ -1376,7 +1219,6 @@ mod tests {
         service.process_conditional_files("src", "dst", None, &mut ops, &mut order);
         assert!(ops.is_empty());
 
-        // With mode=on set by a selected plugin, only the first pattern fires.
         let mut ir_with_flag = ir.clone();
         let mut flag_plugin = plugin("P", vec![]);
         flag_plugin.condition_flags = vec![("mode".to_string(), "on".to_string())];
@@ -1401,8 +1243,6 @@ mod tests {
         assert_eq!(sources(&ops), vec![joined("src", "on.esp")]);
     }
 
-    // --- module dependencies ------------------------------------------------
-
     #[test]
     fn module_dependencies_absent_is_satisfied() {
         let service = FomodService::new();
@@ -1424,13 +1264,10 @@ mod tests {
         assert!(service.check_module_dependencies(None));
     }
 
-    // --- read_plugin_name / name_field --------------------------------------
-
     #[test]
     fn read_plugin_name_accepts_both_schemas_and_skips_the_rest() {
         assert_eq!(read_plugin_name(&Value::string("A")), "A");
         assert_eq!(read_plugin_name(&json_plugin_v2("B")), "B");
-        // Anything else yields "" so the caller skips that entry.
         assert_eq!(read_plugin_name(&Value::Int(3)), "");
         assert_eq!(read_plugin_name(&Value::Null), "");
         assert_eq!(read_plugin_name(&Value::array()), "");
@@ -1453,8 +1290,6 @@ mod tests {
         bad.insert("name", Value::Int(1));
         assert_eq!(name_field(&bad), None);
     }
-
-    // --- both selections schemas -------------------------------------------
 
     fn two_plugin_ir() -> FomodInstaller {
         installer(vec![step(
@@ -1490,9 +1325,9 @@ mod tests {
 
     #[test]
     fn unreadable_plugin_entry_is_skipped_without_consuming_an_occurrence() {
-        // Two IR plugins share the name "Dup". A junk entry between the two JSON
-        // selections must not advance the occurrence counter, so the second
-        // readable "Dup" still binds to the second IR plugin.
+        // two IR plugins share the name "Dup". a junk entry between the two JSON selections must
+        // not advance the occurrence counter, so the second readable "Dup" still binds to the
+        // second IR plugin.
         let ir = installer(vec![step(
             "S",
             vec![group(
@@ -1518,8 +1353,6 @@ mod tests {
             vec![joined("src", "first.esp"), joined("src", "second.esp")]
         );
     }
-
-    // --- occurrence-based matching -----------------------------------------
 
     #[test]
     fn duplicate_step_and_group_names_bind_by_occurrence() {
@@ -1555,8 +1388,6 @@ mod tests {
 
     #[test]
     fn step_without_groups_array_still_consumes_an_occurrence() {
-        // The first JSON step has no `groups` array: the step occurrence counter
-        // still advances, so the second JSON step binds to the second IR step.
         let ir = installer(vec![
             step(
                 "S",
@@ -1589,9 +1420,9 @@ mod tests {
 
     #[test]
     fn missing_ir_step_does_not_consume_a_second_occurrence() {
-        // Only one IR step named "S". Three JSON steps named "S": the first
-        // binds (occ 0), the second and third miss (occ 1 and 2) without double
-        // incrementing, which would matter if more IR steps existed.
+        // only one IR step named "S". three JSON steps named "S": the first binds (occ 0), the
+        // second and third miss (occ 1 and 2) without double incrementing, which would matter if
+        // more IR steps existed.
         let ir = installer(vec![step(
             "S",
             vec![group(
@@ -1668,8 +1499,6 @@ mod tests {
         );
     }
 
-    // --- visibility, dependencies, flags ------------------------------------
-
     #[test]
     fn invisible_step_is_skipped_in_every_pass() {
         let mut hidden = step(
@@ -1727,8 +1556,6 @@ mod tests {
             ("".to_string(), "ignored".to_string()),
             ("mode".to_string(), "on".to_string()),
         ];
-        // A second plugin whose dependency needs the flag the first one sets;
-        // flags from an earlier selection are visible to later ones.
         let mut dependent = plugin("Dependent", vec![entry("dep.esp", "dep.esp")]);
         dependent.dependencies = Some(flag_leaf("mode", "on"));
 
@@ -1756,8 +1583,6 @@ mod tests {
         );
         assert!(!service.plugin_flags().contains_key(""));
     }
-
-    // --- Required auto-install ---------------------------------------------
 
     #[test]
     fn required_plugins_auto_install_in_a_json_covered_step() {
@@ -1829,8 +1654,6 @@ mod tests {
 
     #[test]
     fn required_type_from_a_type_pattern_also_auto_installs() {
-        // Effective type comes from evaluate_plugin_type, so a pattern that flips
-        // an Optional plugin to Required is honoured.
         let mut patterned = plugin("Patterned", vec![entry("pat.esp", "pat.esp")]);
         patterned.type_patterns = vec![FomodTypePattern {
             condition: flag_leaf("mode", "on"),
@@ -1852,13 +1675,9 @@ mod tests {
             vec![json_group("G", vec![Value::string("Setter")])],
         )]);
 
-        // A context is required for evaluate_plugin_type to use Normal-mode
-        // evaluation; the flag leaf resolves the same either way here.
         let (_, ops) = run_optional(ir, &config).expect("well-formed");
         assert_eq!(sources(&ops), vec![joined("src", "pat.esp")]);
     }
-
-    // --- alwaysInstall / installIfUsable ------------------------------------
 
     #[test]
     fn always_install_and_install_if_usable_from_unselected_plugins() {
@@ -1915,12 +1734,9 @@ mod tests {
         assert_eq!(
             sources(&ops),
             vec![
-                // The selected plugin's own files come from pass 1 (its
-                // alwaysInstall flag is irrelevant - it is already processed).
                 joined("src", "sel-always.esp"),
                 joined("src", "always.esp"),
                 joined("src", "usable.esp"),
-                // NotUsable keeps alwaysInstall but drops installIfUsable.
                 joined("src", "nu-always.esp"),
             ]
         );
@@ -1928,8 +1744,8 @@ mod tests {
 
     #[test]
     fn required_plugins_are_excluded_from_the_auto_install_pass() {
-        // A Required plugin is installed whole by pass 1b or 2, so pass 3 must
-        // not re-enqueue its alwaysInstall entry.
+        // a Required plugin is installed whole by pass 1b or 2, so pass 3 must not re-enqueue its
+        // alwaysInstall entry.
         let ir = installer(vec![step(
             "S",
             vec![group(
@@ -1953,8 +1769,6 @@ mod tests {
 
     #[test]
     fn no_steps_array_still_returns_ok_and_enqueues_nothing() {
-        // The whole optional phase is skipped when `steps` is missing or is not
-        // an array, so not even Required plugins are auto-installed.
         let ir = installer(vec![step(
             "S",
             vec![group(
@@ -1974,8 +1788,6 @@ mod tests {
         let (_, ops) = run_optional(ir, &not_an_array).expect("steps not an array");
         assert!(ops.is_empty());
     }
-
-    // --- error + rollback ---------------------------------------------------
 
     #[test]
     fn non_string_step_name_aborts_and_rolls_back() {
@@ -2009,8 +1821,8 @@ mod tests {
         let mut service = FomodService::new();
         service.set_installer(ir);
 
-        // Pre-existing operations (e.g. from process_required_files) must survive
-        // the rollback untouched.
+        // pre-existing operations (e.g. from process_required_files) must survive the rollback
+        // untouched.
         let mut ops = vec![op(0, 0, "pre-existing")];
         let mut order = 1;
         let err = service
@@ -2033,7 +1845,6 @@ mod tests {
             )],
         )]);
 
-        // A non-object step element.
         let config = selections(vec![Value::string("S")]);
         let mut service = FomodService::new();
         service.set_installer(ir.clone());
@@ -2044,7 +1855,6 @@ mod tests {
             Err(SelectionsError::NameTypeError)
         );
 
-        // A non-string group name.
         let mut bad_group = Value::object();
         bad_group.insert("name", Value::Bool(true));
         bad_group.insert("plugins", Value::array());
@@ -2058,8 +1868,6 @@ mod tests {
             Err(SelectionsError::NameTypeError)
         );
     }
-
-    // --- validate_json_selections -------------------------------------------
 
     fn validate_with(group_type: FomodGroupType, total: usize, selected: &[&str]) -> bool {
         let plugins = (0..total)
@@ -2095,9 +1903,8 @@ mod tests {
             3,
             &["P0", "P1"]
         ));
-        // An empty group entry never reaches selected_plugins, so the group is
-        // simply not validated - the failure needs a selection the IR does not
-        // contain.
+        // an empty group entry never reaches selected_plugins, so the group is not validated
+        // - the failure needs a selection the IR does not contain.
         assert!(!validate_with(
             FomodGroupType::SelectAtLeastOne,
             3,
