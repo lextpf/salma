@@ -1,12 +1,12 @@
 @import "tailwindcss";
 
 /**
- * @brief define dashboard tokens, resets, and pseudo-class states.
- * @author Alex (https://github.com/lextpf)
+ * @brief Define dashboard tokens, resets, and pseudo-class states.
+ * @author Alex (<https://github.com/lextpf>)
  *
- * chrome and content share one plane. `--signal` means live, selected, or primary.
- * all text ink except `--ink-ghost` meets a 4.5:1 contrast ratio in both themes.
- * components own resting styles. this file owns tokens and states that inline styles
+ * Chrome and content share one plane. `--signal` means live, selected, or primary.
+ * All text ink except `--ink-ghost` meets a 4.5:1 contrast ratio in both themes.
+ * Components own resting styles. This file owns tokens and states that inline styles
  * cannot express.
  */
 
