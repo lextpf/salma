@@ -26,6 +26,19 @@ jobs:
         with:
           components: clippy
 
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      # the ctest step runs SalmaEngine.*, which loads the engine at runtime, and CMake
+      # stages the DLL only when target/package/mo2-salma.dll exists at configure time.
+      - name: Build the Rust engine
+        run: cargo build --release
+
+      - name: Stage the engine DLL
+        run: python scripts/package.py --no-build
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:

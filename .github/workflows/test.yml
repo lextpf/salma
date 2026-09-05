@@ -20,6 +20,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # salma_tests loads the Rust engine at runtime, and CMake stages the DLL only when
+      # target/package/mo2-salma.dll exists at configure time. build and stage it first.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Build the Rust engine
+        run: cargo build --release
+
+      - name: Stage the engine DLL
+        run: python scripts/package.py --no-build
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
