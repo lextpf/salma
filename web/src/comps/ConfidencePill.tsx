@@ -2,23 +2,13 @@ import { tierFor } from '../confidence'
 import type { ConfidenceScore } from '../types'
 
 interface ConfidencePillProps {
-  // Accepts a full ConfidenceScore, a bare composite number, or nothing.
   confidence?: ConfidenceScore | number | null
   exactMatch?: boolean
   size?: 'sm' | 'md'
 }
 
-/**
- * The four-tier confidence chip.
- *
- * Every tier is a tinted outline, never a solid fill and never lit: the tier
- * hue is the text, the dot and the border, over a flat wash of itself at about
- * 10%. A filled `EXACT` chip would need its own contrast ink and would read
- * louder than the dial beside it. The chip takes --radius-chip like every other
- * micro-tag; only the status dot is round. With no confidence data it renders
- * nothing, rather than a misleading `LOW`.
- */
 export default function ConfidencePill({ confidence, exactMatch, size = 'md' }: ConfidencePillProps) {
+  // render nothing when confidence data is absent.
   const info = tierFor({ confidence, exactMatch })
   if (!info.hasData) {
     return null
