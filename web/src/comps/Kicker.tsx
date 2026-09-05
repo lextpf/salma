@@ -3,12 +3,6 @@ interface KickerProps {
   label: string
 }
 
-/**
- * The module marker: mono numeral, a small solid signal square, then the
- * tracked uppercase label. The numeral and the square are the accent; the
- * label stays quiet so the pair reads as an instrument legend rather than a
- * title. The square is a flat mark, not a lit one.
- */
 export default function Kicker({ num, label }: KickerProps) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9, flexShrink: 0 }}>

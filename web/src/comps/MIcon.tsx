@@ -1,30 +1,23 @@
 import type { CSSProperties } from 'react'
 
+/**
+ * @interface MIconProps
+ * @brief constrain variable icon axes and accessible labeling.
+ * @author Alex (https://github.com/lextpf)
+ *
+ * `size` is in CSS pixels and optical size clamps to [20, 48]. `weight` is in
+ * [100, 700] and defaults to 400. omit `label` for decorative icons.
+ */
 interface MIconProps {
-  /** Material Symbols ligature name, e.g. "search" or "expand_more". */
   name: string
-  /**
-   * Icon box in CSS pixels. Sets font-size directly. Default 14.
-   *
-   * The opsz axis follows it, clamped to 20-48, which is the range the variable
-   * font supports. Every size below 20 therefore renders at opsz 20, the default
-   * of 14 included: moving `size` on a small icon changes its box, not its
-   * optical size.
-   */
   size?: number
-  /** Filled glyph variant (FILL axis). */
   fill?: boolean
-  /** wght axis, 100-700. Default 400. */
   weight?: number
   className?: string
   style?: CSSProperties
-  /** Accessible label; omitted = decorative (aria-hidden). */
   label?: string
 }
 
-// Material Symbols Outlined wrapper, and the only icon language in the UI.
-// Colour inherits from currentColor, so a parent's hover and active colours
-// apply on their own with no per-icon plumbing.
 export default function MIcon({
   name,
   size = 14,

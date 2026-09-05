@@ -10,27 +10,12 @@ interface ButtonProps {
   href?: string
   variant?: ButtonVariant
   disabled?: boolean
-  /** Swaps the icon for a spinner and keeps the button interactive-looking. */
   running?: boolean
-  /** Icon-only rendering for narrow docks; the label moves to title/aria. */
   compact?: boolean
   title?: string
   children?: ReactNode
 }
 
-/**
- * The one button in the app.
- *
- * Three variants, one geometry: same height, padding, radius and gap, so a
- * toolbar row aligns on every edge. Nothing here is lit - each variant is a
- * fill plus a visible 1px border, which is the only thing that has to say
- * "pressable". `ghost` is the default toolbar control, a quiet fill inside a
- * `--rule-ctrl` edge. `primary` is a flat `--signal` plate and there should be
- * at most one per screen - it is the screen's single "do the thing" affordance.
- * `danger` is outlined over a faint wash, never filled, so a destructive action
- * can sit in a toolbar without shouting. Hover and active states live in
- * index.css on `.btn` / `.btn-primary` / `.btn-danger`.
- */
 export default function Button({
   label,
   icon,
@@ -60,9 +45,6 @@ export default function Button({
     whiteSpace: 'nowrap',
     textDecoration: 'none',
     cursor: disabled ? 'not-allowed' : 'pointer',
-    // 0.6 and no lower. Below it a disabled ghost label falls under the
-    // placeholder floor and dissolves into the plane; at 0.6 it reads at
-    // roughly --ink-faint.
     opacity: disabled ? 0.6 : 1,
   }
 
@@ -90,9 +72,6 @@ export default function Button({
     },
   }
 
-  // The glyph tracks its label rather than sitting a step dimmer: a toolbar
-  // glyph is something the user acts on, so on a ghost control it holds
-  // --ink-4 instead of fading toward the plane.
   const iconColor =
     primary ? 'var(--signal-ink)'
       : variant === 'danger' ? 'var(--danger)'

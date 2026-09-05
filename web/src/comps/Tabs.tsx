@@ -7,25 +7,11 @@ interface TabsProps {
   items: TabItem[]
   active: string
   onChange: (id: string) => void
-  // 'underline' = inspector content tabs; 'segment' = the Logs switches.
   variant?: 'underline' | 'segment'
-  /** Segment size: 'source' is the wider mixed-case row, 'level' the tracked one. */
   size?: 'source' | 'level'
   label?: string
 }
 
-/**
- * Two tab treatments sharing one keyboard-accessible button row.
- *
- * `segment` is a segmented control drawn flat: one shell fill inside a
- * hairline, with the active segment marked by a signal wash and signal ink
- * rather than raised out of a well. It keeps its edge because it is a control,
- * which is one of the cases index.css allows a border.
- *
- * `underline` is the inspector's content switch: the active tab carries a flat
- * 2px signal bar and the strip has no rule of its own. Neither state depends on
- * a shadow, so both read the same in either theme.
- */
 export default function Tabs({
   items,
   active,
@@ -112,9 +98,7 @@ export default function Tabs({
                   position: 'absolute',
                   left: 8,
                   right: 8,
-                  // Flush with the strip. The strip has no bottom border for
-                  // the marker to cover, so a negative offset would float it a
-                  // pixel clear of the tab it belongs to.
+                  // keep the marker flush with the borderless strip.
                   bottom: 0,
                   height: 2,
                   background: 'var(--signal)',
