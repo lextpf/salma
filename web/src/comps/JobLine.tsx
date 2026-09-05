@@ -9,7 +9,6 @@ import { fmtClock, modLeaf, pad2 } from './jobFormat'
 
 interface JobLineProps {
   job: InstallationJob
-  // 1-based position of this job in the session (the # column).
   index: number
 }
 
@@ -25,15 +24,6 @@ function fmtDuration(job: InstallationJob): string | null {
   return s >= 100 ? `${Math.round(s)}s` : `${s.toFixed(1)}s`
 }
 
-/**
- * One log row for a terminal (completed / error) or queued job.
- *
- * The session reads as a monospace log, not a stack of cards: fixed columns
- * (clock, ordinal, format, name, state, meta) do the separating, with no rule
- * and no per-row surface. A completed or error row expands on click into a flat
- * detail band carrying the target and a link to the log. A queued row is
- * read-only; there is no way to remove one.
- */
 export default function JobLine({ job, index }: JobLineProps) {
   const [expanded, setExpanded] = useState(false)
   const spec = formatForFile(job.fileName)
@@ -50,8 +40,6 @@ export default function JobLine({ job, index }: JobLineProps) {
     bg: 'var(--signal-wash-chip)',
   }
 
-  // Destination first, then duration and size: the same order and the same
-  // mods/<name> spelling the active card uses.
   const meta = isError
     ? job.error || 'failed'
     : isQueued

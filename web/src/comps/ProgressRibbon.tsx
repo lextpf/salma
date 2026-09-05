@@ -6,22 +6,12 @@ import type { InstallationJob } from '../types'
 
 interface ProgressRibbonProps {
   job: InstallationJob
-  // Raw salma log tail for the active job; parsed for the percent and the stage.
   rawLines: string[]
   index: number
   total: number
   queuedCount: number
 }
 
-/**
- * The dock pinned below the Install feed (above the chrome status bar) so live
- * progress survives feed scrolling.
- *
- * It runs the same six-segment meter as the active card at a smaller size, so
- * the two read as one instrument rather than two different progress bars. It
- * sits on the page plane: no rule above it, no surface of its own, nothing
- * raised.
- */
 export default function ProgressRibbon({ job, rawLines, index, total, queuedCount }: ProgressRibbonProps) {
   const { pct, label, tone, indeterminate } = computeInstallProgress(job, rawLines)
   const stage = stageIndexForOp(deriveActiveOp(rawLines))

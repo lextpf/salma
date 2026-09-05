@@ -11,7 +11,6 @@ import type { InstallationJob } from '../types'
 
 interface ActiveJobCardProps {
   job: InstallationJob
-  // 1-based position of this job in the session (the # column) and the total.
   index: number
   total: number
   lines: ConsoleLine[]
@@ -19,18 +18,6 @@ interface ActiveJobCardProps {
   onCancel: () => void
 }
 
-// Console colour is keyed on the op, not on the line's position in the stream:
-// a result is the same result wherever it lands. Ops that report a clean result
-// read moss; everything else stays quiet.
-//
-// Two tokens here are unreachable with the current op vocabulary. They stay so
-// that adding the rule that produces them needs no change in this file:
-//   - 'WARN' is never derived. OP_RULES in useInstallConsole.ts has no warn
-//     rule and deriveOp falls back to 'INSTALL', so the brass branches in
-//     opColor and msgColor never run. A warning line takes the colour of
-//     whichever other rule its text matches.
-//   - 'VALIDATE' is a stage name (stages.ts), not an op, so nothing reaches
-//     OK_OPS through it either.
 const OK_OPS = new Set(['VALIDATE', 'CSP', 'SIMULATE', 'DONE', 'PROPAGATE'])
 
 function opColor(op: string, live: boolean): string {
@@ -49,15 +36,6 @@ function msgColor(op: string, live: boolean): string {
 
 const STREAM_WINDOW = 8
 
-/**
- * The panel for the job currently installing, and the focal point of the
- * Install screen: a header band, the progress meter, and a live op-stream from
- * the [install] log tail.
- *
- * Three stacked groups with no surface and no hairlines of their own. What
- * marks it as the live row is the signal left edge and the meter, never a
- * shadow or a bloom.
- */
 export default function ActiveJobCard({ job, index, total, lines, rawLines, onCancel }: ActiveJobCardProps) {
   const streamRef = useRef<HTMLDivElement | null>(null)
 
@@ -91,7 +69,6 @@ export default function ActiveJobCard({ job, index, total, lines, rawLines, onCa
         overflow: 'hidden',
       }}
     >
-      {/* Band 1 - header */}
       <div
         style={{
           display: 'flex',
@@ -187,10 +164,8 @@ export default function ActiveJobCard({ job, index, total, lines, rawLines, onCa
         </button>
       </div>
 
-      {/* Band 2 - the progress instrument: stages, segments, percent, metrics */}
       <StageMeter job={job} rawLines={rawLines} activeOp={activeOp} errored={errored} />
 
-      {/* Band 3 - console */}
       <div
         ref={streamRef}
         style={{
