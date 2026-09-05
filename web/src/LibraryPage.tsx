@@ -17,19 +17,8 @@ import type { FomodEntry } from './types'
 
 const RETRY_DELAY_MS = 2000
 
-// Module 02 - Library. The selection-driven triptych, left to right: the
-// confidence-banded records list (RecordsList), the VFS tree of the selected
-// record (VfsTree), and the record inspector (Inspector). That is reading order
-// as well as DOM order: choose a mod, see what it installs, then read why.
-//
-// The middle column is conditional. Below 950px of content width hideTree drops
-// VfsTree entirely and the row becomes two columns; see useContentBreakpoints.
-//
-// Selection lives in the URL (/fomods/:name); the detail fetch is lifted here so
-// the tree and inspector share one load. Search, scan, and tab state are local;
-// VfsTree + Inspector remount on record change (via key) so their internal state
-// (collapsed folders, active tab) resets cleanly.
 export default function LibraryPage() {
+  // URL selection owns the shared detail request. keyed views reset record-local state.
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
   const selectedName = name ? decodeURIComponent(name) : null
@@ -39,8 +28,7 @@ export default function LibraryPage() {
   const [search, setSearch] = useState('')
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inFlightRef = useRef(false)
-  // Initialized to a noop so loadList can reference it before the latest-ref
-  // effect wires it up (avoids a use-before-declaration cycle).
+  // initialize the latest callback before retry setup.
   const loadListRef = useRef<(force?: boolean) => void>(() => {})
 
   const clearRetryTimer = useCallback(() => {
@@ -53,10 +41,7 @@ export default function LibraryPage() {
   const loadList = useCallback(
     (force = false) => {
       if (inFlightRef.current && !force) return
-      // No synchronous setListLoading(true) here. The initial value is already
-      // true, and a background refresh (scan, retry) keeps the current list
-      // visible instead of flashing a skeleton. The .catch path re-arms the
-      // loading flag asynchronously while a retry is pending.
+      // keep the current list visible during background refresh.
       inFlightRef.current = true
       listFomods()
         .then(data => {
@@ -81,8 +66,7 @@ export default function LibraryPage() {
     [clearRetryTimer],
   )
 
-  // Latest-ref pattern: lets the retry timer call the current loadList without
-  // re-subscribing consumers (loadList itself stays referentially stable).
+  // let retry timers use the current loader without resubscribing.
   useEffect(() => {
     loadListRef.current = loadList
   })
@@ -114,16 +98,10 @@ export default function LibraryPage() {
   const selectedEntry = selectedIndex >= 0 ? fomods[selectedIndex] : null
   const priority = selectedIndex >= 0 ? String(selectedIndex + 1).padStart(2, '0') : null
 
-  // The chooser folds itself once a record is picked, and the spine unfolds it.
-  // There is no explicit fold control: unfolding is something you do in order to
-  // pick, and picking folds it again, so the cycle closes on its own.
   const [keepChooserOpen, setKeepChooserOpen] = useState(false)
   const chooserFolded = selectedName !== null && !keepChooserOpen
   const openChooser = useCallback(() => setKeepChooserOpen(true), [])
 
-  // Picking a mod always folds the chooser, including when it was unfolded by
-  // hand: choosing is the job the list is open for, so finishing it is the
-  // moment the width should go back to the tree and the record.
   const handleSelect = useCallback(
     (n: string) => {
       setKeepChooserOpen(false)
@@ -132,12 +110,8 @@ export default function LibraryPage() {
     [navigate],
   )
 
-  // Empty string keys the no-selection state; a real folder name is never empty,
-  // so VfsTree/Inspector remount (resetting collapse + tab) on every change.
   const recordKey = selectedName ?? ''
 
-  // The tree is the first thing to go when the window is docked narrow: it is
-  // a preview of the selected record, not a way to reach one.
   const { hideTree, chipDial, compactToolbar } = useContentBreakpoints()
 
   return (
@@ -207,10 +181,6 @@ export default function LibraryPage() {
         />
       </ModuleHeader>
 
-      {/* Body. Widths are never pinned: see useContentBreakpoints. The fill
-          lives here and no column sets a plane or a fill step of its own, so
-          the three read as one surface split by spacing. The chooser leads
-          because it is the entry point, and folds to a spine once picked. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: 22, background: 'var(--paper)' }}>
         <RecordsList
           fomods={filtered}

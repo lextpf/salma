@@ -19,53 +19,9 @@ import VolumeHistogram from './comps/VolumeHistogram'
 import SubsystemFacets from './comps/SubsystemFacets'
 import LogStreamRow from './comps/LogStreamRow'
 
-/*
- * Module 03 - Logs. The data path crosses six modules, so its shape comes
- * first:
- *
- *   GET /api/logs?lines[&offset]
- *      -> { lines, nextOffset, reset, errors, warnings, passes }
- *          |                                   |
- *     loadFull (no offset)            loadIncremental (offset set)
- *     replaces the buffer             appends, trims to LINE_LIMIT,
- *          |                          adds the count deltas
- *          |                                   |
- *          |                          reset === true -> drop offset,
- *          |                          zero the counts, call loadFull
- *          +--------------> applyLines <-------+
- *                               |
- *          +--------------------+--------------------+
- *          |                                         |
- *   parseProgressBars                       records = lines minus
- *   (carries the sticky refs                tqdm progress lines, each
- *    forward, which is why                  through parseLogLine
- *    it runs here and not                        |
- *    in a useMemo)                               |
- *          |                +--------------------+--------------------+
- *   docked progress bars    |                    |                    |
- *                     facetCounts          buildHistogram        filtered by
- *                  (SubsystemFacets)     (VolumeHistogram)     level, subsystem
- *                                                              and text
- *                                                                   |
- *                                                            useVirtualScroll
- *                                                            window -> rows
- *
- * Two rules the shape enforces: applyLines is the only place `lines` changes,
- * and the sticky refs are read and written there, never during render.
- */
-
-/**
- * How many lines to hold in the view.
- *
- * High enough to hold a whole run. A scan routinely writes five figures of log,
- * and the question a reader brings to this page is usually "what happened at the
- * start of the run", so a low ceiling drops exactly the lines that matter. The
- * engine rotates salma.log at 10 MiB, which bounds the file, so this ceiling
- * only stops an unbounded array; it is not a sampling rate.
- *
- * The stream is virtualized (useVirtualScroll), so the row count costs memory,
- * not render time.
- */
+// full reads replace the buffer. incremental reads append count deltas.
+// `applyLines` owns line state and progress refs. render code must not mutate those refs.
+// the engine rotates logs at 10 MiB. this separate limit bounds browser memory.
 const LINE_LIMIT = 200_000
 const HISTOGRAM_BUCKETS = 30
 const RETRY_DELAY_MS = 2000
@@ -89,24 +45,16 @@ export default function LogsPage() {
   const [loading, setLoading] = useState(true)
   const [autoRefresh, setAutoRefresh] = useState(getTailLogs)
   const [clearing, setClearing] = useState(false)
-  // Set by a failed load, consumed by the retry effect below.
   const [retryPending, setRetryPending] = useState(false)
   const [source, setSource] = useState<LogSource>('salma')
   const [logStats, setLogStats] = useState({ errors: 0, warnings: 0, passes: 0 })
-  // The tqdm-style progress lines filtered out of the record stream below are
-  // surfaced instead as live docked bars: solver + scan progress for salma.log,
-  // the test runner for test.log. This is where mod-processing progress (N/M,
-  // ETA, rate) stays visible while the solver runs. Parsed on arrival, in
-  // applyLines.
+  // progress records render in the footer and do not enter the record stream.
   const [progressBars, setProgressBars] = useState<TqdmBar[]>([])
 
-  // Local view filters (not part of the fetch machinery).
   const [textFilter, setTextFilter] = useState('')
   const [levelFilter, setLevelFilter] = useState<LevelFilter>('all')
   const [activeSubsystem, setActiveSubsystem] = useState<string | null>(null)
 
-  // Below 780px of content the four level tabs do not fit; they collapse to a
-  // single cycling button so the filter stays reachable.
   const { compactToolbar } = useContentBreakpoints()
 
   const { scrollRef, handleScroll, resetScroll, stickToBottom, startIdx: getStartIdx, endIdx: getEndIdx } =
@@ -114,20 +62,14 @@ export default function LogsPage() {
   const refreshBusyRef = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
   const offsetRef = useRef<number | undefined>(undefined)
-  // The current `lines`, readable from the fetch path. An incremental load runs
-  // in a promise handler, where reading state would give a stale buffer, and it
-  // needs the buffer both to append to and to parse progress bars from.
+  // asynchronous appends read the current buffer through this ref.
   const linesRef = useRef<string[]>([])
-  // Sticky state for the docked progress bars: the last-seen scan bar (so it
-  // survives windows where no [N/M] line is in the buffer) and the per-source
-  // start timestamps (so elapsed/ETA persist after the [1/N] line scrolls off).
+  // keep progress state after source records leave the bounded buffer.
   const cachedScanBarRef = useRef<TqdmBar | null>(null)
   const cachedScanStartTsRef = useRef<number | null>(null)
   const cachedTestStartTsRef = useRef<number | null>(null)
 
-  // The single place `lines` changes. The progress bars are parsed here rather
-  // than derived in a useMemo because parsing carries the sticky caches above
-  // forward, and a render must not read or write refs.
+  // update line state and progress refs together.
   const applyLines = useCallback((next: string[], src: LogSource) => {
     linesRef.current = next
     setLines(next)
@@ -135,10 +77,6 @@ export default function LogsPage() {
     setProgressBars(next.length === 0 ? [] : parseProgressBars(next, src, cachedScanBarRef, startTsRef))
   }, [])
 
-  // `src` is threaded through the loaders rather than read back from a ref,
-  // because writing that ref during render is what react-hooks/refs forbids.
-  // Neither loader touches state synchronously, so the effects below can call
-  // them directly.
   const loadFull = useCallback((src: LogSource): Promise<void> => {
     refreshBusyRef.current = true
     const fetcher = src === 'test' ? getTestLogs : getLogs
@@ -205,10 +143,7 @@ export default function LogsPage() {
     }
   }, [source, loadFull, resetScroll])
 
-  // A failed load comes back through here. The timer lives in an effect so that
-  // its cleanup cancels it on unmount or on a source switch, and because a
-  // useCallback cannot schedule a retry of itself: referencing the callback
-  // inside its own body is an access before declaration.
+  // keep retry timers in an effect so cleanup cancels them.
   useEffect(() => {
     if (!retryPending) return
     const tid = setTimeout(() => {
@@ -234,7 +169,6 @@ export default function LogsPage() {
     }
   }, [autoRefresh, loadIncremental, source])
 
-  // Parse once per lines array; progress (tqdm) lines are dropped from the stream.
   const records = useMemo<LogRecord[]>(() => {
     const out: LogRecord[] = []
     for (const line of lines) {
@@ -259,15 +193,11 @@ export default function LogsPage() {
     })
   }, [records, levelFilter, activeSubsystem, textFilter])
 
-  // Keep the view pinned to the tail as new matching rows arrive.
   useEffect(() => {
     if (filtered.length === 0) return
     stickToBottom()
   }, [filtered, stickToBottom])
 
-  // The stats and the overlay are reset here rather than in the source effect
-  // above: a tab click is a plain event, and the same two calls in an effect
-  // body would be cascading renders.
   const switchSource = (next: LogSource) => {
     if (next === source) return
     setLoading(true)
@@ -313,8 +243,6 @@ export default function LogsPage() {
           onChange={id => switchSource(id as LogSource)}
         />
 
-        {/* A flex input with a max-width and no min-width collapses; without
-            minWidth this one crushes to 53px. */}
         <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 152, maxWidth: 290 }}>
           <MIcon
             name="filter_alt"
@@ -389,7 +317,6 @@ export default function LogsPage() {
         )}
       </ModuleHeader>
 
-      {/* Volume strip */}
       <VolumeHistogram
         buckets={histogram}
         live={autoRefresh}
@@ -400,9 +327,6 @@ export default function LogsPage() {
         showPasses={source === 'test'}
       />
 
-      {/* Facets across the top, then the stream at full width. A log line is one
-          long unbroken string, so every pixel the facets are not using is a
-          pixel of message that does not need an ellipsis. */}
       <SubsystemFacets
         facets={facets}
         active={activeSubsystem}
@@ -476,8 +400,6 @@ export default function LogsPage() {
         </div>
       </div>
 
-      {/* Docked run progress (solver / scan / test). Only shown while a run is
-          active; parseProgressBars returns [] once it completes. */}
       {progressBars.length > 0 && (
         <div className="log-progress-footer">
           {progressBars.map((bar, i) => (
@@ -489,21 +411,10 @@ export default function LogsPage() {
   )
 }
 
-// The scan and test bars arrive as counts, but the solver hands over a
-// ready-made tqdm line instead:
-//   "  3%|>...................| 1.2k/40k [00:05<02:30, 238/s] | best: m=5 e=3"
-// Its percentage and trailing readout are pulled back out here, or the solver
-// bar would render as a permanently indeterminate hatch labelled "working".
+// solver progress arrives as a preformatted tqdm line instead of counts.
 const RAW_BAR_RE = /^\s*(\d+)%\|[^|]*\|\s*(.*)$/
 
-/**
- * One docked run bar: a tagged phase line over a flat track.
- *
- * The numbers are the ones the engine printed; only the rendering changes, from
- * a monospace approximation of a bar to a real one. The track is a single fill
- * step and the bar is flat signal. The fill switches to the indeterminate hatch
- * only when neither counts nor a raw percentage can be parsed.
- */
+// use an indeterminate fill only when neither counts nor a raw percentage exists.
 function SolverDock({ bar }: { bar: TqdmBar }) {
   const raw = bar.rawBar ? RAW_BAR_RE.exec(bar.rawBar) : null
   const known = bar.current != null && bar.total != null && bar.total > 0
