@@ -713,8 +713,7 @@ fn pugi_as_int(attr: Option<&str>) -> i32 {
     }
 
     let mut result: u32 = 0;
-    let overflow;
-    if i + 1 < b.len() && b[i] == b'0' && (b[i + 1] | 0x20) == b'x' {
+    let overflow = if i + 1 < b.len() && b[i] == b'0' && (b[i + 1] | 0x20) == b'x' {
         i += 2;
         // overflow detection relies on the digit count; skip leading zeros.
         while i < b.len() && b[i] == b'0' {
@@ -733,7 +732,7 @@ fn pugi_as_int(attr: Option<&str>) -> i32 {
             result = result.wrapping_mul(16).wrapping_add(digit);
             i += 1;
         }
-        overflow = i - start > 8; // sizeof(u32) * 2 hex digits
+        i - start > 8 // sizeof(u32) * 2 hex digits
     } else {
         while i < b.len() && b[i] == b'0' {
             i += 1;
@@ -745,9 +744,9 @@ fn pugi_as_int(attr: Option<&str>) -> i32 {
         }
         let digits = i - start;
         // 32-bit constants: max_digits10 = 10, max_lead = '4', high_bit = 31.
-        overflow = digits >= 10
-            && !(digits == 10 && (b[start] < b'4' || (b[start] == b'4' && result >> 31 != 0)));
-    }
+        digits >= 10
+            && !(digits == 10 && (b[start] < b'4' || (b[start] == b'4' && result >> 31 != 0)))
+    };
 
     if negative {
         if overflow || result > 0x8000_0000 {
