@@ -94,7 +94,6 @@ echo ===========================================================================
 
 endlocal & set "SALMA_TESTS_PASSED=%ALL_PASSED%"
 if "%SALMA_NO_PAUSE%"=="1" goto :result
-pause
 :result
 if "%SALMA_TESTS_PASSED%"=="1" (
     exit /b 0
