@@ -42,10 +42,10 @@ function measure(railWidth: number): ContentBreakpoints {
 export function useContentBreakpoints(railWidth = RAIL_WIDTH): ContentBreakpoints {
   const [bp, setBp] = useState(() => measure(railWidth))
   useEffect(() => {
-    const onResize = () => setBp(measure(railWidth))
+    const onResize = () => { setBp(measure(railWidth)); }
     onResize()
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    return () => { window.removeEventListener('resize', onResize); }
   }, [railWidth])
   return bp
 }
