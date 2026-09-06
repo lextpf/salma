@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { getLogs } from './api'
 import { usePolling } from './usePolling'
-import { parseProgressBars } from './progressBarParsing'
+import { parseProgressBars, type TqdmBar } from './progressBarParsing'
 import type { InstallationJob } from './types'
 
 export interface ConsoleLine {
@@ -160,7 +160,9 @@ export function computeInstallProgress(job: InstallationJob, rawLines: string[])
       break
   }
 
-  const bar = parseProgressBars(rawLines, 'salma')[0]
+  // the list is empty before the first tqdm line arrives, so there is often no bar.
+  const bars = parseProgressBars(rawLines, 'salma')
+  const bar: TqdmBar | undefined = bars.length > 0 ? bars[0] : undefined
   if (bar) {
     let pct: number | null = null
     if (bar.current != null && bar.total != null && bar.total > 0) {
