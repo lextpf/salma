@@ -8,7 +8,6 @@ live MO2 installation. it supplies the host-only import classes.
 """
 
 import argparse
-import ctypes
 import re
 import shutil
 import sys
