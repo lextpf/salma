@@ -66,19 +66,23 @@ function extensionOf(name: string): string {
   return dot > 0 && dot < name.length - 1 ? name.slice(dot + 1).toLowerCase() : ''
 }
 
-const KIND: Record<string, { tone: string; glyph: string }> = {
-  esm: { tone: 'var(--moss)', glyph: 'description' },
-  esp: { tone: 'var(--format-zip)', glyph: 'description' },
-  esl: { tone: 'var(--format-zip)', glyph: 'description' },
-  bsa: { tone: 'var(--format-7z)', glyph: 'inventory_2' },
-  ba2: { tone: 'var(--format-7z)', glyph: 'inventory_2' },
-  xml: { tone: 'var(--brass)', glyph: 'code' },
-  json: { tone: 'var(--brass)', glyph: 'data_object' },
-  ini: { tone: 'var(--brass)', glyph: 'code' },
-}
+// a Map, not a plain object, so an extension such as `constructor` cannot resolve
+// an Object.prototype member instead of missing.
+const KIND = new Map<string, { tone: string; glyph: string }>(
+  Object.entries({
+    esm: { tone: 'var(--moss)', glyph: 'description' },
+    esp: { tone: 'var(--format-zip)', glyph: 'description' },
+    esl: { tone: 'var(--format-zip)', glyph: 'description' },
+    bsa: { tone: 'var(--format-7z)', glyph: 'inventory_2' },
+    ba2: { tone: 'var(--format-7z)', glyph: 'inventory_2' },
+    xml: { tone: 'var(--brass)', glyph: 'code' },
+    json: { tone: 'var(--brass)', glyph: 'data_object' },
+    ini: { tone: 'var(--brass)', glyph: 'code' },
+  }),
+)
 
 function kindFor(name: string): { tone: string; glyph: string } {
-  return KIND[extensionOf(name)] ?? { tone: 'var(--ink-5)', glyph: 'description' }
+  return KIND.get(extensionOf(name)) ?? { tone: 'var(--ink-5)', glyph: 'description' }
 }
 
 function countDirs(nodes: TreeNode[]): number {
@@ -143,7 +147,7 @@ export default function VfsTree({ outputTree, hasSelection, repro, reproDetail }
   const fileTotal = outputTree?.length ?? 0
   const dirTotal = useMemo(() => countDirs(roots), [roots])
   const byteTotal = useMemo(
-    () => (outputTree ?? []).reduce((sum, f) => sum + (f.size ?? 0), 0),
+    () => (outputTree ?? []).reduce((sum, f) => sum + f.size, 0),
     [outputTree],
   )
 
@@ -234,22 +238,27 @@ export default function VfsTree({ outputTree, hasSelection, repro, reproDetail }
             // collapsed directories retain their worst descendant fault.
             const fault = node.isDir ? (isOpen ? undefined : node.worstFault) : node.fault
             const faultTone = fault ? FAULT_TONE[fault] : undefined
-            const tone = faultTone ?? (node.isDir ? (root ? 'var(--ink-4)' : 'var(--ink-5)') : kind!.tone)
+            // kind is null exactly for directories, so it drives both branches.
+            const tone = faultTone ?? (kind === null ? (root ? 'var(--ink-4)' : 'var(--ink-5)') : kind.tone)
             const textTone = node.isDir ? (root ? 'var(--ink)' : 'var(--ink-4)') : 'var(--ink-3)'
-            const glyph = node.isDir ? (isOpen ? 'folder_open' : 'folder') : kind!.glyph
+            const glyph = kind === null ? (isOpen ? 'folder_open' : 'folder') : kind.glyph
             const trailing = node.isDir
               ? (node.children.length > 0 ? node.children.length.toLocaleString() : '')
               : node.absent
                 ? 'not written'
                 : (node.size != null ? formatSize(node.size) : '')
-            const mark = !node.isDir && node.fault ? FAULT_MARK[node.fault] : null
+            // carry the tone on the mark, where `node.fault` is already known to be set.
+            const mark =
+              !node.isDir && node.fault
+                ? { ...FAULT_MARK[node.fault], tone: FAULT_TONE[node.fault] }
+                : null
             return (
               <div
                 key={node.path}
                 className="fm-row"
                 // CSS state keeps fault highlighting composable with hover.
                 data-fault={fault}
-                onClick={node.isDir ? () => toggle(node.path) : undefined}
+                onClick={node.isDir ? () => { toggle(node.path); } : undefined}
                 title={mark ? `${node.path} - ${mark.label}` : (node.source ?? node.name)}
                 style={{
                   display: 'flex',
@@ -293,7 +302,7 @@ export default function VfsTree({ outputTree, hasSelection, repro, reproDetail }
                     name={mark.glyph}
                     size={13}
                     label={mark.label}
-                    style={{ color: FAULT_TONE[node.fault!], flexShrink: 0 }}
+                    style={{ color: mark.tone, flexShrink: 0 }}
                   />
                 )}
                 <span style={{ flex: 1 }} />
