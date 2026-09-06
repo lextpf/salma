@@ -100,12 +100,12 @@ export default function LibraryPage() {
 
   const [keepChooserOpen, setKeepChooserOpen] = useState(false)
   const chooserFolded = selectedName !== null && !keepChooserOpen
-  const openChooser = useCallback(() => setKeepChooserOpen(true), [])
+  const openChooser = useCallback(() => { setKeepChooserOpen(true); }, [])
 
   const handleSelect = useCallback(
     (n: string) => {
       setKeepChooserOpen(false)
-      navigate(`/fomods/${encodeURIComponent(n)}`)
+      void navigate(`/fomods/${encodeURIComponent(n)}`)
     },
     [navigate],
   )
@@ -172,7 +172,7 @@ export default function LibraryPage() {
         <Button
           icon={pluginInstalled ? 'radar' : 'link_off'}
           label={scanRunning ? 'Scanning' : 'Scan'}
-          onClick={handleScanFomods}
+          onClick={() => { void handleScanFomods(); }}
           disabled={!pluginInstalled || scanRunning}
           running={scanRunning}
           variant="primary"
