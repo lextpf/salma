@@ -139,7 +139,7 @@ export default function SettingsPage() {
           icon="check"
           label={saving ? 'Applying...' : 'Apply'}
           variant="primary"
-          onClick={handleSave}
+          onClick={() => { void handleSave(); }}
           disabled={!dirty || !pathValid || saving}
           running={saving}
           compact={compactToolbar}
