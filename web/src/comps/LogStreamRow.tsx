@@ -22,7 +22,7 @@ function levelStyle(level: LogLevel): LevelStyle {
     case 'INFO':
       return { fg: 'var(--log-info)', bg: 'var(--lvl-info-bg)', bd: 'var(--lvl-info-bd)', msg: 'var(--ink-3)', label: 'INFO' }
     default:
-      return { fg: 'var(--ink-5)', bg: 'var(--lvl-debug-bg)', bd: 'var(--lvl-debug-bd)', msg: 'var(--ink-4)', label: level || 'LOG' }
+      return { fg: 'var(--ink-5)', bg: 'var(--lvl-debug-bg)', bd: 'var(--lvl-debug-bd)', msg: 'var(--ink-4)', label: 'LOG' }
   }
 }
 
