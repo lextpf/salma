@@ -26,6 +26,8 @@ export function useInstallation(pluginInstalled: boolean): {
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // settle the polling promise when cancellation clears its timer.
   const pollResolveRef = useRef<(() => void) | null>(null)
+  // read through a call because TypeScript would otherwise narrow the ref across awaits.
+  const isCancelled = () => cancelledRef.current
 
   useEffect(() => {
     return () => {
@@ -58,7 +60,7 @@ export function useInstallation(pluginInstalled: boolean): {
         formData.append('jsonFileName', jsonFile.name)
       }
 
-      if (cancelledRef.current) return
+      if (isCancelled()) return
 
       // XHR provides upload progress. it has no timeout or CSRF retry.
       // do not retry a large request body without an idempotency contract.
@@ -114,12 +116,12 @@ export function useInstallation(pluginInstalled: boolean): {
             status: 'processing',
             uploadProgress: 100,
             processingStatus: 'Installing mod...',
-            modName: result.modName ?? j.modName,
+            modName: result.modName,
           }
           : j
       ))
 
-      if (cancelledRef.current) return
+      if (isCancelled()) return
 
       // chain timers so status requests do not overlap.
       await new Promise<void>((resolve) => {
@@ -129,7 +131,7 @@ export function useInstallation(pluginInstalled: boolean): {
 
         const poll = async () => {
           pollTimerRef.current = null
-          if (cancelledRef.current) { resolve(); return }
+          if (isCancelled()) { resolve(); return }
 
           retries++
           if (retries > MAX_RETRIES) {
@@ -144,7 +146,7 @@ export function useInstallation(pluginInstalled: boolean): {
 
           try {
             const status = await getInstallStatus()
-            if (cancelledRef.current) { resolve(); return }
+            if (isCancelled()) { resolve(); return }
             if (!status.running) {
               if (status.success) {
                 setJobs(prev => prev.map(j =>
@@ -169,7 +171,7 @@ export function useInstallation(pluginInstalled: boolean): {
           pollTimerRef.current = setTimeout(poll, 1500)
         }
 
-        if (cancelledRef.current) { resolve(); return }
+        if (isCancelled()) { resolve(); return }
         pollTimerRef.current = setTimeout(poll, 1500)
       })
       pollResolveRef.current = null
@@ -180,7 +182,7 @@ export function useInstallation(pluginInstalled: boolean): {
               ...j,
               status: 'error',
               completedAt: Date.now(),
-              error: cancelledRef.current
+              error: isCancelled()
                 ? 'Cancelled'
                 : error instanceof Error
                   ? error.message
@@ -223,7 +225,7 @@ export function useInstallation(pluginInstalled: boolean): {
       setJobs(prev => [...prev, ...newJobs])
 
       for (let i = 0; i < newJobs.length; i++) {
-        if (cancelledRef.current) break
+        if (isCancelled()) break
         const archiveFile = archiveFiles[i]
         const archiveNameWithoutExt = archiveFile.name.replace(/\.[^/.]+$/, '')
         const matchingJson = jsonFiles.find(json =>
