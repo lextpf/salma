@@ -76,7 +76,7 @@ export default function Tabs({
             role="tab"
             className="seg-item"
             aria-selected={on}
-            onClick={() => onChange(it.id)}
+            onClick={() => { onChange(it.id); }}
             style={{
               position: 'relative',
               padding: '11px 15px',
