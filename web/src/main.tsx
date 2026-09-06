@@ -31,7 +31,12 @@ import { ThemeProvider } from './ThemeContext.tsx'
 import 'material-symbols/outlined.css'
 import './index.css'
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+const rootElement = document.getElementById('root')
+if (!rootElement) {
+  throw new Error('Mount point #root is missing from the page')
+}
+
+ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
     <BrowserRouter>
       <ThemeProvider>
