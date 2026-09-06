@@ -169,8 +169,8 @@ function Select<T extends string>({
       <select
         value={value}
         onChange={e => { onChange(e.target.value as T); }}
-        onFocus={e => setRing(e.currentTarget.matches(':focus-visible'))}
-        onBlur={() => setRing(false)}
+        onFocus={e => { setRing(e.currentTarget.matches(':focus-visible')); }}
+        onBlur={() => { setRing(false); }}
         aria-label={ariaLabel}
         style={{
           position: 'absolute',
@@ -199,7 +199,7 @@ function Toggle({ on, onChange, ariaLabel }: { on: boolean; onChange: (v: boolea
       role="switch"
       aria-checked={on}
       aria-label={ariaLabel}
-      onClick={() => onChange(!on)}
+      onClick={() => { onChange(!on); }}
       style={{
         position: 'relative',
         width: 40,
