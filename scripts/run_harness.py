@@ -124,7 +124,10 @@ def fingerprint(dll_path: Path) -> dict:
 def run_harness(cmd: list[str], env: dict, label: str) -> tuple[int, str]:
     print(f"\n[harness] running: {' '.join(cmd)}", flush=True)
     t0 = time.perf_counter()
-    proc = subprocess.run(
+    # cmd is an argument list and no shell parses it, so nothing is interpreted as
+    # syntax. its elements come from this process: sys.executable, a fixed script
+    # name, and the argparse values of the developer who runs the harness.
+    proc = subprocess.run(  # nosemgrep
         cmd, cwd=str(REPO), env=env, capture_output=True, text=True,
         encoding="utf-8", errors="replace",
     )
