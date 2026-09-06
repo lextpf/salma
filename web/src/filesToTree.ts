@@ -84,9 +84,6 @@ export function filesToTree(
   }
 
   for (const entry of entries ?? []) {
-    if (!entry || typeof entry.path !== 'string') {
-      continue
-    }
     const spot = descend(entry.path)
     if (!spot) {
       continue
