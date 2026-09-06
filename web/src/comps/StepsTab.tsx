@@ -161,7 +161,7 @@ function GroupRow({ group, index }: { group: NormalizedGroup; index: number }) {
           <button
             type="button"
             className="btn"
-            onClick={() => setOpen(o => !o)}
+            onClick={() => { setOpen(o => !o); }}
             aria-expanded={open}
             style={{
               display: 'flex',
