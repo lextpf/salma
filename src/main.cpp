@@ -1,29 +1,29 @@
-/*  ============================================================================================  *
+/*/-============================================================================================-\*\
+                                                                      ⠀⠀⡎⢉⠀⠀⠀⠀⠀⠀⠀⠀⠀
+                                                                      ⠀⠀⠀⢈⣁⠆⡀⠀⠀⠀⠀⣄⠀⠀
+                                                                      ⠀⠀⠀⢳⢹⠁⠀⠱⡀⠀⠀⢈⠆⠀
+          ::::::::      :::     :::        ::::    ::::      :::      ⠀⠀⠀⠠⢾⣆⠀⠞⠁⠀⣠⠮⡤⡀
+         :+:    :+:   :+: :+:   :+:        +:+:+: :+:+:+   :+: :+:    ⠀⠀⠀⠀⠐⠹⢦⡀⠀⠰⠁⡀⢰⡁
+         +:+         +:+   +:+  +:+        +:+ +:+:+ +:+  +:+   +:+   ⠀⠀⠀⢔⠞⠛⠶⣟⣦⣀⠀⠀⠛⠀
+         +#++:++#++ +#++:++#++: +#+        +#+  +:+  +#+ +#++:++#++:  ⠀⠀⠀⠌⣤⡴⠀⠀⠀⠉⠳⡰⡡⠄
+                +#+ +#+     +#+ +#+        +#+       +#+ +#+     +#+  ⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠹⡄⠀
+         #+#    #+# #+#     #+# #+#        #+#       #+# #+#     #+#  ⠀⠀⠀⠀⠀⠀⠀⠀⡇⢄⠙⢀⢷⢁
+          ########  ###     ### ########## ###       ### ###     ###  ⠀⠀⠀⠀⣀⣄⡀⠀⠑⠀⠀⠊⣸⢰
+                                                                      ⠀⠀⠀⡔⠁⠠⠗⠀⠀⠀⠀⠀⡭⠄
+                                << F O M O D   E N G I N E >>         ⠀⠀⠀⢣⠀⠀⠲⣄⣀⣀⢤⡾⠁⠀
+
+\*\-============================================================================================-/*/
+/*
+ *               A wizardless FOMOD installer and selection-inference engine. It
+ *               reads an archive's ModuleConfig, infers which options an already-
+ *               installed mod was built from, and replays the install itself.
  *
- *       ::::::::      :::     :::        ::::    ::::      :::         ⢠⣤⣤⣀ ⠀⠀⠀⠀⠀⠀ ⣀⣤⣤⡄
- *      :+:    :+:   :+: :+:   :+:        +:+:+: :+:+:+   :+: :+:      ⢸⣿⣿⣿⣿⣦⣄⣀⣠⣴⣿⣿⣿⣿⡇⠀*
- *      +:+         +:+   +:+  +:+        +:+ +:+:+ +:+  +:+   +:+     ⣸⣿⣿⣿⣿⣿⡽⣿⣯⣿⣿⣿⣿⣿⣇
- *      +#++:++#++ +#++:++#++: +#+        +#+  +:+  +#+ +#++:++#++:    ⢻⣿⣿⣿⠿⣻⣵⡟⣮⣟⠿⣿⣿⣿⡟
- *             +#+ +#+     +#+ +#+        +#+       +#+ +#+     +#+    ⠀⠀⠀⠀⣼⣿⡿ ⠀⢿⣿⣷⡀
- *      #+#    #+# #+#     #+# #+#        #+#       #+# #+#     #+#    *⠀⣠⣾⣿⣿⠃ ⠀⠈⢿⣿⣿⣦⡀
- *       ########  ###     ### ########## ###       ### ###     ###    ⠀⠈⠉⠹⡿⠁⠀⠀⠀⠀⠈⢻⡇⠉⠉
+ *             +--------------------------------------------------------------------+
  *
- *                              << F O M O D   E N G I N E >>
- *
- *  ============================================================================================  *
- *
- *      A Crow HTTP server that hosts the React frontend and exposes
- *      REST endpoints for wizardless FOMOD processing, install replay,
- *      and inference. The server itself does no archive, XML or FOMOD
- *      work: it links only Crow and nlohmann-json, and forwards every
- *      install, inference and archive-resolution call to the Rust engine
- *      mo2-salma.dll through src/SalmaEngine.cpp.
- *
- *    ----------------------------------------------------------------------
- *
- *      Repository:   https://github.com/lextpf/salma
- *      License:      GPL
+ *               Repository:   https://github.com/lextpf/salma
+ *               License:      GPL
  */
+
 #include <crow.h>
 
 #include "ConfigService.hpp"
