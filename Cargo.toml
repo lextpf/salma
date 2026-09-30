@@ -1,30 +1,3 @@
-#   ============================================================================================  *
-# 
-#        ::::::::      :::     :::        ::::    ::::      :::         ⢠⣤⣤⣀ ⠀⠀⠀⠀⠀⠀ ⣀⣤⣤⡄
-#       :+:    :+:   :+: :+:   :+:        +:+:+: :+:+:+   :+: :+:      ⢸⣿⣿⣿⣿⣦⣄⣀⣠⣴⣿⣿⣿⣿⡇⠀*
-#       +:+         +:+   +:+  +:+        +:+ +:+:+ +:+  +:+   +:+     ⣸⣿⣿⣿⣿⣿⡽⣿⣯⣿⣿⣿⣿⣿⣇
-#       +#++:++#++ +#++:++#++: +#+        +#+  +:+  +#+ +#++:++#++:    ⢻⣿⣿⣿⠿⣻⣵⡟⣮⣟⠿⣿⣿⣿⡟
-#              +#+ +#+     +#+ +#+        +#+       +#+ +#+     +#+    ⠀⠀⠀⠀⣼⣿⡿ ⠀⢿⣿⣷⡀
-#       #+#    #+# #+#     #+# #+#        #+#       #+# #+#     #+#    *⠀⣠⣾⣿⣿⠃ ⠀⠈⢿⣿⣿⣦⡀
-#        ########  ###     ### ########## ###       ### ###     ###    ⠀⠈⠉⠹⡿⠁⠀⠀⠀⠀⠈⢻⡇⠉⠉
-# 
-#                               << F O M O D   E N G I N E >>
-# 
-#   ============================================================================================  *
-# 
-#       The salma engine: a wizardless FOMOD installer and selection-inference
-#       engine. It reads an archive's ModuleConfig.xml, infers which options an
-#       already-installed mod was built from, and replays the install itself.
-#       Archive handling, XML parsing, constraint solving and file placement all
-#       live here, behind the one flat extern "C" ABI in src/capi.rs that the MO2
-#       plugin and mo2-server both drive.
-# 
-#     ----------------------------------------------------------------------
-# 
-#       Repository:   https://github.com/lextpf/salma
-#       License:      GPL
-# 
-
 [package]
 name = "mo2_salma_rs"
 # the ABI constant in src/capi.rs owns the shipped version and package name.
